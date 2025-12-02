@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package greeter;
+
+import "graphql.proto";
+
+message HelloRequest {
+  string name = 1 [(graphql.field) = {default: "World"}];
+}
+
+message HelloReply {
+  string message = 1;
+  GreetMeta meta = 2;
+}
+
+message UpdateGreetingRequest {
+  string name = 1 [(graphql.field) = {required: true}];
+  string greeting = 2 [(graphql.field) = {required: true, name: "salutation"}];
+}
+
+message User {
+  string id = 1;
+  string display_name = 2 [(graphql.field) = {name: "displayName"}];
+  bool trusted = 3;
+}
+
+message GreetMeta {
+  string correlation_id = 1 [(graphql.field) = {name: "correlationId"}];
+  User from = 2;
+}
+
+message GetUserRequest {
+  string id = 1 [(graphql.field) = {required: true}];
+}
+
+service Greeter {
+  option (graphql.service) = {
+    host: "http://127.0.0.1:50051"
+    insecure: true
+  };
+
+  rpc SayHello(HelloRequest) returns (HelloReply) {
+    option (graphql.schema) = {
+      type: QUERY
+      name: "hello"
+      response { required: true }
+    };
+  }
+
+  rpc UpdateGreeting(UpdateGreetingRequest) returns (HelloReply) {
+    option (graphql.schema) = {
+      type: MUTATION
+      name: "updateGreeting"
+      request { name: "input" }
+      response { required: true }
+    };
+  }
+
+  rpc StreamHellos(HelloRequest) returns (stream HelloReply) {
+    option (graphql.schema) = {
+      type: SUBSCRIPTION
+      name: "streamHello"
+    };
+  }
+
+  rpc ResolveUser(GetUserRequest) returns (User) {
+    option (graphql.schema) = {
+      type: RESOLVER
+      name: "user"
+      response { required: true }
+    };
+  }
+}
