@@ -71,6 +71,37 @@ subscription { streamHello(name: "GraphQL") { message meta { correlationId } } }
 query { user(id: "demo") { id displayName trusted } }
 ```
 
+## How it fits together
+A quick view of how protobuf descriptors, the generated schema, and gRPC clients are wired to serve GraphQL over HTTP and WebSocket:
+```mermaid
+flowchart LR
+  subgraph Client["GraphQL clients"]
+    http["HTTP POST /graphql"]
+    ws["WebSocket /graphql/ws"]
+  end
+
+  subgraph Gateway["grpc-graphql-gateway"]
+    desc["Descriptor set\n(graphql_descriptor.bin)"]
+    schema["SchemaBuilder\nasync-graphql schema"]
+    mux["ServeMux\nAxum routes + middlewares\n(optional error hooks)"]
+    pool["GrpcClient pool\n(lazy/eager, TLS/plain)"]
+  end
+
+  subgraph Services["Your gRPC backends"]
+    svc1["Service 1"]
+    svc2["Service N"]
+  end
+
+  http --> mux
+  ws --> mux
+  desc --> schema
+  pool --> schema
+  schema --> mux
+  mux --> pool
+  pool --> svc1
+  pool --> svc2
+```
+
 ## Proto annotations (from `proto/graphql.proto`)
 - Service defaults:
   ```proto
