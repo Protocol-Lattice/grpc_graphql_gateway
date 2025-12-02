@@ -1,11 +1,11 @@
 [package]
-name = "grpc-graphql-gateway-rs"
+name = "grpc_graphql_gateway_rs"
 version = "0.1.0"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
 license = "MIT"
-repository = "https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs"
+repository = "https://github.com/Protocol-Lattice/grpc_graphql_gateway_rs"
 keywords = ["grpc", "graphql", "gateway", "protobuf", "api"]
 categories = ["network-programming", "api-bindings", "web-programming"]
 default-run = "greeter"
