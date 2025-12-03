@@ -71,6 +71,19 @@ subscription { streamHello(name: "GraphQL") { message meta { correlationId } } }
 query { user(id: "demo") { id displayName trusted } }
 ```
 
+Upload mutation (uses the GraphQL `Upload` scalar; send as multipart):
+```graphql
+mutation ($file: Upload!) {
+  uploadAvatar(input: { userId: "demo", avatar: $file }) { userId size }
+}
+```
+```
+curl http://127.0.0.1:8888/graphql \
+  --form 'operations={ "query": "mutation ($file: Upload!) { uploadAvatar(input:{ userId:\"demo\", avatar:$file }) { userId size } }", "variables": { "file": null } }' \
+  --form 'map={ "0": ["variables.file"] }' \
+  --form '0=@./proto/greeter.proto;type=application/octet-stream'
+```
+
 ## How it fits together
 A quick view of how protobuf descriptors, the generated schema, and gRPC clients are wired to serve GraphQL over HTTP and WebSocket:
 ```mermaid
@@ -176,10 +189,12 @@ let builder = Gateway::builder()
 - `int32`/`uint32` -> `Int`
 - `int64`/`uint64` -> `String` (to avoid precision loss)
 - `float`/`double` -> `Float`
-- `bytes` -> `String` (base64)
+- `bytes` -> `Upload` (inputs via multipart) / `String` (base64 responses)
 - `repeated` -> `[T]`
 - `message` -> `Object` / `InputObject`
 - `enum` -> `Enum`
+
+`Upload` inputs follow the GraphQL multipart request spec and are valid on mutations.
 
 ## Development
 - Format: `cargo fmt`

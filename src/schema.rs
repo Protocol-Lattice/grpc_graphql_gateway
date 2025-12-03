@@ -8,12 +8,12 @@ use crate::error::{Error, Result};
 use crate::graphql::{GraphqlField, GraphqlResponse, GraphqlSchema, GraphqlService, GraphqlType};
 use crate::grpc_client::{GrpcClient, GrpcClientPool};
 use async_graphql::dynamic::{
-    Enum, EnumItem, Field, FieldFuture, InputObject, InputValue, Object, Schema as AsyncSchema,
-    Subscription, SubscriptionField, SubscriptionFieldFuture, TypeRef,
+    Enum, EnumItem, Field, FieldFuture, InputObject, InputValue, Object, ResolverContext,
+    Schema as AsyncSchema, Subscription, SubscriptionField, SubscriptionFieldFuture, TypeRef,
 };
 use async_graphql::futures_util::StreamExt;
 use async_graphql::indexmap::IndexMap;
-use async_graphql::{Name, Value as GqlValue};
+use async_graphql::{Name, UploadValue, Value as GqlValue};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use prost::bytes::Buf;
@@ -23,6 +23,7 @@ use prost_reflect::{
     MapKey, MessageDescriptor, ReflectMessage, Value,
 };
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::Path;
 use tonic::client::Grpc;
 use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
@@ -182,7 +183,8 @@ impl SchemaBuilder {
             query_root.type_name(),
             mutation_root.as_ref().map(Object::type_name),
             subscription_root.as_ref().map(Subscription::type_name),
-        );
+        )
+        .enable_uploading();
 
         schema_builder = schema_builder.register(query_root);
 
@@ -353,7 +355,13 @@ fn type_for_field(
     let base = match field.kind() {
         Kind::Bool => TypeRef::named(TypeRef::BOOLEAN),
         Kind::String => TypeRef::named(TypeRef::STRING),
-        Kind::Bytes => TypeRef::named(TypeRef::STRING),
+        Kind::Bytes => {
+            if is_input {
+                TypeRef::named(TypeRef::UPLOAD)
+            } else {
+                TypeRef::named(TypeRef::STRING)
+            }
+        }
         Kind::Float | Kind::Double => TypeRef::named(TypeRef::FLOAT),
         Kind::Int32 | Kind::Sint32 | Kind::Sfixed32 | Kind::Uint32 | Kind::Fixed32 => {
             TypeRef::named(TypeRef::INT)
@@ -488,7 +496,7 @@ fn build_field(
 
             let request_msg = build_request_message(
                 &config.input_desc,
-                ctx.args,
+                &ctx,
                 &config.request_wrapper_name,
                 &config.field_ext,
             )?;
@@ -545,7 +553,7 @@ fn build_subscription_field(
 
             let request_msg = build_request_message(
                 &config.input_desc,
-                ctx.args,
+                &ctx,
                 &config.request_wrapper_name,
                 &config.field_ext,
             )?;
@@ -677,16 +685,17 @@ fn compute_return_type(
 
 fn build_request_message(
     desc: &MessageDescriptor,
-    args: async_graphql::dynamic::ObjectAccessor<'_>,
+    ctx: &ResolverContext<'_>,
     wrapper: &Option<String>,
     field_ext: &ExtensionDescriptor,
 ) -> async_graphql::Result<DynamicMessage> {
     if let Some(wrapper_name) = wrapper {
-        let wrapper_value = args
+        let wrapper_value = ctx
+            .args
             .get(wrapper_name)
             .ok_or_else(|| async_graphql::Error::new(format!("missing argument {wrapper_name}")))?;
         if let GqlValue::Object(obj) = wrapper_value.as_value() {
-            return object_to_message(desc, obj, field_ext);
+            return object_to_message(desc, obj, ctx, field_ext);
         } else {
             return Err(async_graphql::Error::new(format!(
                 "argument {wrapper_name} must be an object"
@@ -700,8 +709,8 @@ fn build_request_message(
             continue;
         }
         let arg_name = graphql_field_name(&field, field_ext);
-        if let Some(value) = args.get(&arg_name) {
-            let prost_value = graphql_input_to_prost(value.as_value(), &field, field_ext)?;
+        if let Some(value) = ctx.args.get(&arg_name) {
+            let prost_value = graphql_input_to_prost(value.as_value(), &field, ctx, field_ext)?;
             message.set_field(&field, prost_value);
         }
     }
@@ -711,6 +720,7 @@ fn build_request_message(
 fn object_to_message(
     desc: &MessageDescriptor,
     values: &IndexMap<Name, GqlValue>,
+    ctx: &ResolverContext<'_>,
     field_ext: &ExtensionDescriptor,
 ) -> async_graphql::Result<DynamicMessage> {
     let mut message = DynamicMessage::new(desc.clone());
@@ -720,7 +730,7 @@ fn object_to_message(
         }
         let arg_name = graphql_field_name(&field, field_ext);
         if let Some(value) = values.get(&Name::new(arg_name)) {
-            let prost_value = graphql_input_to_prost(value, &field, field_ext)?;
+            let prost_value = graphql_input_to_prost(value, &field, ctx, field_ext)?;
             message.set_field(&field, prost_value);
         }
     }
@@ -730,6 +740,7 @@ fn object_to_message(
 fn graphql_input_to_prost(
     value: &GqlValue,
     field: &FieldDescriptor,
+    ctx: &ResolverContext<'_>,
     field_ext: &ExtensionDescriptor,
 ) -> async_graphql::Result<Value> {
     if field.is_list() {
@@ -740,17 +751,18 @@ fn graphql_input_to_prost(
 
         let mut items = Vec::new();
         for v in list {
-            items.push(single_input_to_prost(v, field, field_ext)?);
+            items.push(single_input_to_prost(v, field, ctx, field_ext)?);
         }
         return Ok(Value::List(items));
     }
 
-    single_input_to_prost(value, field, field_ext)
+    single_input_to_prost(value, field, ctx, field_ext)
 }
 
 fn single_input_to_prost(
     value: &GqlValue,
     field: &FieldDescriptor,
+    ctx: &ResolverContext<'_>,
     field_ext: &ExtensionDescriptor,
 ) -> async_graphql::Result<Value> {
     let kind = field.kind();
@@ -764,11 +776,20 @@ fn single_input_to_prost(
             _ => Err(async_graphql::Error::new("expected string")),
         },
         Kind::Bytes => match value {
-            GqlValue::String(s) => BASE64
-                .decode(s)
-                .map(|b| Value::Bytes(b.into()))
-                .map_err(|e| async_graphql::Error::new(format!("invalid base64: {e}"))),
-            _ => Err(async_graphql::Error::new("expected base64 string")),
+            GqlValue::String(s) => {
+                if let Some(bytes) = upload_marker_to_bytes(ctx, s)? {
+                    return Ok(Value::Bytes(bytes.into()));
+                }
+
+                BASE64
+                    .decode(s)
+                    .map(|b| Value::Bytes(b.into()))
+                    .map_err(|e| async_graphql::Error::new(format!("invalid base64: {e}")))
+            }
+            GqlValue::Binary(b) => Ok(Value::Bytes(b.to_vec().into())),
+            _ => Err(async_graphql::Error::new(
+                "expected upload or base64 string",
+            )),
         },
         Kind::Float | Kind::Double => match value {
             GqlValue::Number(n) => n
@@ -830,10 +851,44 @@ fn single_input_to_prost(
             Ok(Value::EnumNumber(num))
         }
         Kind::Message(msg) => match value {
-            GqlValue::Object(obj) => object_to_message(&msg, obj, field_ext).map(Value::Message),
+            GqlValue::Object(obj) => {
+                object_to_message(&msg, obj, ctx, field_ext).map(Value::Message)
+            }
             _ => Err(async_graphql::Error::new("expected object")),
         },
     }
+}
+
+const UPLOAD_REF_PREFIX: &str = "#__graphql_file__:";
+
+fn upload_marker_to_bytes(
+    ctx: &ResolverContext<'_>,
+    marker: &str,
+) -> async_graphql::Result<Option<Vec<u8>>> {
+    let Some(rest) = marker.strip_prefix(UPLOAD_REF_PREFIX) else {
+        return Ok(None);
+    };
+
+    let idx = rest.parse::<usize>().map_err(|e| {
+        async_graphql::Error::new(format!("invalid upload reference {marker}: {e}"))
+    })?;
+
+    let upload: &UploadValue = ctx
+        .query_env
+        .uploads
+        .get(idx)
+        .ok_or_else(|| async_graphql::Error::new(format!("upload index {idx} not found")))?;
+
+    let reader = upload
+        .try_clone()
+        .map_err(|e| async_graphql::Error::new(format!("failed to clone upload: {e}")))?;
+    let mut bytes = Vec::new();
+    reader
+        .into_read()
+        .read_to_end(&mut bytes)
+        .map_err(|e| async_graphql::Error::new(format!("failed to read upload: {e}")))?;
+
+    Ok(Some(bytes))
 }
 
 fn prost_value_to_graphql(
