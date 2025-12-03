@@ -33,6 +33,26 @@ message GetUserRequest {
   string id = 1 [(graphql.field) = {required: true}];
 }
 
+message UploadAvatarRequest {
+  string user_id = 1 [(graphql.field) = {required: true, name: "userId"}];
+  bytes avatar = 2 [(graphql.field) = {required: true}];
+}
+
+message UploadAvatarReply {
+  string user_id = 1 [(graphql.field) = {name: "userId"}];
+  uint64 size = 2;
+}
+
+message UploadAvatarsRequest {
+  string user_id = 1 [(graphql.field) = {required: true, name: "userId"}];
+  repeated bytes avatars = 2 [(graphql.field) = {required: true}];
+}
+
+message UploadAvatarsReply {
+  string user_id = 1 [(graphql.field) = {name: "userId"}];
+  repeated uint64 sizes = 2;
+}
+
 service Greeter {
   option (graphql.service) = {
     host: "http://127.0.0.1:50051"
@@ -67,6 +87,24 @@ service Greeter {
     option (graphql.schema) = {
       type: RESOLVER
       name: "user"
+      response { required: true }
+    };
+  }
+
+  rpc UploadAvatar(UploadAvatarRequest) returns (UploadAvatarReply) {
+    option (graphql.schema) = {
+      type: MUTATION
+      name: "uploadAvatar"
+      request { name: "input" }
+      response { required: true }
+    };
+  }
+
+  rpc UploadAvatars(UploadAvatarsRequest) returns (UploadAvatarsReply) {
+    option (graphql.schema) = {
+      type: MUTATION
+      name: "uploadAvatars"
+      request { name: "input" }
       response { required: true }
     };
   }

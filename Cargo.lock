@@ -606,7 +606,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "grpc-graphql-gateway-rs"
+name = "grpc_graphql_gateway_rs"
 version = "0.1.0"
 dependencies = [
  "anyhow",

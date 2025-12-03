@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::Result;
 use futures::StreamExt;
 use grpc_graphql_gateway::{Gateway, GrpcClient};
+use tokio::fs;
 use tokio::sync::RwLock;
 use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::Stream;
@@ -18,7 +19,10 @@ pub mod greeter {
 }
 
 use greeter::greeter_server::{Greeter, GreeterServer};
-use greeter::{GetUserRequest, GreetMeta, HelloReply, HelloRequest, UpdateGreetingRequest, User};
+use greeter::{
+    GetUserRequest, GreetMeta, HelloReply, HelloRequest, UpdateGreetingRequest, UploadAvatarReply,
+    UploadAvatarRequest, UploadAvatarsReply, UploadAvatarsRequest, User,
+};
 
 const DESCRIPTORS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/greeter_descriptor.bin"));
 const GRPC_ADDR: &str = "127.0.0.1:50051";
@@ -105,6 +109,8 @@ fn print_examples(addr: SocketAddr) {
         "  subscription {{ streamHello(name:\"GraphQL\") {{ message meta {{ correlationId }} }} }}"
     );
     println!("  query {{ user(id:\"demo\") {{ id displayName trusted }} }}");
+    println!("  # Upload (multipart): see README for the curl example");
+    println!("  # Multi-upload (multipart): see README for the curl example");
 }
 
 #[derive(Clone)]
@@ -211,6 +217,69 @@ impl Greeter for ExampleGreeter {
 
         Err(Status::not_found(format!("user {} not found", req.id)))
     }
+
+    async fn upload_avatar(
+        &self,
+        request: Request<UploadAvatarRequest>,
+    ) -> Result<Response<UploadAvatarReply>, Status> {
+        let req = request.into_inner();
+        if self.lookup_user(&req.user_id).await.is_none() {
+            return Err(Status::not_found(format!("user {} not found", req.user_id)));
+        }
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "greeter_avatar_{}.bin",
+            safe_filename(&req.user_id)
+        ));
+        fs::write(&path, &req.avatar)
+            .await
+            .map_err(|e| Status::internal(format!("failed to write avatar: {e}")))?;
+        info!("stored avatar for {} at {}", req.user_id, path.display());
+
+        let size = req.avatar.len() as u64;
+        let reply = UploadAvatarReply {
+            user_id: req.user_id,
+            size,
+        };
+        Ok(Response::new(reply))
+    }
+
+    async fn upload_avatars(
+        &self,
+        request: Request<UploadAvatarsRequest>,
+    ) -> Result<Response<UploadAvatarsReply>, Status> {
+        let req = request.into_inner();
+        if self.lookup_user(&req.user_id).await.is_none() {
+            return Err(Status::not_found(format!("user {} not found", req.user_id)));
+        }
+
+        let mut sizes = Vec::with_capacity(req.avatars.len());
+        for (idx, blob) in req.avatars.iter().enumerate() {
+            let mut path = std::env::temp_dir();
+            path.push(format!(
+                "greeter_avatar_{}_{}.bin",
+                safe_filename(&req.user_id),
+                idx
+            ));
+            fs::write(&path, blob)
+                .await
+                .map_err(|e| Status::internal(format!("failed to write avatar: {e}")))?;
+            info!(
+                "stored avatar {} for {} at {}",
+                idx,
+                req.user_id,
+                path.display()
+            );
+            sizes.push(blob.len() as u64);
+        }
+
+        let reply = UploadAvatarsReply {
+            user_id: req.user_id,
+            sizes,
+        };
+        Ok(Response::new(reply))
+    }
 }
 
 impl ExampleGreeter {
@@ -238,4 +307,11 @@ fn normalize_name(name: String) -> String {
     } else {
         name
     }
+}
+
+fn safe_filename(input: &str) -> String {
+    input
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
 }
