@@ -25,6 +25,7 @@ use prost_reflect::{
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use tonic::client::Grpc;
 use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::codegen::http;
@@ -225,6 +226,45 @@ struct TypeRegistry {
     objects: HashMap<String, Object>,
     input_objects: HashMap<String, InputObject>,
     enums: HashMap<String, Enum>,
+}
+
+/// Per-request memoization to avoid duplicate gRPC calls for identical inputs.
+#[derive(Clone, Default)]
+pub struct GrpcResponseCache {
+    inner: Arc<Mutex<HashMap<GrpcCacheKey, GqlValue>>>,
+}
+
+impl GrpcResponseCache {
+    pub fn get(&self, key: &GrpcCacheKey) -> Option<GqlValue> {
+        self.inner.lock().ok().and_then(|map| map.get(key).cloned())
+    }
+
+    pub fn insert(&self, key: GrpcCacheKey, value: GqlValue) {
+        if let Ok(mut map) = self.inner.lock() {
+            map.insert(key, value);
+        }
+    }
+}
+
+#[derive(Hash, Eq, PartialEq, Clone)]
+pub struct GrpcCacheKey {
+    service: String,
+    path: String,
+    request: Vec<u8>,
+}
+
+impl GrpcCacheKey {
+    pub fn new(
+        service: &str,
+        path: &str,
+        request: &DynamicMessage,
+    ) -> std::result::Result<Self, prost::EncodeError> {
+        Ok(Self {
+            service: service.to_string(),
+            path: path.to_string(),
+            request: request.encode_to_vec(),
+        })
+    }
 }
 
 impl TypeRegistry {
@@ -500,6 +540,17 @@ fn build_field(
                 &config.request_wrapper_name,
                 &config.field_ext,
             )?;
+            let cache_key =
+                GrpcCacheKey::new(&config.service_name, &config.grpc_path, &request_msg).map_err(
+                    |e| async_graphql::Error::new(format!("failed to encode request: {e}")),
+                )?;
+
+            if let Some(cache) = ctx.data_opt::<GrpcResponseCache>() {
+                if let Some(val) = cache.get(&cache_key) {
+                    return Ok(Some(val));
+                }
+            }
+
             let mut grpc = Grpc::new(client.channel());
 
             grpc.ready()
@@ -519,6 +570,9 @@ fn build_field(
                 .into_inner();
 
             let value = apply_response_pluck(&response, &config.schema_opts, &config.field_ext)?;
+            if let Some(cache) = ctx.data_opt::<GrpcResponseCache>() {
+                cache.insert(cache_key, value.clone());
+            }
             Ok(Some(value))
         })
     });

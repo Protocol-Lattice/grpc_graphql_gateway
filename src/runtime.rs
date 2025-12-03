@@ -2,7 +2,7 @@
 
 use crate::error::{GraphQLError, Result};
 use crate::middleware::{Context, Middleware};
-use crate::schema::DynamicSchema;
+use crate::schema::{DynamicSchema, GrpcResponseCache};
 use async_graphql::ServerError;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use axum::{
@@ -71,6 +71,7 @@ impl ServeMux {
 
         let mut gql_request = request.into_inner();
         gql_request = gql_request.data(ctx);
+        gql_request = gql_request.data(GrpcResponseCache::default());
 
         Ok(self.schema.execute(gql_request).await)
     }
