@@ -21,7 +21,7 @@ pub mod greeter {
 use greeter::greeter_server::{Greeter, GreeterServer};
 use greeter::{
     GetUserRequest, GreetMeta, HelloReply, HelloRequest, UpdateGreetingRequest, UploadAvatarReply,
-    UploadAvatarRequest, User,
+    UploadAvatarRequest, UploadAvatarsReply, UploadAvatarsRequest, User,
 };
 
 const DESCRIPTORS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/greeter_descriptor.bin"));
@@ -110,6 +110,7 @@ fn print_examples(addr: SocketAddr) {
     );
     println!("  query {{ user(id:\"demo\") {{ id displayName trusted }} }}");
     println!("  # Upload (multipart): see README for the curl example");
+    println!("  # Multi-upload (multipart): see README for the curl example");
 }
 
 #[derive(Clone)]
@@ -240,6 +241,42 @@ impl Greeter for ExampleGreeter {
         let reply = UploadAvatarReply {
             user_id: req.user_id,
             size,
+        };
+        Ok(Response::new(reply))
+    }
+
+    async fn upload_avatars(
+        &self,
+        request: Request<UploadAvatarsRequest>,
+    ) -> Result<Response<UploadAvatarsReply>, Status> {
+        let req = request.into_inner();
+        if self.lookup_user(&req.user_id).await.is_none() {
+            return Err(Status::not_found(format!("user {} not found", req.user_id)));
+        }
+
+        let mut sizes = Vec::with_capacity(req.avatars.len());
+        for (idx, blob) in req.avatars.iter().enumerate() {
+            let mut path = std::env::temp_dir();
+            path.push(format!(
+                "greeter_avatar_{}_{}.bin",
+                safe_filename(&req.user_id),
+                idx
+            ));
+            fs::write(&path, blob)
+                .await
+                .map_err(|e| Status::internal(format!("failed to write avatar: {e}")))?;
+            info!(
+                "stored avatar {} for {} at {}",
+                idx,
+                req.user_id,
+                path.display()
+            );
+            sizes.push(blob.len() as u64);
+        }
+
+        let reply = UploadAvatarsReply {
+            user_id: req.user_id,
+            sizes,
         };
         Ok(Response::new(reply))
     }

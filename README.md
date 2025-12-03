@@ -84,6 +84,20 @@ curl http://127.0.0.1:8888/graphql \
   --form '0=@./proto/greeter.proto;type=application/octet-stream'
 ```
 
+Multi-upload mutation (list of `Upload`):
+```graphql
+mutation ($files: [Upload!]!) {
+  uploadAvatars(input: { userId: "demo", avatars: $files }) { userId sizes }
+}
+```
+```
+curl http://127.0.0.1:8888/graphql \
+  --form 'operations={ "query": "mutation ($files: [Upload!]!) { uploadAvatars(input:{ userId:\"demo\", avatars:$files }) { userId sizes } }", "variables": { "files": [null, null] } }' \
+  --form 'map={ "0": ["variables.files.0"], "1": ["variables.files.1"] }' \
+  --form '0=@./proto/greeter.proto;type=application/octet-stream' \
+  --form '1=@./README.md;type=text/plain'
+```
+
 ## How it fits together
 A quick view of how protobuf descriptors, the generated schema, and gRPC clients are wired to serve GraphQL over HTTP and WebSocket:
 ```mermaid
