@@ -42,7 +42,13 @@ async fn main() -> Result<()> {
 
     let store = Arc::new(RwLock::new(FederationData::seed()));
     let services = FederationServices::with_store(store.clone());
-    let entity_resolver = Arc::new(ExampleEntityResolver::new(store));
+    
+    // Option 1: Standard entity resolver with batch support
+    let entity_resolver = Arc::new(ExampleEntityResolver::new(store.clone()));
+    
+    // Option 2: DataLoader-wrapped resolver (uncomment to use)
+    // This demonstrates the EntityDataLoader pattern for batching
+    // let entity_resolver = Arc::new(DataLoaderEntityResolver::new(store.clone()));
 
     print_examples();
 
@@ -310,22 +316,29 @@ impl FederationData {
 }
 
 fn print_examples() {
-    println!("User subgraph:    http://{}/graphql", USER_GRAPH_ADDR);
-    println!("Product subgraph: http://{}/graphql", PRODUCT_GRAPH_ADDR);
-    println!("Review subgraph:  http://{}/graphql", REVIEW_GRAPH_ADDR);
+    println!("\n🚀 Federation Example with Entity Resolution & DataLoader Batching");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    println!("Subgraph Endpoints:");
+    println!("  User:    http://{}/graphql", USER_GRAPH_ADDR);
+    println!("  Product: http://{}/graphql", PRODUCT_GRAPH_ADDR);
+    println!("  Review:  http://{}/graphql", REVIEW_GRAPH_ADDR);
     println!(
-        "Apollo Router (after composing supergraph) default: http://{}/",
+        "\nApollo Router: http://{}/",
         ROUTER_ADDR
     );
-    println!("Try these once the services (and router) are up:");
+    println!("  (after running: ./examples/federation/compose_supergraph.sh)");
+    println!("\n📝 Example Queries:");
     println!("  query {{ user(id:\"u1\") {{ id email name }} }}");
     println!(
         "  query {{ product(upc:\"apollo-1\") {{ upc name price createdBy {{ id name }} }} }}"
     );
     println!("  query {{ userReviews(userId:\"u1\") {{ id rating body author {{ id name }} product {{ upc name }} }} }}");
+    println!("\n🔗 Entity Resolution (demonstrates batching):");
     println!(
         "  query {{ _entities(representations:[{{ __typename:\"federation_example_User\", id:\"u1\" }}]) {{ ... on federation_example_User {{ id email name }} }} }}"
     );
+    println!("\n💡 Watch the logs for batch resolution messages (🚀 and ✅ emojis)");
+    println!("   to see when multiple entities are resolved together!\n");
 }
 
 #[derive(Clone)]
@@ -424,4 +437,119 @@ impl EntityResolver for ExampleEntityResolver {
             ))),
         }
     }
+
+    async fn batch_resolve_entities(
+        &self,
+        entity_config: &grpc_graphql_gateway::federation::EntityConfig,
+        representations: Vec<async_graphql::indexmap::IndexMap<Name, GqlValue>>,
+    ) -> grpc_graphql_gateway::Result<Vec<GqlValue>> {
+        tracing::info!(
+            "🚀 Batch resolving {} {} entities",
+            representations.len(),
+            entity_config.type_name
+        );
+
+        let data = self.store.read().await;
+        let mut results = Vec::with_capacity(representations.len());
+
+        match entity_config.type_name.as_str() {
+            "federation_example_User" => {
+                // Batch fetch users
+                for repr in representations {
+                    let id = Self::required_str(&repr, "id")?;
+                    let user = data.users.get(id).ok_or_else(|| {
+                        grpc_graphql_gateway::Error::Schema(format!("user {id} not found"))
+                    })?;
+                    results.push(Self::user_to_value(user));
+                }
+            }
+            "federation_example_Product" => {
+                // Batch fetch products
+                for repr in representations {
+                    let upc = Self::required_str(&repr, "upc")?;
+                    let product = data.products.get(upc).ok_or_else(|| {
+                        grpc_graphql_gateway::Error::Schema(format!("product {upc} not found"))
+                    })?;
+                    results.push(Self::product_to_value(product));
+                }
+            }
+            "federation_example_Review" => {
+                // Batch fetch reviews
+                for repr in representations {
+                    let id = Self::required_str(&repr, "id")?;
+                    let review = data.reviews.get(id).ok_or_else(|| {
+                        grpc_graphql_gateway::Error::Schema(format!("review {id} not found"))
+                    })?;
+                    results.push(Self::review_to_value(review));
+                }
+            }
+            other => {
+                return Err(grpc_graphql_gateway::Error::Schema(format!(
+                    "unknown entity type: {other}"
+                )))
+            }
+        }
+
+        tracing::info!(
+            "✅ Batch resolved {} {} entities successfully",
+            results.len(),
+            entity_config.type_name
+        );
+
+        Ok(results)
+    }
 }
+
+/// Example demonstrating EntityDataLoader usage for batching
+pub struct DataLoaderEntityResolver {
+    loader: Arc<grpc_graphql_gateway::EntityDataLoader>,
+}
+
+impl DataLoaderEntityResolver {
+    #[allow(dead_code)] // Example code showing the pattern
+    pub fn new(store: Arc<RwLock<FederationData>>) -> Self {
+        // Create the base resolver
+        let base_resolver = Arc::new(ExampleEntityResolver::new(store));
+        
+        // Build entity configs map for the DataLoader
+        let entity_configs = HashMap::new();
+        
+        // In a real application, you'd extract these from the descriptor pool
+        // For the example, we'll create placeholder configs
+        use grpc_graphql_gateway::EntityDataLoader;
+        
+        // Note: This is a simplified example. In production, you'd get these from
+        // the actual descriptor pool used by the gateway
+        
+        // Create the DataLoader
+        let loader = Arc::new(EntityDataLoader::new(base_resolver, entity_configs));
+        
+        Self { loader }
+    }
+}
+
+#[async_trait::async_trait]
+impl EntityResolver for DataLoaderEntityResolver {
+    async fn resolve_entity(
+        &self,
+        entity_config: &grpc_graphql_gateway::federation::EntityConfig,
+        representation: &async_graphql::indexmap::IndexMap<Name, GqlValue>,
+    ) -> grpc_graphql_gateway::Result<GqlValue> {
+        // Use the DataLoader for single entity resolution
+        self.loader
+            .load(&entity_config.type_name, representation.clone())
+            .await
+    }
+
+    async fn batch_resolve_entities(
+        &self,
+        entity_config: &grpc_graphql_gateway::federation::EntityConfig,
+        representations: Vec<async_graphql::indexmap::IndexMap<Name, GqlValue>>,
+    ) -> grpc_graphql_gateway::Result<Vec<GqlValue>> {
+        // Use the DataLoader for batch resolution
+        self.loader
+            .load_many(&entity_config.type_name, representations)
+            .await
+    }
+}
+

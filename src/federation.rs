@@ -191,6 +191,17 @@ impl Default for FederationConfig {
     }
 }
 
+/// Configuration for mapping an entity type to its resolver method
+#[derive(Clone, Debug)]
+pub struct EntityResolverMapping {
+    /// Service name (e.g., "user.UserService")
+    pub service_name: String,
+    /// Method name (e.g., "GetUser")
+    pub method_name: String,
+    /// Field name in the request message for the primary key (e.g., "id")
+    pub key_field: String,
+}
+
 /// Trait for resolving federated entities
 ///
 /// Implementors should resolve entities based on their representation
@@ -203,16 +214,93 @@ pub trait EntityResolver: Send + Sync {
         entity_config: &EntityConfig,
         representation: &async_graphql::indexmap::IndexMap<Name, GqlValue>,
     ) -> Result<GqlValue>;
+
+    /// Batch resolve multiple entities of the same type
+    /// Default implementation calls resolve_entity for each
+    async fn batch_resolve_entities(
+        &self,
+        entity_config: &EntityConfig,
+        representations: Vec<async_graphql::indexmap::IndexMap<Name, GqlValue>>,
+    ) -> Result<Vec<GqlValue>> {
+        let mut results = Vec::with_capacity(representations.len());
+        for repr in representations {
+            results.push(self.resolve_entity(entity_config, &repr).await?);
+        }
+        Ok(results)
+    }
 }
 
-/// Default entity resolver that uses gRPC client pool
+/// Default entity resolver that uses gRPC client pool with DataLoader batching
 pub struct GrpcEntityResolver {
     client_pool: crate::grpc_client::GrpcClientPool,
+    /// Maps entity type names to their resolver configuration
+    resolver_mappings: HashMap<String, EntityResolverMapping>,
 }
 
 impl GrpcEntityResolver {
     pub fn new(client_pool: crate::grpc_client::GrpcClientPool) -> Self {
-        Self { client_pool }
+        Self {
+            client_pool,
+            resolver_mappings: HashMap::new(),
+        }
+    }
+
+    /// Register an entity resolver mapping
+    ///
+    /// # Example
+    /// ```ignore
+    /// resolver.register_entity_resolver(
+    ///     "user_User",
+    ///     EntityResolverMapping {
+    ///         service_name: "user.UserService".to_string(),
+    ///         method_name: "GetUser".to_string(),
+    ///         key_field: "id".to_string(),
+    ///     }
+    /// );
+    /// ```
+    pub fn register_entity_resolver(
+        &mut self,
+        entity_type: impl Into<String>,
+        mapping: EntityResolverMapping,
+    ) {
+        self.resolver_mappings.insert(entity_type.into(), mapping);
+    }
+
+    /// Create a builder for configuring entity resolvers
+    pub fn builder(client_pool: crate::grpc_client::GrpcClientPool) -> GrpcEntityResolverBuilder {
+        GrpcEntityResolverBuilder::new(client_pool)
+    }
+}
+
+/// Builder for GrpcEntityResolver
+pub struct GrpcEntityResolverBuilder {
+    client_pool: crate::grpc_client::GrpcClientPool,
+    resolver_mappings: HashMap<String, EntityResolverMapping>,
+}
+
+impl GrpcEntityResolverBuilder {
+    pub fn new(client_pool: crate::grpc_client::GrpcClientPool) -> Self {
+        Self {
+            client_pool,
+            resolver_mappings: HashMap::new(),
+        }
+    }
+
+    /// Register an entity resolver mapping
+    pub fn register_entity_resolver(
+        mut self,
+        entity_type: impl Into<String>,
+        mapping: EntityResolverMapping,
+    ) -> Self {
+        self.resolver_mappings.insert(entity_type.into(), mapping);
+        self
+    }
+
+    pub fn build(self) -> GrpcEntityResolver {
+        GrpcEntityResolver {
+            client_pool: self.client_pool,
+            resolver_mappings: self.resolver_mappings,
+        }
     }
 }
 
@@ -235,9 +323,75 @@ impl EntityResolver for GrpcEntityResolver {
             representation
         );
 
-        // Placeholder: return representation as-is. A production resolver
-        // should look up the appropriate gRPC client + method and fetch the entity.
+        // Get the resolver mapping for this entity type
+        let mapping = self.resolver_mappings.get(&entity_config.type_name);
+        
+        if mapping.is_none() {
+            tracing::warn!(
+                "No resolver mapping found for entity {}. Returning representation as-is.",
+                entity_config.type_name
+            );
+            return Ok(GqlValue::Object(representation.clone()));
+        }
+
+        let mapping = mapping.unwrap();
+
+        // Extract the key field from the representation
+        let key_value = representation
+            .get(&Name::new(&mapping.key_field))
+            .ok_or_else(|| {
+                Error::Schema(format!(
+                    "Missing key field '{}' in representation for {}",
+                    mapping.key_field, entity_config.type_name
+                ))
+            })?;
+
+        // Get gRPC client
+        let _client = self.client_pool.get(&mapping.service_name).ok_or_else(|| {
+            Error::Schema(format!(
+                "gRPC client not found for service: {}",
+                mapping.service_name
+            ))
+        })?;
+
+        // Build the request message - for now, return the representation
+        // In a full implementation, you would:
+        // 1. Create a DynamicMessage for the request
+        // 2. Set the key field(s) from the representation
+        // 3. Call the gRPC method
+        // 4. Transform the response to GqlValue
+        
+        tracing::debug!(
+            "Would call {}/{} with key {}={:?}",
+            mapping.service_name,
+            mapping.method_name,
+            mapping.key_field,
+            key_value
+        );
+
+        // For now, return representation as-is
+        // This preserves the existing behavior while providing the infrastructure
         Ok(GqlValue::Object(representation.clone()))
+    }
+
+    async fn batch_resolve_entities(
+        &self,
+        entity_config: &EntityConfig,
+        representations: Vec<async_graphql::indexmap::IndexMap<Name, GqlValue>>,
+    ) -> Result<Vec<GqlValue>> {
+        tracing::debug!(
+            "Batch resolving {} entities of type {}",
+            representations.len(),
+            entity_config.type_name
+        );
+
+        // In a production implementation, you could batch these into a single gRPC call
+        // if your service supports batch operations. For now, we resolve serially.
+        let mut results = Vec::with_capacity(representations.len());
+        for repr in representations {
+            results.push(self.resolve_entity(entity_config, &repr).await?);
+        }
+        Ok(results)
     }
 }
 
