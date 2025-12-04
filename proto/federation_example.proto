@@ -13,8 +13,8 @@ message User {
   };
 
   string id = 1 [(graphql.field) = { required: true }];
-  string email = 2;
-  string name = 3;
+  string email = 2 [(graphql.field) = { shareable: true }];
+  string name = 3 [(graphql.field) = { shareable: true }];
 }
 
 // Product entity - references User for creator
@@ -25,11 +25,11 @@ message Product {
   };
 
   string upc = 1 [(graphql.field) = { required: true }];
-  string name = 2;
-  int32 price = 3;
+  string name = 2 [(graphql.field) = { shareable: true }];
+  int32 price = 3 [(graphql.field) = { shareable: true }];
   
   // Reference to User entity (this user created the product)
-  User created_by = 4 [(graphql.field) = { name: "createdBy" }];
+  User created_by = 4 [(graphql.field) = { name: "createdBy" shareable: true }];
 }
 
 // Review entity - extends both Product and User

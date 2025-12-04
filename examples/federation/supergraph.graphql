@@ -1,0 +1,94 @@
+schema
+  @link(url: "https://specs.apollo.dev/link/v1.0")
+  @link(url: "https://specs.apollo.dev/join/v0.3", for: EXECUTION)
+{
+  query: Query
+}
+
+directive @join__enumValue(graph: join__Graph!) repeatable on ENUM_VALUE
+
+directive @join__field(graph: join__Graph, requires: join__FieldSet, provides: join__FieldSet, type: String, external: Boolean, override: String, usedOverridden: Boolean) repeatable on FIELD_DEFINITION | INPUT_FIELD_DEFINITION
+
+directive @join__graph(name: String!, url: String!) on ENUM_VALUE
+
+directive @join__implements(graph: join__Graph!, interface: String!) repeatable on OBJECT | INTERFACE
+
+directive @join__type(graph: join__Graph!, key: join__FieldSet, extension: Boolean! = false, resolvable: Boolean! = true, isInterfaceObject: Boolean! = false) repeatable on OBJECT | INTERFACE | UNION | ENUM | INPUT_OBJECT | SCALAR
+
+directive @join__unionMember(graph: join__Graph!, member: String!) repeatable on UNION
+
+directive @link(url: String, as: String, for: link__Purpose, import: [link__Import]) repeatable on SCHEMA
+
+type federation_example_Product
+  @join__type(graph: PRODUCTS, key: "upc")
+  @join__type(graph: PRODUCTS, key: "upc")
+  @join__type(graph: REVIEWS, key: "upc")
+  @join__type(graph: REVIEWS, key: "upc")
+{
+  upc: String!
+  name: String
+  price: Int
+  createdBy: federation_example_User
+}
+
+type federation_example_Review
+  @join__type(graph: REVIEWS, key: "id")
+  @join__type(graph: REVIEWS, key: "id")
+{
+  id: String!
+  product: federation_example_Product
+  author: federation_example_User
+  body: String
+  rating: Int
+}
+
+type federation_example_User
+  @join__type(graph: PRODUCTS, key: "id")
+  @join__type(graph: PRODUCTS, key: "id")
+  @join__type(graph: REVIEWS, key: "id")
+  @join__type(graph: REVIEWS, key: "id")
+  @join__type(graph: USERS, key: "id")
+  @join__type(graph: USERS, key: "id")
+{
+  id: String!
+  email: String
+  name: String
+}
+
+scalar join__FieldSet
+
+enum join__Graph {
+  PRODUCTS @join__graph(name: "products", url: "http://127.0.0.1:8892/graphql")
+  REVIEWS @join__graph(name: "reviews", url: "http://127.0.0.1:8893/graphql")
+  USERS @join__graph(name: "users", url: "http://127.0.0.1:8891/graphql")
+}
+
+scalar link__Import
+
+enum link__Purpose {
+  """
+  `SECURITY` features provide metadata necessary to securely resolve fields.
+  """
+  SECURITY
+
+  """
+  `EXECUTION` features provide metadata necessary for operation execution.
+  """
+  EXECUTION
+}
+
+type Query
+  @join__type(graph: PRODUCTS)
+  @join__type(graph: REVIEWS)
+  @join__type(graph: USERS)
+{
+  product(upc: String): federation_example_Product @join__field(graph: PRODUCTS)
+  review(id: String): federation_example_Review @join__field(graph: REVIEWS)
+  userReviews(userId: String): [federation_example_Review] @join__field(graph: REVIEWS)
+  user(id: String): federation_example_User @join__field(graph: USERS)
+}
+
+scalar Upload
+  @join__type(graph: PRODUCTS)
+  @join__type(graph: REVIEWS)
+  @join__type(graph: USERS)

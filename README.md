@@ -299,6 +299,14 @@ Indicate which fields this field provides to the supergraph:
 User author = 3 [(graphql.field) = { provides: "id name" }];
 ```
 
+#### `@shareable`
+Mark fields that can be resolved from multiple subgraphs (Federation v2 requirement):
+```protobuf
+string email = 2 [(graphql.field) = { shareable: true }];
+string name = 3 [(graphql.field) = { shareable: true }];
+```
+**Note**: In Apollo Federation v2, fields that appear in multiple subgraphs must be marked as `@shareable`, otherwise the supergraph composition will fail.
+
 ### Entity Resolution
 
 When federation is enabled and entities are defined, the gateway automatically exposes the `_entities` query for entity resolution. The current implementation returns entity representations as-is; for production use, implement a custom `EntityResolver`:
@@ -330,7 +338,7 @@ impl EntityResolver for MyEntityResolver {
 When federation is enabled, the gateway automatically:
 - ✅ Adds `@key` directives to entity types
 - ✅ Adds `@extends` directive to entity extensions
-- ✅ Adds `@external`, `@requires`, `@provides` directives to fields
+- ✅ Adds `@external`, `@requires`, `@provides`, `@shareable` directives to fields
 - ✅ Exposes `_entities(representations: [_Any!]!)` query
 - ✅ Exposes `_service { sdl }` query (via async-graphql)
 - ✅ Registers entity types in the `_Entity` union
@@ -370,6 +378,7 @@ Use Apollo Router in front of the federated subgraph exposed by `cargo run --bin
 3. **Mark external fields correctly**: Avoid duplicating field resolution logic
 4. **Use `@provides` sparingly**: Only when you're returning partial entities
 5. **Keep `@requires` minimal**: Only specify fields you actually need
+6. **Mark shared fields as `@shareable`**: When the same field is resolved in multiple subgraphs, explicitly mark it with `shareable: true`
 
 
 ## Development

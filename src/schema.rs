@@ -539,6 +539,9 @@ impl TypeRegistry {
                         .argument("fields", GqlValue::String(provides)),
                 );
             }
+            if field_is_shareable(&field, &field_ext) {
+                gql_field = gql_field.directive(async_graphql::dynamic::Directive::new("shareable"));
+            }
 
             obj = obj.field(gql_field);
         }
@@ -918,6 +921,14 @@ fn field_provides(field: &FieldDescriptor, field_ext: &ExtensionDescriptor) -> O
                 Some(f.provides)
             }
         })
+}
+
+fn field_is_shareable(field: &FieldDescriptor, field_ext: &ExtensionDescriptor) -> bool {
+    decode_extension::<GraphqlField>(&field.options(), field_ext)
+        .ok()
+        .flatten()
+        .map(|f| f.shareable)
+        .unwrap_or(false)
 }
 
 fn compute_return_type(

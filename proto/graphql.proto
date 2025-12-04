@@ -185,6 +185,8 @@ message GraphqlField {
   string requires = 7;
   // Federation: Specify fields this field provides to the supergraph
   string provides = 8;
+  // Federation: Mark this field as shareable (can be resolved from multiple subgraphs)
+  bool shareable = 9;
 }
 
 // Federation configuration for message types (entities).

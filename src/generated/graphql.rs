@@ -176,6 +176,9 @@ pub struct GraphqlField {
     /// Federation: Specify fields this field provides to the supergraph
     #[prost(string, tag = "8")]
     pub provides: ::prost::alloc::string::String,
+    /// Federation: Mark this field as shareable (can be resolved from multiple subgraphs)
+    #[prost(bool, tag = "9")]
+    pub shareable: bool,
 }
 /// Federation configuration for message types (entities).
 /// User can use this option to define federated entities:

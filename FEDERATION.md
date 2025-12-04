@@ -19,6 +19,7 @@ Added federation-specific protocol buffer messages and extensions:
   - `external`: Mark fields defined in other services  
   - `requires`: Specify required fields from other services
   - `provides`: Indicate fields provided to the supergraph
+  - `shareable`: Mark fields that can be resolved from multiple subgraphs
 
 - **New extension**: `google.protobuf.MessageOptions.entity` for entity configuration
 
@@ -46,12 +47,13 @@ Updated schema builder to support federation:
 - Extract federation configuration from descriptor pool
 - Add `_entities` field to Query type when entities exist
 - Apply federation directives to object types during registration
-- Apply field-level directives (@external, @requires, @provides)
+- Apply field-level directives (@external, @requires, @provides, @shareable)
 
 Helper functions added:
 - `field_is_external()`: Check if field is marked external
 - `field_requires()`: Get @requires directive value
 - `field_provides()`: Get @provides directive value
+- `field_is_shareable()`: Check if field is marked shareable
 
 ### 4. Public API Updates (`src/lib.rs`)
 
@@ -67,7 +69,7 @@ Comprehensive federation documentation including:
 - How to enable federation
 - Defining entities with @key
 - Entity extensions with @extends
-- Field-level directives (@external, @requires, @provides)
+- Field-level directives (@external, @requires, @provides, @shareable)
 - Entity resolution patterns
 - Federation schema features checklist
 - Federated microservices example
@@ -78,7 +80,7 @@ Added detailed changelog entry for federation feature including:
 - Entity definitions via proto options
 - Support for single and composite keys
 - Entity extensions
-- All field-level directives
+- All field-level directives (@external, @requires, @provides, @shareable)
 - Automatic _entities query generation
 - EntityResolver trait
 - Example and documentation
@@ -103,6 +105,7 @@ Created `proto/federation_example.proto` demonstrating:
 ✅ `@external` field directive  
 ✅ `@requires` field directive  
 ✅ `@provides` field directive  
+✅ `@shareable` field directive  
 ✅ Automatic `_entities` query generation  
 ✅ `_service { sdl }` query (via async-graphql)  
 ✅ Entity type union registration  
@@ -137,8 +140,8 @@ message User {
   };
   
   string id = 1 [(graphql.field) = { required: true }];
-  string email = 2;
-  string name = 3;
+  string email = 2 [(graphql.field) = { shareable: true }];
+  string name = 3 [(graphql.field) = { shareable: true }];
 }
 
 message Product {
@@ -154,6 +157,7 @@ message Product {
   
   User created_by = 2 [(graphql.field) = {
     provides: "id name"
+    shareable: true
   }];
 }
 ```
