@@ -39,6 +39,7 @@ pub mod graphql {
 }
 
 pub mod error;
+pub mod dataloader;
 pub mod federation;
 pub mod gateway;
 pub mod grpc_client;
@@ -47,8 +48,12 @@ pub mod runtime;
 pub mod schema;
 pub mod types;
 
+pub use dataloader::EntityDataLoader;
 pub use error::{Error, Result};
-pub use federation::{EntityResolver, FederationConfig, GrpcEntityResolver};
+pub use federation::{
+    EntityConfig, EntityResolver, EntityResolverMapping, FederationConfig, GrpcEntityResolver,
+    GrpcEntityResolverBuilder,
+};
 pub use gateway::{Gateway, GatewayBuilder};
 pub use grpc_client::GrpcClient;
 pub use middleware::{Context, Middleware};
