@@ -12,7 +12,7 @@ default-run = "greeter"
 
 [dependencies]
 # GraphQL
-async-graphql = { version = "7.0", features = ["dynamic-schema"] }
+async-graphql = { version = "7.0", features = ["dynamic-schema", "dataloader", "boxed-trait"] }
 async-graphql-axum = "7.0"
 
 # gRPC
