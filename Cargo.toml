@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -12,7 +12,7 @@ default-run = "greeter"
 
 [dependencies]
 # GraphQL
-async-graphql = { version = "7.0", features = ["dynamic-schema"] }
+async-graphql = { version = "7.0", features = ["dynamic-schema", "dataloader", "boxed-trait"] }
 async-graphql-axum = "7.0"
 
 # gRPC
