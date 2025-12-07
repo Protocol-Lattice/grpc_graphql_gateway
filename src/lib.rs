@@ -51,8 +51,8 @@ pub mod graphql {
     include!("generated/graphql.rs");
 }
 
-pub mod error;
 pub mod dataloader;
+pub mod error;
 pub mod federation;
 pub mod gateway;
 pub mod grpc_client;

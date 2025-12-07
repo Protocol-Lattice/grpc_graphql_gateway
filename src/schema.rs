@@ -561,7 +561,8 @@ impl TypeRegistry {
                 );
             }
             if field_is_shareable(&field, &field_ext) {
-                gql_field = gql_field.directive(async_graphql::dynamic::Directive::new("shareable"));
+                gql_field =
+                    gql_field.directive(async_graphql::dynamic::Directive::new("shareable"));
             }
 
             obj = obj.field(gql_field);
@@ -639,7 +640,8 @@ fn type_for_field(
 
 fn placeholder_query_root() -> Object {
     let ty = TypeRef::NonNull(Box::new(TypeRef::named(TypeRef::BOOLEAN)));
-    let field = Field::new("__placeholder", ty, |_| {
+    // Single underscore avoids clashing with GraphQL introspection (__*) while keeping this internal.
+    let field = Field::new("_placeholder", ty, |_| {
         FieldFuture::new(async { Ok(Some(GqlValue::Boolean(true))) })
     });
     Object::new("Query").field(field)
