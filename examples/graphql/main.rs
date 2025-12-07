@@ -4,11 +4,11 @@
 //
 // This is a starter gateway. Update endpoint URLs and tweak as needed.
 
-use grpc_graphql_gateway::{Gateway, GatewayBuilder, GrpcClient, Result as GatewayResult};
 use async_graphql::{Name, Value as GqlValue};
+use grpc_graphql_gateway::{Gateway, GatewayBuilder, GrpcClient, Result as GatewayResult};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::pin::Pin;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing_subscriber::prelude::*;
 
@@ -120,6 +120,7 @@ pub mod federation_example {
 use federation_example::product_service_server::{ProductService, ProductServiceServer};
 use federation_example::review_service_server::{ReviewService, ReviewServiceServer};
 use federation_example::user_service_server::{UserService, UserServiceServer};
+use federation_example::{Product, Review, User};
 
 pub struct ServiceConfig {
     pub name: &'static str,
@@ -136,7 +137,7 @@ pub mod services {
 
     pub const FEDERATION_EXAMPLE_PRODUCTSERVICE: ServiceConfig = ServiceConfig {
         name: "federation_example.ProductService",
-        endpoint: "localhost:50052",
+        endpoint: "http://localhost:50052",
         insecure: true,
         queries: &["product"],
         mutations: &[],
@@ -145,7 +146,7 @@ pub mod services {
     };
     pub const FEDERATION_EXAMPLE_REVIEWSERVICE: ServiceConfig = ServiceConfig {
         name: "federation_example.ReviewService",
-        endpoint: "localhost:50053",
+        endpoint: "http://localhost:50053",
         insecure: true,
         queries: &["review", "userReviews"],
         mutations: &[],
@@ -154,7 +155,7 @@ pub mod services {
     };
     pub const FEDERATION_EXAMPLE_USERSERVICE: ServiceConfig = ServiceConfig {
         name: "federation_example.UserService",
-        endpoint: "localhost:50051",
+        endpoint: "http://localhost:50051",
         insecure: true,
         queries: &["user"],
         mutations: &[],
@@ -177,7 +178,7 @@ pub struct FederationExampleEntityResolver;
 impl grpc_graphql_gateway::EntityResolver for FederationExampleEntityResolver {
     async fn resolve_entity(
         &self,
-        entity_config: &grpc_graphql_gateway::federation::EntityConfig,
+        _entity_config: &grpc_graphql_gateway::federation::EntityConfig,
         representation: &async_graphql::indexmap::IndexMap<Name, GqlValue>,
     ) -> grpc_graphql_gateway::Result<GqlValue> {
         let mut obj = representation.clone();
@@ -202,31 +203,132 @@ fn default_entity_resolver() -> Arc<dyn grpc_graphql_gateway::EntityResolver> {
     Arc::new(FederationExampleEntityResolver::default())
 }
 
-/// Scaffolding for gRPC service implementations.
-#[derive(Default, Clone)]
-pub struct ServiceImpl;
+#[derive(Clone, Default)]
+struct ExampleData {
+    users: HashMap<String, User>,
+    products: HashMap<String, Product>,
+    reviews: HashMap<String, Review>,
+}
 
-#[tonic::async_trait]
-impl federation_example::product_service_server::ProductService for ServiceImpl {
-    async fn get_product(&self, _request: Request<federation_example::GetProductRequest>) -> ServiceResult<Response<federation_example::GetProductResponse>> {
-        Err(Status::unimplemented("method not implemented"))
+impl ExampleData {
+    fn seed() -> Self {
+        let mut users = HashMap::new();
+        let mut products = HashMap::new();
+        let mut reviews = HashMap::new();
+
+        let alice = User {
+            id: "u1".to_string(),
+            email: "alice@example.com".to_string(),
+            name: "Alice".to_string(),
+        };
+        let bob = User {
+            id: "u2".to_string(),
+            email: "bob@example.com".to_string(),
+            name: "Bob".to_string(),
+        };
+        users.insert(alice.id.clone(), alice.clone());
+        users.insert(bob.id.clone(), bob.clone());
+
+        let rocket = Product {
+            upc: "apollo-1".to_string(),
+            name: "Apollo Rocket".to_string(),
+            price: 499,
+            created_by: Some(alice.clone()),
+        };
+        let satchel = Product {
+            upc: "astro-42".to_string(),
+            name: "Astro Satchel".to_string(),
+            price: 149,
+            created_by: Some(bob.clone()),
+        };
+        products.insert(rocket.upc.clone(), rocket.clone());
+        products.insert(satchel.upc.clone(), satchel.clone());
+
+        reviews.insert(
+            "r1".to_string(),
+            Review {
+                id: "r1".to_string(),
+                product: Some(rocket),
+                author: Some(bob.clone()),
+                body: "Launches straight and true.".to_string(),
+                rating: 5,
+            },
+        );
+        reviews.insert(
+            "r2".to_string(),
+            Review {
+                id: "r2".to_string(),
+                product: Some(satchel),
+                author: Some(alice),
+                body: "Fits every mission checklist.".to_string(),
+                rating: 4,
+            },
+        );
+
+        Self {
+            users,
+            products,
+            reviews,
+        }
+    }
+}
+
+/// Simple in-memory gRPC service implementations backed by seeded data.
+#[derive(Clone)]
+pub struct ServiceImpl {
+    data: Arc<ExampleData>,
+}
+
+impl Default for ServiceImpl {
+    fn default() -> Self {
+        Self {
+            data: Arc::new(ExampleData::seed()),
+        }
     }
 }
 
 #[tonic::async_trait]
-impl federation_example::review_service_server::ReviewService for ServiceImpl {
-    async fn get_review(&self, _request: Request<federation_example::GetReviewRequest>) -> ServiceResult<Response<federation_example::GetReviewResponse>> {
-        Err(Status::unimplemented("method not implemented"))
-    }
-    async fn get_user_reviews(&self, _request: Request<federation_example::GetUserReviewsRequest>) -> ServiceResult<Response<federation_example::GetUserReviewsResponse>> {
-        Err(Status::unimplemented("method not implemented"))
+impl ProductService for ServiceImpl {
+    async fn get_product(&self, request: Request<federation_example::GetProductRequest>) -> ServiceResult<Response<federation_example::GetProductResponse>> {
+        let upc = request.into_inner().upc;
+        let product = self.data.products.get(&upc).cloned();
+        Ok(Response::new(federation_example::GetProductResponse { product }))
     }
 }
 
 #[tonic::async_trait]
-impl federation_example::user_service_server::UserService for ServiceImpl {
-    async fn get_user(&self, _request: Request<federation_example::GetUserRequest>) -> ServiceResult<Response<federation_example::GetUserResponse>> {
-        Err(Status::unimplemented("method not implemented"))
+impl ReviewService for ServiceImpl {
+    async fn get_review(&self, request: Request<federation_example::GetReviewRequest>) -> ServiceResult<Response<federation_example::GetReviewResponse>> {
+        let id = request.into_inner().id;
+        let review = self.data.reviews.get(&id).cloned();
+        Ok(Response::new(federation_example::GetReviewResponse { review }))
+    }
+    async fn get_user_reviews(&self, request: Request<federation_example::GetUserReviewsRequest>) -> ServiceResult<Response<federation_example::GetUserReviewsResponse>> {
+        let user_id = request.into_inner().user_id;
+        let reviews = self
+            .data
+            .reviews
+            .values()
+            .filter(|review| {
+                review
+                    .author
+                    .as_ref()
+                    .map(|user| user.id == user_id)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+
+        Ok(Response::new(federation_example::GetUserReviewsResponse { reviews }))
+    }
+}
+
+#[tonic::async_trait]
+impl UserService for ServiceImpl {
+    async fn get_user(&self, request: Request<federation_example::GetUserRequest>) -> ServiceResult<Response<federation_example::GetUserResponse>> {
+        let id = request.into_inner().id;
+        let user = self.data.users.get(&id).cloned();
+        Ok(Response::new(federation_example::GetUserResponse { user }))
     }
 }
 
@@ -238,7 +340,7 @@ pub async fn run_services() -> GatewayResult<()> {
         tracing::info!("gRPC service federation_example.ProductService listening on {}", addr);
         let handle = tokio::spawn(async move {
             Server::builder()
-                .add_service(federation_example::product_service_server::ProductServiceServer::new(service.clone()))
+                .add_service(ProductServiceServer::new(service.clone()))
                 .serve(addr)
                 .await
                 .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))
@@ -251,7 +353,7 @@ pub async fn run_services() -> GatewayResult<()> {
         tracing::info!("gRPC service federation_example.ReviewService listening on {}", addr);
         let handle = tokio::spawn(async move {
             Server::builder()
-                .add_service(federation_example::review_service_server::ReviewServiceServer::new(service.clone()))
+                .add_service(ReviewServiceServer::new(service.clone()))
                 .serve(addr)
                 .await
                 .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))
@@ -264,7 +366,7 @@ pub async fn run_services() -> GatewayResult<()> {
         tracing::info!("gRPC service federation_example.UserService listening on {}", addr);
         let handle = tokio::spawn(async move {
             Server::builder()
-                .add_service(federation_example::user_service_server::UserServiceServer::new(service.clone()))
+                .add_service(UserServiceServer::new(service.clone()))
                 .serve(addr)
                 .await
                 .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))

@@ -486,8 +486,14 @@ fn render_template(
     buf.push_str("    use super::ServiceConfig;\n\n");
 
     let mut service_consts = Vec::new();
-    for svc in services {
+    for (idx, svc) in services.iter().enumerate() {
         let const_name = svc.full_name.replace('.', "_").to_uppercase();
+        let endpoint = normalize_endpoint(
+            &svc
+                .endpoint
+                .clone()
+                .unwrap_or_else(|| default_service_endpoint(idx)),
+        );
         service_consts.push(const_name.clone());
 
         buf.push_str(&format!(
@@ -498,10 +504,9 @@ fn render_template(
             "        name: {},\n",
             render_str_literal(&svc.full_name)
         ));
-        let endpoint = svc.endpoint.as_deref().unwrap_or("http://127.0.0.1:50051");
         buf.push_str(&format!(
             "        endpoint: {},\n",
-            render_str_literal(endpoint)
+            render_str_literal(&endpoint)
         ));
         buf.push_str(&format!("        insecure: {},\n", svc.insecure));
         buf.push_str(&format!(
@@ -638,7 +643,7 @@ fn render_template(
         buf.push_str("}\n\n");
     } else {
         buf.push_str("    let mut handles = Vec::new();\n");
-        for svc in services {
+        for (idx, svc) in services.iter().enumerate() {
             let (pkg, svc_name) = svc
                 .full_name
                 .rsplit_once('.')
@@ -647,11 +652,15 @@ fn render_template(
             let mod_name = pkg.replace('.', "_");
             let server_mod = format!("{}_server", to_snake_case(svc_name));
             let server_struct = format!("{}Server", svc_name);
+            let endpoint = svc
+                .endpoint
+                .clone()
+                .unwrap_or_else(|| default_service_endpoint(idx));
 
             buf.push_str("    {\n");
             buf.push_str(&format!(
                 "        let addr: SocketAddr = listen_addr({}, DEFAULT_GRPC_ADDR)?;\n",
-                render_str_literal(svc.endpoint.as_deref().unwrap_or("http://0.0.0.0:50051"))
+                render_str_literal(&endpoint)
             ));
             buf.push_str("        let service = ServiceImpl::default();\n");
             buf.push_str(&format!(
@@ -927,6 +936,18 @@ fn render_entity_configs(entities: &[EntityInfo]) -> String {
         }
         buf.push(']');
         buf
+    }
+}
+
+fn default_service_endpoint(idx: usize) -> String {
+    format!("http://127.0.0.1:{}", 50051 + idx as u16)
+}
+
+fn normalize_endpoint(endpoint: &str) -> String {
+    if endpoint.contains("://") {
+        endpoint.to_string()
+    } else {
+        format!("http://{}", endpoint)
     }
 }
 
