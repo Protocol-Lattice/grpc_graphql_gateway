@@ -341,7 +341,7 @@ impl EntityResolver for GrpcEntityResolver {
 
         // Get the resolver mapping for this entity type
         let mapping = self.resolver_mappings.get(&entity_config.type_name);
-        
+
         if mapping.is_none() {
             tracing::warn!(
                 "No resolver mapping found for entity {}. Returning representation as-is.",
@@ -376,7 +376,7 @@ impl EntityResolver for GrpcEntityResolver {
         // 2. Set the key field(s) from the representation
         // 3. Call the gRPC method
         // 4. Transform the response to GqlValue
-        
+
         tracing::debug!(
             "Would call {}/{} with key {}={:?}",
             mapping.service_name,

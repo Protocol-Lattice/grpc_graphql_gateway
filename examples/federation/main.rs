@@ -42,10 +42,10 @@ async fn main() -> Result<()> {
 
     let store = Arc::new(RwLock::new(FederationData::seed()));
     let services = FederationServices::with_store(store.clone());
-    
+
     // Option 1: Standard entity resolver with batch support
     let entity_resolver = Arc::new(ExampleEntityResolver::new(store.clone()));
-    
+
     // Option 2: DataLoader-wrapped resolver (uncomment to use)
     // This demonstrates the EntityDataLoader pattern for batching
     // let entity_resolver = Arc::new(DataLoaderEntityResolver::new(store.clone()));
@@ -322,10 +322,7 @@ fn print_examples() {
     println!("  User:    http://{}/graphql", USER_GRAPH_ADDR);
     println!("  Product: http://{}/graphql", PRODUCT_GRAPH_ADDR);
     println!("  Review:  http://{}/graphql", REVIEW_GRAPH_ADDR);
-    println!(
-        "\nApollo Router: http://{}/",
-        ROUTER_ADDR
-    );
+    println!("\nApollo Router: http://{}/", ROUTER_ADDR);
     println!("  (after running: ./examples/federation/compose_supergraph.sh)");
     println!("\n📝 Example Queries:");
     println!("  query {{ user(id:\"u1\") {{ id email name }} }}");
@@ -510,20 +507,20 @@ impl DataLoaderEntityResolver {
     pub fn new(store: Arc<RwLock<FederationData>>) -> Self {
         // Create the base resolver
         let base_resolver = Arc::new(ExampleEntityResolver::new(store));
-        
+
         // Build entity configs map for the DataLoader
         let entity_configs = HashMap::new();
-        
+
         // In a real application, you'd extract these from the descriptor pool
         // For the example, we'll create placeholder configs
         use grpc_graphql_gateway::EntityDataLoader;
-        
+
         // Note: This is a simplified example. In production, you'd get these from
         // the actual descriptor pool used by the gateway
-        
+
         // Create the DataLoader
         let loader = Arc::new(EntityDataLoader::new(base_resolver, entity_configs));
-        
+
         Self { loader }
     }
 }
@@ -552,4 +549,3 @@ impl EntityResolver for DataLoaderEntityResolver {
             .await
     }
 }
-

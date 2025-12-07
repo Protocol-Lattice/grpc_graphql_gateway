@@ -561,7 +561,8 @@ impl TypeRegistry {
                 );
             }
             if field_is_shareable(&field, &field_ext) {
-                gql_field = gql_field.directive(async_graphql::dynamic::Directive::new("shareable"));
+                gql_field =
+                    gql_field.directive(async_graphql::dynamic::Directive::new("shareable"));
             }
 
             obj = obj.field(gql_field);

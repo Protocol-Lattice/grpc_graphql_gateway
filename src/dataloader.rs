@@ -30,7 +30,7 @@ struct BatchRequest {
 ///
 /// ```ignore
 /// let loader = EntityDataLoader::new(resolver, entity_configs);
-/// 
+///
 /// // These will be batched together
 /// let user1 = loader.load("User", repr1).await?;
 /// let user2 = loader.load("User", repr2).await?;
@@ -117,7 +117,7 @@ mod tests {
         let resolver = Arc::new(GrpcEntityResolver::default());
         let configs = HashMap::new();
         let loader = EntityDataLoader::new(resolver, configs);
-        
+
         // Just verify it compiles and can be created
         assert_eq!(loader.entity_configs.len(), 0);
     }
@@ -128,7 +128,7 @@ mod tests {
         let configs = HashMap::new();
         let loader1 = EntityDataLoader::new(resolver, configs);
         let loader2 = loader1.clone();
-        
+
         // Verify the clone shares the same underlying data
         assert_eq!(
             Arc::ptr_eq(&loader1.entity_configs, &loader2.entity_configs),
