@@ -401,9 +401,10 @@ cargo install grpc-graphql-gateway --bin protoc-gen-graphql-template
 
 # Generate gateway code
 protoc \
+  --plugin=protoc-gen-graphql-template=target/debug/protoc-gen-graphql-template \
   --graphql-template_out=. \
   --proto_path=proto \
-  your_service.proto
+  proto/federation_example.proto
 
 # Run the generated gateway
 cargo run --bin graphql_gateway
