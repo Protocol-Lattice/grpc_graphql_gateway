@@ -407,7 +407,7 @@ protoc \
   proto/federation_example.proto
 
 # Run the generated gateway
-cargo run --bin graphql_gateway
+cargo run --bin graphql
 ```
 
 The generator creates:
