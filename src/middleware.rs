@@ -137,3 +137,36 @@ impl Middleware for LoggingMiddleware {
         Ok(())
     }
 }
+
+/// Rate Limiting middleware
+///
+/// Limits the number of requests using a token bucket algorithm.
+/// This implementation uses a global rate limiter.
+pub struct RateLimitMiddleware {
+    limiter: std::sync::Arc<governor::RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+}
+
+impl RateLimitMiddleware {
+    /// Create a new rate limiter with the specified requests per second capacity
+    pub fn new(requests_per_second: u32, burst_size: u32) -> Self {
+        use governor::{Quota, RateLimiter};
+        use std::num::NonZeroU32;
+
+        let quota = Quota::per_second(NonZeroU32::new(requests_per_second).unwrap())
+            .allow_burst(NonZeroU32::new(burst_size).unwrap());
+        
+        Self {
+            limiter: std::sync::Arc::new(RateLimiter::direct(quota)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Middleware for RateLimitMiddleware {
+    async fn call(&self, _ctx: &mut Context) -> Result<()> {
+        if self.limiter.check().is_err() {
+            return Err(crate::error::Error::TooManyRequests("Rate limit exceeded".to_string()));
+        }
+        Ok(())
+    }
+}
