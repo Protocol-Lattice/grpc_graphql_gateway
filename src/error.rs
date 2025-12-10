@@ -55,6 +55,10 @@ pub enum Error {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Rate limiting errors
+    #[error("Too many requests: {0}")]
+    TooManyRequests(String),
+
     /// Any other error
     #[error("Error: {0}")]
     Other(#[from] anyhow::Error),
@@ -84,6 +88,7 @@ impl Error {
             Error::WebSocket(_) => "WEBSOCKET_ERROR",
             Error::Internal(_) => "INTERNAL_ERROR",
             Error::Io(_) => "IO_ERROR",
+            Error::TooManyRequests(_) => "TOO_MANY_REQUESTS",
             Error::Other(_) => "UNKNOWN_ERROR",
         };
         map.insert("code".to_string(), serde_json::json!(code));

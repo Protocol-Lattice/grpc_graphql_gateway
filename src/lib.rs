@@ -69,6 +69,6 @@ pub use federation::{
 };
 pub use gateway::{Gateway, GatewayBuilder};
 pub use grpc_client::GrpcClient;
-pub use middleware::{Context, Middleware};
+pub use middleware::{Context, Middleware, RateLimitMiddleware};
 pub use runtime::ServeMux;
 pub use schema::SchemaBuilder;
