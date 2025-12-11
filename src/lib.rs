@@ -59,6 +59,7 @@ pub mod grpc_client;
 pub mod health;
 pub mod metrics;
 pub mod middleware;
+pub mod persisted_queries;
 pub mod runtime;
 pub mod schema;
 pub mod tracing_otel;
@@ -75,7 +76,11 @@ pub use grpc_client::GrpcClient;
 pub use health::{HealthResponse, HealthState, HealthStatus, ComponentHealth};
 pub use metrics::{GatewayMetrics, RequestTimer, GrpcTimer};
 pub use middleware::{Context, Middleware, RateLimitMiddleware};
+pub use persisted_queries::{
+    create_apq_store, process_apq_request, PersistedQueryConfig, PersistedQueryError,
+    PersistedQueryExtension, PersistedQueryStore, SharedPersistedQueryStore,
+};
 pub use runtime::ServeMux;
 pub use schema::SchemaBuilder;
-pub use tracing_otel::{TracingConfig, GraphQLSpan, GrpcSpan, init_tracer, shutdown_tracer};
+pub use tracing_otel::{GraphQLSpan, GrpcSpan, TracingConfig, init_tracer, shutdown_tracer};
 

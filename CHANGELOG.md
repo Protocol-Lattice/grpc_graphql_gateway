@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2025-12-11
+
+### Added
+- **Automatic Persisted Queries (APQ)**: New `with_persisted_queries()` method on `GatewayBuilder` for bandwidth optimization.
+  - `PersistedQueryConfig` - Configure cache size and TTL
+  - `PersistedQueryStore` - Thread-safe LRU cache with SHA-256 hashing
+  - `PersistedQueryError` - Proper error handling with `PERSISTED_QUERY_NOT_FOUND` code
+  - Follows Apollo APQ protocol for client compatibility
+  - Automatic cache eviction when at capacity
+
+### Performance
+- APQ reduces bandwidth by allowing clients to send query hashes instead of full query strings
+- LRU eviction prevents unbounded memory growth
+
 ## [0.1.9] - 2025-12-11
 
 ### Added

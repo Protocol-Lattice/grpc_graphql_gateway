@@ -84,6 +84,11 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         .add_middleware(RateLimitMiddleware::new(10, 5))
         // Add a simple custom middleware inline
         .add_middleware(SimpleLoggingMiddleware)
+        // Enable APQ for bandwidth optimization
+        .with_persisted_queries(grpc_graphql_gateway::PersistedQueryConfig {
+            cache_size: 100,
+            ttl: None, // No expiration
+        })
         .serve(addr.to_string())
         .await?;
 

@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.1.9"
+version = "0.2.0"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -69,6 +69,10 @@ opentelemetry = "0.21"
 opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.14", optional = true }
 tracing-opentelemetry = "0.22"
+
+# Automatic Persisted Queries (APQ)
+sha2 = "0.10"
+hex = "0.4"
 
 [features]
 default = []
