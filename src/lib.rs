@@ -56,6 +56,8 @@ pub mod error;
 pub mod federation;
 pub mod gateway;
 pub mod grpc_client;
+pub mod health;
+pub mod metrics;
 pub mod middleware;
 pub mod runtime;
 pub mod schema;
@@ -69,6 +71,9 @@ pub use federation::{
 };
 pub use gateway::{Gateway, GatewayBuilder};
 pub use grpc_client::GrpcClient;
+pub use health::{HealthResponse, HealthState, HealthStatus, ComponentHealth};
+pub use metrics::{GatewayMetrics, RequestTimer, GrpcTimer};
 pub use middleware::{Context, Middleware, RateLimitMiddleware};
 pub use runtime::ServeMux;
 pub use schema::SchemaBuilder;
+

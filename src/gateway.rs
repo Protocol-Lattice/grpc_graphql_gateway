@@ -83,6 +83,10 @@ pub struct GatewayBuilder {
     error_handler: Option<Arc<dyn Fn(Vec<GraphQLError>) + Send + Sync>>,
     entity_resolver: Option<Arc<dyn crate::federation::EntityResolver>>,
     service_allowlist: Option<std::collections::HashSet<String>>,
+    /// Enable health check endpoints
+    health_checks_enabled: bool,
+    /// Enable metrics endpoint
+    metrics_enabled: bool,
 }
 
 impl GatewayBuilder {
@@ -95,6 +99,8 @@ impl GatewayBuilder {
             error_handler: None,
             entity_resolver: None,
             service_allowlist: None,
+            health_checks_enabled: false,
+            metrics_enabled: false,
         }
     }
 
@@ -243,6 +249,63 @@ impl GatewayBuilder {
         self
     }
 
+    /// Enable health check endpoints (`/health` and `/ready`).
+    ///
+    /// These endpoints are essential for Kubernetes liveness and readiness probes.
+    ///
+    /// # Endpoints
+    ///
+    /// - `GET /health` - Liveness probe, returns 200 if server is running
+    /// - `GET /ready` - Readiness probe, checks gRPC client configuration
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::Gateway;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .enable_health_checks()
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn enable_health_checks(mut self) -> Self {
+        self.health_checks_enabled = true;
+        self
+    }
+
+    /// Enable Prometheus metrics endpoint (`/metrics`).
+    ///
+    /// Exposes metrics for monitoring GraphQL request performance and gRPC backend health.
+    ///
+    /// # Metrics Exposed
+    ///
+    /// - `graphql_requests_total` - Total GraphQL requests by operation type
+    /// - `graphql_request_duration_seconds` - Request latency histogram
+    /// - `graphql_errors_total` - Total GraphQL errors
+    /// - `grpc_backend_requests_total` - Total gRPC backend calls
+    /// - `grpc_backend_duration_seconds` - gRPC backend latency histogram
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::Gateway;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .enable_metrics()
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn enable_metrics(mut self) -> Self {
+        self.metrics_enabled = true;
+        self
+    }
+
     /// Build the gateway
     pub fn build(self) -> Result<Gateway> {
         let mut schema_builder = self.schema_builder;
@@ -263,6 +326,17 @@ impl GatewayBuilder {
 
         if let Some(handler) = self.error_handler {
             mux.set_error_handler_arc(handler);
+        }
+
+        // Configure health checks
+        if self.health_checks_enabled {
+            mux.set_client_pool(self.client_pool.clone());
+            mux.enable_health_checks();
+        }
+
+        // Configure metrics
+        if self.metrics_enabled {
+            mux.enable_metrics();
         }
 
         Ok(Gateway {
