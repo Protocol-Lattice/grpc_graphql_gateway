@@ -61,6 +61,7 @@ pub mod metrics;
 pub mod middleware;
 pub mod runtime;
 pub mod schema;
+pub mod tracing_otel;
 pub mod types;
 
 pub use dataloader::EntityDataLoader;
@@ -76,4 +77,5 @@ pub use metrics::{GatewayMetrics, RequestTimer, GrpcTimer};
 pub use middleware::{Context, Middleware, RateLimitMiddleware};
 pub use runtime::ServeMux;
 pub use schema::SchemaBuilder;
+pub use tracing_otel::{TracingConfig, GraphQLSpan, GrpcSpan, init_tracer, shutdown_tracer};
 

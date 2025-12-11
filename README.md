@@ -32,7 +32,9 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 ### Production Ready
 - 🏥 **Health Checks** - `/health` and `/ready` endpoints for Kubernetes liveness/readiness probes
 - 📊 **Prometheus Metrics** - `/metrics` endpoint with request counts, latencies, and error rates
-- 🛡️ **DoS Protection** - Query depth and complexity limiting to prevent expensive queries
+- � **OpenTelemetry Tracing** - Distributed tracing with GraphQL and gRPC span tracking
+- �🛡️ **DoS Protection** - Query depth and complexity limiting to prevent expensive queries
+- 🔒 **Introspection Control** - Disable schema introspection in production for security
 - ⚡ **Rate Limiting** - Built-in rate limiting middleware
 
 ## 🚀 Quick Start
@@ -469,6 +471,74 @@ scrape_configs:
     static_configs:
       - targets: ['gateway:8888']
     metrics_path: '/metrics'
+```
+
+### OpenTelemetry Tracing
+
+Enable distributed tracing for end-to-end visibility:
+
+```rust
+use grpc_graphql_gateway::{Gateway, TracingConfig, init_tracer, shutdown_tracer};
+
+// Initialize the tracer (do this once at startup)
+let config = TracingConfig::new()
+    .with_service_name("my-gateway")
+    .with_sample_ratio(1.0);  // Sample all requests
+
+let _provider = init_tracer(&config);
+
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    .enable_tracing()
+    .add_grpc_client("service", client)
+    .build()?;
+
+// ... run your server ...
+
+// Shutdown on exit
+shutdown_tracer();
+```
+
+**Spans Created:**
+
+| Span | Kind | Attributes |
+|------|------|------------|
+| `graphql.query` | Server | `graphql.operation.name`, `graphql.document` |
+| `graphql.mutation` | Server | `graphql.operation.name`, `graphql.document` |
+| `grpc.call` | Client | `rpc.service`, `rpc.method`, `rpc.grpc.status_code` |
+
+**OTLP Export (Optional):**
+
+```toml
+[dependencies]
+grpc_graphql_gateway = { version = "0.1", features = ["otlp"] }
+```
+
+### Schema Introspection Control
+
+Disable introspection in production for security:
+
+```rust
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    .disable_introspection()  // Block __schema and __type queries
+    .add_grpc_client("service", client)
+    .build()?;
+```
+
+**Environment-Based Toggle:**
+
+```rust
+let is_production = std::env::var("ENV").map(|e| e == "production").unwrap_or(false);
+
+let mut builder = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS);
+
+if is_production {
+    builder = builder.disable_introspection();
+}
+
+let gateway = builder.build()?;
 ```
 
 ### Custom Error Handling

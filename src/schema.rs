@@ -80,6 +80,8 @@ pub struct SchemaBuilder {
     query_depth_limit: Option<usize>,
     /// Maximum query complexity allowed
     query_complexity_limit: Option<usize>,
+    /// Whether introspection is disabled
+    introspection_disabled: bool,
 }
 
 impl SchemaBuilder {
@@ -92,6 +94,7 @@ impl SchemaBuilder {
             service_allowlist: None,
             query_depth_limit: None,
             query_complexity_limit: None,
+            introspection_disabled: false,
         }
     }
 
@@ -166,6 +169,39 @@ impl SchemaBuilder {
     /// ```
     pub fn with_query_complexity_limit(mut self, max_complexity: usize) -> Self {
         self.query_complexity_limit = Some(max_complexity);
+        self
+    }
+
+    /// Disable GraphQL introspection queries.
+    ///
+    /// This is a security best practice for production environments to prevent
+    /// attackers from discovering your schema structure.
+    ///
+    /// When disabled, queries like `__schema` and `__type` will return errors.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::SchemaBuilder;
+    ///
+    /// let builder = SchemaBuilder::new()
+    ///     .disable_introspection(); // Block __schema and __type queries
+    /// ```
+    ///
+    /// # Production Usage
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::SchemaBuilder;
+    ///
+    /// let is_production = std::env::var("ENV").map(|e| e == "production").unwrap_or(false);
+    ///
+    /// let mut builder = SchemaBuilder::new();
+    /// if is_production {
+    ///     builder = builder.disable_introspection();
+    /// }
+    /// ```
+    pub fn disable_introspection(mut self) -> Self {
+        self.introspection_disabled = true;
         self
     }
 
@@ -405,6 +441,11 @@ impl SchemaBuilder {
             schema_builder = schema_builder.limit_complexity(max_complexity);
         }
 
+        // Disable introspection if configured (security for production)
+        if self.introspection_disabled {
+            schema_builder = schema_builder.disable_introspection();
+        }
+
         let schema = schema_builder
             .finish()
             .map_err(|e| Error::Schema(format!("failed to build schema: {e}")))?;
@@ -558,6 +599,59 @@ mod tests {
         assert!(
             response.errors.is_empty(),
             "expected success with reasonable limits, got errors: {:?}",
+            response.errors
+        );
+    }
+
+    #[tokio::test]
+    async fn introspection_disabled_blocks_schema_query() {
+        let schema = SchemaBuilder::new()
+            .with_descriptor_set_bytes(FEDERATION_DESCRIPTOR)
+            .enable_federation()
+            .disable_introspection()
+            .build(&GrpcClientPool::new())
+            .expect("schema builds");
+
+        // Introspection query should be blocked
+        let response = schema
+            .execute(async_graphql::Request::new(
+                "{ __schema { types { name } } }",
+            ))
+            .await;
+
+        // Should return an error
+        assert!(
+            !response.errors.is_empty(),
+            "expected introspection to be blocked, but query succeeded"
+        );
+
+        let error_message = response.errors[0].message.to_lowercase();
+        assert!(
+            error_message.contains("introspection") || error_message.contains("disabled") || error_message.contains("unknown") || error_message.contains("__schema"),
+            "expected introspection error, got: {}",
+            response.errors[0].message
+        );
+    }
+
+    #[tokio::test]
+    async fn introspection_enabled_allows_schema_query() {
+        let schema = SchemaBuilder::new()
+            .with_descriptor_set_bytes(FEDERATION_DESCRIPTOR)
+            .enable_federation()
+            // Introspection is ENABLED by default
+            .build(&GrpcClientPool::new())
+            .expect("schema builds");
+
+        // Introspection query should work
+        let response = schema
+            .execute(async_graphql::Request::new(
+                "{ __schema { types { name } } }",
+            ))
+            .await;
+
+        assert!(
+            response.errors.is_empty(),
+            "expected introspection to work, got errors: {:?}",
             response.errors
         );
     }

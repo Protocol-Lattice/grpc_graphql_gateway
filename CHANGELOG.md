@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2025-12-11
+
+### Added
+- **OpenTelemetry Distributed Tracing**: New `enable_tracing()` method on `GatewayBuilder` and `tracing_otel` module for end-to-end visibility.
+  - `GraphQLSpan` - Tracks GraphQL operations with attributes for operation name, type, and query
+  - `GrpcSpan` - Tracks gRPC backend calls with service, method, and status code
+  - `TracingConfig` - Configuration for service name and sampling ratio
+  - `init_tracer()` / `shutdown_tracer()` - Lifecycle management for OpenTelemetry
+- **Schema Introspection Controls**: New `disable_introspection()` method on both `GatewayBuilder` and `SchemaBuilder`.
+  - Blocks `__schema` and `__type` queries in production for security
+  - Enabled by default for development convenience
+- **OTLP Export Support**: Optional `otlp` feature flag for OpenTelemetry Protocol export.
+- **Tests**: Test coverage for tracing configuration and introspection controls.
+
+### Security
+- Schema introspection can now be disabled in production to prevent schema discovery attacks.
+
 ## [0.1.8] - 2025-12-11
 
 ### Added
@@ -104,6 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatic `_entities` query generation for entity resolution
   - `EntityResolver` trait for custom entity resolution logic
 
+[0.1.9]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.5...v0.1.6
@@ -113,3 +131,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.2]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/releases/tag/v0.1.0
+
