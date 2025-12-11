@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -22,6 +22,7 @@ base64 = "0.22"
 
 # Async
 async-trait = "0.1"
+
 
 # Web framework
 axum = { version = "0.8", features = ["ws"] }
