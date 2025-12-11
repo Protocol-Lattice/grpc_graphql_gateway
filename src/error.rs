@@ -59,6 +59,14 @@ pub enum Error {
     #[error("Too many requests: {0}")]
     TooManyRequests(String),
 
+    /// Query depth limit exceeded (DoS protection)
+    #[error("Query depth limit exceeded: {0}")]
+    QueryTooDeep(String),
+
+    /// Query complexity limit exceeded (DoS protection)
+    #[error("Query complexity limit exceeded: {0}")]
+    QueryTooComplex(String),
+
     /// Any other error
     #[error("Error: {0}")]
     Other(#[from] anyhow::Error),
@@ -89,6 +97,8 @@ impl Error {
             Error::Internal(_) => "INTERNAL_ERROR",
             Error::Io(_) => "IO_ERROR",
             Error::TooManyRequests(_) => "TOO_MANY_REQUESTS",
+            Error::QueryTooDeep(_) => "QUERY_TOO_DEEP",
+            Error::QueryTooComplex(_) => "QUERY_TOO_COMPLEX",
             Error::Other(_) => "UNKNOWN_ERROR",
         };
         map.insert("code".to_string(), serde_json::json!(code));

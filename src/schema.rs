@@ -76,6 +76,10 @@ pub struct SchemaBuilder {
     federation: bool,
     entity_resolver: Option<std::sync::Arc<dyn EntityResolver>>,
     service_allowlist: Option<HashSet<String>>,
+    /// Maximum query depth (nesting level) allowed
+    query_depth_limit: Option<usize>,
+    /// Maximum query complexity allowed
+    query_complexity_limit: Option<usize>,
 }
 
 impl SchemaBuilder {
@@ -86,6 +90,8 @@ impl SchemaBuilder {
             federation: false,
             entity_resolver: None,
             service_allowlist: None,
+            query_depth_limit: None,
+            query_complexity_limit: None,
         }
     }
 
@@ -123,6 +129,43 @@ impl SchemaBuilder {
         S: Into<String>,
     {
         self.service_allowlist = Some(services.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Set the maximum query depth (nesting level) allowed.
+    ///
+    /// This helps prevent deeply nested queries that could overwhelm your gRPC backends.
+    /// Queries exceeding this depth will return an error: "Query is nested too deep".
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::SchemaBuilder;
+    ///
+    /// let builder = SchemaBuilder::new()
+    ///     .with_query_depth_limit(10); // Max 10 levels of nesting
+    /// ```
+    pub fn with_query_depth_limit(mut self, max_depth: usize) -> Self {
+        self.query_depth_limit = Some(max_depth);
+        self
+    }
+
+    /// Set the maximum query complexity allowed.
+    ///
+    /// This helps prevent expensive queries from overwhelming your gRPC backends.
+    /// Each field in a query adds to the complexity (default: 1 per field).
+    /// Queries exceeding this limit will return an error: "Query is too complex".
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::SchemaBuilder;
+    ///
+    /// let builder = SchemaBuilder::new()
+    ///     .with_query_complexity_limit(100); // Max complexity of 100
+    /// ```
+    pub fn with_query_complexity_limit(mut self, max_complexity: usize) -> Self {
+        self.query_complexity_limit = Some(max_complexity);
         self
     }
 
@@ -352,6 +395,16 @@ impl SchemaBuilder {
             schema_builder = schema_builder.register(obj);
         }
 
+        // Apply query depth limit for DoS protection
+        if let Some(max_depth) = self.query_depth_limit {
+            schema_builder = schema_builder.limit_depth(max_depth);
+        }
+
+        // Apply query complexity limit for DoS protection
+        if let Some(max_complexity) = self.query_complexity_limit {
+            schema_builder = schema_builder.limit_complexity(max_complexity);
+        }
+
         let schema = schema_builder
             .finish()
             .map_err(|e| Error::Schema(format!("failed to build schema: {e}")))?;
@@ -401,6 +454,112 @@ mod tests {
             .unwrap_or_default();
 
         assert!(entities.is_empty(), "expected empty entities list");
+    }
+
+    #[tokio::test]
+    async fn query_depth_limit_blocks_deep_queries() {
+        let schema = SchemaBuilder::new()
+            .with_descriptor_set_bytes(FEDERATION_DESCRIPTOR)
+            .enable_federation()
+            .with_query_depth_limit(1) // Very strict limit - only 1 level of nesting allowed
+            .build(&GrpcClientPool::new())
+            .expect("schema builds");
+
+        // This query has depth 2 (_service -> sdl), should be blocked with limit of 1
+        let response = schema
+            .execute(async_graphql::Request::new(
+                "{ _service { sdl } }",
+            ))
+            .await;
+
+        // The query depth limit should trigger an error
+        assert!(
+            !response.errors.is_empty(),
+            "expected depth limit error, but query succeeded"
+        );
+
+        let error_message = response.errors[0].message.to_lowercase();
+        assert!(
+            error_message.contains("nested") || error_message.contains("depth"),
+            "expected depth error, got: {}",
+            response.errors[0].message
+        );
+    }
+
+    #[tokio::test]
+    async fn query_complexity_limit_blocks_complex_queries() {
+        let schema = SchemaBuilder::new()
+            .with_descriptor_set_bytes(FEDERATION_DESCRIPTOR)
+            .enable_federation()
+            .with_query_complexity_limit(1) // Very strict limit for testing
+            .build(&GrpcClientPool::new())
+            .expect("schema builds");
+
+        // This query should exceed complexity of 1
+        let response = schema
+            .execute(async_graphql::Request::new(
+                "{ _service { sdl } }",
+            ))
+            .await;
+
+        // The query complexity limit should trigger an error
+        assert!(
+            !response.errors.is_empty(),
+            "expected complexity limit error, but query succeeded"
+        );
+
+        let error_message = response.errors[0].message.to_lowercase();
+        assert!(
+            error_message.contains("complex"),
+            "expected complexity error, got: {}",
+            response.errors[0].message
+        );
+    }
+
+    #[tokio::test]
+    async fn schema_without_limits_allows_queries() {
+        let schema = SchemaBuilder::new()
+            .with_descriptor_set_bytes(FEDERATION_DESCRIPTOR)
+            .enable_federation()
+            .build(&GrpcClientPool::new())
+            .expect("schema builds");
+
+        // This query should succeed without limits
+        let response = schema
+            .execute(async_graphql::Request::new(
+                "{ _service { sdl } }",
+            ))
+            .await;
+
+        assert!(
+            response.errors.is_empty(),
+            "expected success, got errors: {:?}",
+            response.errors
+        );
+    }
+
+    #[tokio::test]
+    async fn reasonable_limits_allow_normal_queries() {
+        let schema = SchemaBuilder::new()
+            .with_descriptor_set_bytes(FEDERATION_DESCRIPTOR)
+            .enable_federation()
+            .with_query_depth_limit(10)      // Reasonable limit
+            .with_query_complexity_limit(100) // Reasonable limit
+            .build(&GrpcClientPool::new())
+            .expect("schema builds");
+
+        // Normal query should succeed
+        let response = schema
+            .execute(async_graphql::Request::new(
+                "{ _service { sdl } }",
+            ))
+            .await;
+
+        assert!(
+            response.errors.is_empty(),
+            "expected success with reasonable limits, got errors: {:?}",
+            response.errors
+        );
     }
 }
 
