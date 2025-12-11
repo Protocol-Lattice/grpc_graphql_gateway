@@ -8,6 +8,7 @@
 //! - **Federation v2**: Complete Apollo Federation support with entity resolution and `@shareable`
 //! - **Batching**: Built-in [`EntityDataLoader`] for efficient N+1 query prevention
 //! - **Subscriptions**: Real-time data via GraphQL subscriptions (WebSocket)
+//! - **Multiplex Subscriptions**: Support for multiple concurrent subscriptions per WebSocket connection
 //! - **Middleware**: Extensible middleware system for auth and logging
 //!
 //! ## Main Components
@@ -63,6 +64,7 @@ pub mod middleware;
 pub mod persisted_queries;
 pub mod runtime;
 pub mod schema;
+pub mod subscription;
 pub mod tracing_otel;
 pub mod types;
 
@@ -87,4 +89,9 @@ pub use persisted_queries::{
 };
 pub use runtime::ServeMux;
 pub use schema::SchemaBuilder;
+pub use subscription::{
+    GrpcSubscriptionMapping, GrpcSubscriptionResolver, MultiplexSubscription,
+    MultiplexSubscriptionBuilder, ProtocolMessage, SubscriptionConfig, SubscriptionInfo,
+    SubscriptionPayload, SubscriptionRegistry, SubscriptionResolver, SubscriptionState,
+};
 pub use tracing_otel::{init_tracer, shutdown_tracer, GraphQLSpan, GrpcSpan, TracingConfig};

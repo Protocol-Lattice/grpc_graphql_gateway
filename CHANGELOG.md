@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2025-12-11
+
+### Added
+- **Multiplex Subscription Support**: New `subscription` module implementing the `graphql-transport-ws` protocol without async-graphql dependency.
+  - `MultiplexSubscription` - WebSocket handler supporting multiple concurrent subscriptions per connection
+  - `MultiplexSubscriptionBuilder` - Builder pattern for configuring subscription handlers
+  - `SubscriptionResolver` trait - Custom subscription resolution with gRPC streaming support
+  - `GrpcSubscriptionResolver` - gRPC-backed subscription resolver
+  - `SubscriptionConfig` - Configure connection init timeout, keep-alive, and max subscriptions
+  - `SubscriptionRegistry` - Manage active subscriptions with cancellation support
+  - Protocol support: `ConnectionInit`, `Subscribe`, `Next`, `Error`, `Complete`, `Ping/Pong`
+
+### Features
+- Multiple concurrent subscriptions per WebSocket connection
+- Subscription lifecycle management with proper cleanup
+- Keep-alive ping/pong support
+- Connection initialization with configurable timeout
+- gRPC server-streaming integration for real-time data
+
 ## [0.2.1] - 2025-12-11
 
 ### Added
