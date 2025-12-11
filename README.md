@@ -37,6 +37,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - 🔒 **Introspection Control** - Disable schema introspection in production for security
 - ⚡ **Rate Limiting** - Built-in rate limiting middleware
 - 📦 **Automatic Persisted Queries (APQ)** - Reduce bandwidth with query hash caching
+- 🔌 **Circuit Breaker** - Prevent cascading failures with automatic backend health management
 
 ## 🚀 Quick Start
 
@@ -584,6 +585,46 @@ let gateway = Gateway::builder()
 - ✅ Compatible with Apollo Client's APQ implementation
 - ✅ LRU eviction prevents unbounded memory growth
 - ✅ Optional TTL for cache expiration
+
+### Circuit Breaker
+
+Protect your gateway from cascading failures when backend services are unhealthy:
+
+```rust
+use grpc_graphql_gateway::{Gateway, CircuitBreakerConfig};
+use std::time::Duration;
+
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    .with_circuit_breaker(CircuitBreakerConfig {
+        failure_threshold: 5,                      // Open after 5 failures
+        recovery_timeout: Duration::from_secs(30), // Wait 30s before testing recovery
+        half_open_max_requests: 3,                 // Allow 3 test requests
+    })
+    .add_grpc_client("service", client)
+    .build()?;
+```
+
+**How It Works:**
+
+1. **Closed**: Normal operation, all requests flow through
+2. **Open**: After `failure_threshold` consecutive failures, circuit opens → requests fail fast
+3. **Half-Open**: After `recovery_timeout`, limited test requests are allowed
+4. **Recovery**: If test requests succeed, circuit closes; if they fail, it reopens
+
+**Benefits:**
+- ✅ Prevents cascading failures when backends are unhealthy
+- ✅ Fast-fail reduces latency (no waiting for timeouts)
+- ✅ Automatic recovery testing when services come back
+- ✅ Per-service circuit breakers (one failing service doesn't affect others)
+
+**Circuit States:**
+
+| State | Description |
+|-------|-------------|
+| `Closed` | Normal operation |
+| `Open` | Failing fast, returning `SERVICE_UNAVAILABLE` |
+| `HalfOpen` | Testing if service recovered |
 
 ### Custom Error Handling
 

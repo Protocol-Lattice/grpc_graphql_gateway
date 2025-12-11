@@ -51,6 +51,7 @@ pub mod graphql {
     include!("generated/graphql.rs");
 }
 
+pub mod circuit_breaker;
 pub mod dataloader;
 pub mod error;
 pub mod federation;
@@ -65,6 +66,10 @@ pub mod schema;
 pub mod tracing_otel;
 pub mod types;
 
+pub use circuit_breaker::{
+    create_circuit_breaker_registry, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError,
+    CircuitBreakerRegistry, CircuitState, SharedCircuitBreakerRegistry,
+};
 pub use dataloader::EntityDataLoader;
 pub use error::{Error, Result};
 pub use federation::{
@@ -73,8 +78,8 @@ pub use federation::{
 };
 pub use gateway::{Gateway, GatewayBuilder};
 pub use grpc_client::GrpcClient;
-pub use health::{HealthResponse, HealthState, HealthStatus, ComponentHealth};
-pub use metrics::{GatewayMetrics, RequestTimer, GrpcTimer};
+pub use health::{ComponentHealth, HealthResponse, HealthState, HealthStatus};
+pub use metrics::{GatewayMetrics, GrpcTimer, RequestTimer};
 pub use middleware::{Context, Middleware, RateLimitMiddleware};
 pub use persisted_queries::{
     create_apq_store, process_apq_request, PersistedQueryConfig, PersistedQueryError,
@@ -82,5 +87,4 @@ pub use persisted_queries::{
 };
 pub use runtime::ServeMux;
 pub use schema::SchemaBuilder;
-pub use tracing_otel::{GraphQLSpan, GrpcSpan, TracingConfig, init_tracer, shutdown_tracer};
-
+pub use tracing_otel::{init_tracer, shutdown_tracer, GraphQLSpan, GrpcSpan, TracingConfig};

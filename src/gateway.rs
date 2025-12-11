@@ -91,6 +91,8 @@ pub struct GatewayBuilder {
     tracing_enabled: bool,
     /// APQ configuration
     apq_config: Option<crate::persisted_queries::PersistedQueryConfig>,
+    /// Circuit breaker configuration
+    circuit_breaker_config: Option<crate::circuit_breaker::CircuitBreakerConfig>,
 }
 
 impl GatewayBuilder {
@@ -107,6 +109,7 @@ impl GatewayBuilder {
             metrics_enabled: false,
             tracing_enabled: false,
             apq_config: None,
+            circuit_breaker_config: None,
         }
     }
 
@@ -421,6 +424,50 @@ impl GatewayBuilder {
         self
     }
 
+    /// Enable Circuit Breaker for gRPC backend resilience.
+    ///
+    /// The Circuit Breaker prevents cascading failures by "breaking" the circuit
+    /// when a backend service is unhealthy, giving it time to recover.
+    ///
+    /// # States
+    ///
+    /// - **Closed**: Normal operation, requests flow through
+    /// - **Open**: Service unhealthy, requests fail fast (returns error immediately)
+    /// - **Half-Open**: Testing recovery, limited requests allowed
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, CircuitBreakerConfig};
+    /// use std::time::Duration;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .with_circuit_breaker(CircuitBreakerConfig {
+    ///         failure_threshold: 5,                      // Open after 5 failures
+    ///         recovery_timeout: Duration::from_secs(30), // Try recovery after 30s
+    ///         half_open_max_requests: 3,                 // Allow 3 test requests
+    ///     })
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Default Configuration
+    ///
+    /// Use `CircuitBreakerConfig::default()` for sensible defaults:
+    /// - `failure_threshold`: 5 consecutive failures
+    /// - `recovery_timeout`: 30 seconds
+    /// - `half_open_max_requests`: 3 test requests
+    pub fn with_circuit_breaker(
+        mut self,
+        config: crate::circuit_breaker::CircuitBreakerConfig,
+    ) -> Self {
+        self.circuit_breaker_config = Some(config);
+        self
+    }
+
     /// Build the gateway
     pub fn build(self) -> Result<Gateway> {
         let mut schema_builder = self.schema_builder;
@@ -457,6 +504,11 @@ impl GatewayBuilder {
         // Configure APQ
         if let Some(apq_config) = self.apq_config {
             mux.enable_persisted_queries(apq_config);
+        }
+
+        // Configure Circuit Breaker
+        if let Some(cb_config) = self.circuit_breaker_config {
+            mux.enable_circuit_breaker(cb_config);
         }
 
         Ok(Gateway {

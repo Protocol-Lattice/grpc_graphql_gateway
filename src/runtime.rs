@@ -1,5 +1,8 @@
 //! Runtime support for GraphQL gateway - HTTP and WebSocket integration.
 
+use crate::circuit_breaker::{
+    CircuitBreakerConfig, SharedCircuitBreakerRegistry,
+};
 use crate::error::{GraphQLError, Result};
 use crate::grpc_client::GrpcClientPool;
 use crate::health::{health_handler, readiness_handler, HealthState};
@@ -36,6 +39,8 @@ pub struct ServeMux {
     metrics_enabled: bool,
     /// APQ store for persisted queries
     apq_store: Option<SharedPersistedQueryStore>,
+    /// Circuit breaker registry
+    circuit_breaker: Option<SharedCircuitBreakerRegistry>,
 }
 
 impl ServeMux {
@@ -49,6 +54,7 @@ impl ServeMux {
             health_checks_enabled: false,
             metrics_enabled: false,
             apq_store: None,
+            circuit_breaker: None,
         }
     }
 
@@ -70,6 +76,16 @@ impl ServeMux {
     /// Enable Automatic Persisted Queries (APQ)
     pub fn enable_persisted_queries(&mut self, config: PersistedQueryConfig) {
         self.apq_store = Some(crate::persisted_queries::create_apq_store(config));
+    }
+
+    /// Enable Circuit Breaker for gRPC backend resilience
+    pub fn enable_circuit_breaker(&mut self, config: CircuitBreakerConfig) {
+        self.circuit_breaker = Some(crate::circuit_breaker::create_circuit_breaker_registry(config));
+    }
+
+    /// Get the circuit breaker registry (if enabled)
+    pub fn circuit_breaker(&self) -> Option<&SharedCircuitBreakerRegistry> {
+        self.circuit_breaker.as_ref()
     }
 
     /// Add middleware to the execution pipeline
@@ -256,6 +272,7 @@ impl Clone for ServeMux {
             health_checks_enabled: self.health_checks_enabled,
             metrics_enabled: self.metrics_enabled,
             apq_store: self.apq_store.clone(),
+            circuit_breaker: self.circuit_breaker.clone(),
         }
     }
 }

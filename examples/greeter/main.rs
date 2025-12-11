@@ -89,6 +89,12 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
             cache_size: 100,
             ttl: None, // No expiration
         })
+        // Enable Circuit Breaker for resilience
+        .with_circuit_breaker(grpc_graphql_gateway::CircuitBreakerConfig {
+            failure_threshold: 3,                              // Open after 3 failures
+            recovery_timeout: Duration::from_secs(10),         // Test recovery after 10s
+            half_open_max_requests: 2,                         // Allow 2 test requests
+        })
         .serve(addr.to_string())
         .await?;
 
