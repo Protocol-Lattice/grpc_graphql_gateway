@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2025-12-11
+### Added
+- **Graceful Shutdown Support**: New `shutdown` module for production-ready server lifecycle management.
+  - `ShutdownConfig` - Configure timeout, signal handling, and force shutdown delay
+  - `ShutdownCoordinator` - Tracks in-flight requests and manages shutdown state
+  - `with_graceful_shutdown()` - Builder method to enable graceful shutdown
+  - `serve_with_shutdown()` - Serve with custom shutdown signal
+  - `os_signal_shutdown()` - Handle SIGTERM/SIGINT signals
+  - `RequestGuard` - RAII guard for automatic request lifecycle tracking
+
+
 ## [0.2.2] - 2025-12-11
 
 ### Added
@@ -23,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep-alive ping/pong support
 - Connection initialization with configurable timeout
 - gRPC server-streaming integration for real-time data
+- Graceful shutdown with configurable timeout (default: 30s)
+- In-flight request draining before shutdown
+- Automatic OS signal handling (SIGTERM, SIGINT, Ctrl+C)
+
 
 ## [0.2.1] - 2025-12-11
 

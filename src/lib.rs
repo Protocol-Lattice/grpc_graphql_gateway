@@ -64,6 +64,7 @@ pub mod middleware;
 pub mod persisted_queries;
 pub mod runtime;
 pub mod schema;
+pub mod shutdown;
 pub mod subscription;
 pub mod tracing_otel;
 pub mod types;
@@ -89,9 +90,14 @@ pub use persisted_queries::{
 };
 pub use runtime::ServeMux;
 pub use schema::SchemaBuilder;
+pub use shutdown::{
+    run_with_graceful_shutdown, os_signal_shutdown, RequestGuard, ShutdownConfig,
+    ShutdownCoordinator, ShutdownState,
+};
 pub use subscription::{
     GrpcSubscriptionMapping, GrpcSubscriptionResolver, MultiplexSubscription,
     MultiplexSubscriptionBuilder, ProtocolMessage, SubscriptionConfig, SubscriptionInfo,
     SubscriptionPayload, SubscriptionRegistry, SubscriptionResolver, SubscriptionState,
 };
 pub use tracing_otel::{init_tracer, shutdown_tracer, GraphQLSpan, GrpcSpan, TracingConfig};
+
