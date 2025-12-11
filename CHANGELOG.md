@@ -5,28 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.2] - 2025-12-04
+## [0.1.7] - 2025-12-11
 
 ### Added
-- **EntityDataLoader**: Built-in DataLoader for batching entity resolution requests to prevent N+1 query problems.
+- **DoS Protection - Query Depth Limiting**: New `with_query_depth_limit(max_depth)` method on both `GatewayBuilder` and `SchemaBuilder` to prevent deeply nested queries that could overwhelm gRPC backends.
+- **DoS Protection - Query Complexity Limiting**: New `with_query_complexity_limit(max_complexity)` method to limit the total "cost" of a query.
+- **Error Types**: Added `QueryTooDeep` and `QueryTooComplex` error variants with corresponding error codes.
+
+### Security
+- Query depth and complexity limiting for DoS protection.
+
+
+## [0.1.6] - 2025-12-07
+### Added
+- **Middlewares**: Added middleware support with `RateLimitMiddleware` for rate limiting (#13).
+- **Protoc Generator Scaffolding**: Updated `protoc-gen-graphql-template` to support scaffolding (#11).
+
+### Changed
+- **Refactor DataLoader**: Improved dataloader implementation (#12).
+- **README**: Updated documentation.
+
+### Fixed
+- **protoc-gen-graphql-template**: Fixed template generation issues.
+
+## [0.1.5] - 2025-12-04
+
+### Added
 - **Documentation**: Comprehensive Rustdoc documentation across all public APIs and internal modules.
-- **Examples**: Enhanced federation example demonstrating `EntityDataLoader` usage and batching.
 
-### Improved
-- **README**: Completely rewritten README with better structure, modern formatting, and detailed examples.
-- **Federation**: Added `batch_resolve_entities` support to `EntityResolver` trait.
+### Changed
+- **Refactor**: Major codebase refactoring (#8).
+- **README**: Updated documentation.
 
-## [0.1.1] - 2025-12-04
+### Removed
+- **FEDERATION.md**: Consolidated federation docs into README.
+
+## [0.1.4] - 2025-12-04
 
 ### Added
 - **Federation v2**: Full support for `@shareable` directive in proto options and schema generation.
-- **Entity Resolution**: Production-ready `GrpcEntityResolver` with `EntityResolverMapping` for mapping entities to gRPC methods.
-- **Builder**: `GrpcEntityResolverBuilder` for easier configuration of entity resolvers.
 
 ### Fixed
-- **Composition**: Resolved `INVALID_FIELD_SHARING` errors by correctly applying `@shareable` directive.
+- **GraphQL Federation**: Fixed federation composition issues, added shareable directive support.
 
-## [0.1.0] - 2024-12-02
+## [0.1.3] - 2025-12-03
+
+### Added
+- **GraphQL Playground**: Added interactive GraphQL Playground UI (#6).
+- **Tests**: Added more comprehensive test coverage (#7).
+
+### Changed
+- **Crate Name**: Changed crate name to `grpc_graphql_gateway`.
+
+## [0.1.2] - 2025-12-03
+
+### Added
+- **Apollo Federation**: Full Apollo Federation v2 support (#5).
+- **N+1 Query Fix**: Built-in DataLoader for batching entity resolution requests.
+
+### Fixed
+- **Federation**: Fixed federation entity resolution issues.
+
+## [0.1.1] - 2025-12-03
+
+### Added
+- **File Uploads**: Support for GraphQL file uploads via multipart requests (#3).
+
+## [0.1.0] - 2025-12-02
 
 ### Added
 - Initial release
@@ -43,6 +88,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatic `_entities` query generation for entity resolution
   - `EntityResolver` trait for custom entity resolution logic
 
+[Unreleased]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/releases/tag/v0.1.0

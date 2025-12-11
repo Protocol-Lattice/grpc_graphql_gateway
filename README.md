@@ -344,6 +344,58 @@ let gateway = Gateway::builder()
     .build()?;
 ```
 
+### DoS Protection (Query Limits)
+
+Protect your gateway and gRPC backends from malicious or expensive queries:
+
+```rust
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    .with_query_depth_limit(10)        // Max nesting depth
+    .with_query_complexity_limit(100)   // Max query cost
+    .add_grpc_client("service", client)
+    .build()?;
+```
+
+**Query Depth Limiting** prevents deeply nested queries that could overwhelm your backends:
+
+```graphql
+# This would be blocked if depth exceeds limit
+query {
+  users {           # depth 1
+    friends {       # depth 2
+      friends {     # depth 3
+        friends {   # depth 4 - blocked if limit < 4
+          name
+        }
+      }
+    }
+  }
+}
+```
+
+**Query Complexity Limiting** caps the total "cost" of a query (each field = 1 by default):
+
+```graphql
+# Complexity = 4 (users + friends + name + email)
+query {
+  users {
+    friends {
+      name
+      email
+    }
+  }
+}
+```
+
+**Recommended Values:**
+
+| Use Case | Depth Limit | Complexity Limit |
+|----------|-------------|------------------|
+| Public API | 5-10 | 50-100 |
+| Authenticated Users | 10-15 | 100-500 |
+| Internal/Trusted | 15-25 | 500-1000 |
+
 ### Custom Error Handling
 
 ```rust

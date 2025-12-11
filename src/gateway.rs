@@ -177,6 +177,72 @@ impl GatewayBuilder {
         self
     }
 
+    /// Set the maximum query depth (nesting level) allowed.
+    ///
+    /// This is a critical DoS protection mechanism that prevents deeply nested queries
+    /// from overwhelming your gRPC backends. Queries exceeding this depth will return
+    /// an error: "Query is nested too deep".
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::Gateway;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .with_query_depth_limit(10)  // Max 10 levels of nesting
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Recommended Values
+    ///
+    /// - **5-10**: Strict, suitable for simple APIs
+    /// - **10-15**: Moderate, good for most production use cases
+    /// - **15-25**: Lenient, for complex nested schemas
+    pub fn with_query_depth_limit(mut self, max_depth: usize) -> Self {
+        self.schema_builder = self.schema_builder.with_query_depth_limit(max_depth);
+        self
+    }
+
+    /// Set the maximum query complexity allowed.
+    ///
+    /// This is a critical DoS protection mechanism that limits the total "cost" of a query.
+    /// Each field in a query adds to the complexity (default: 1 per field).
+    /// Queries exceeding this limit will return an error: "Query is too complex".
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::Gateway;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .with_query_complexity_limit(100)  // Max complexity of 100
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # How Complexity is Calculated
+    ///
+    /// - Each scalar field adds 1 to complexity
+    /// - Nested objects add their fields' complexity
+    /// - List fields multiply by the expected count
+    ///
+    /// # Recommended Values
+    ///
+    /// - **50-100**: Strict, suitable for public APIs
+    /// - **100-500**: Moderate, good for authenticated users
+    /// - **500-1000**: Lenient, for internal/trusted clients
+    pub fn with_query_complexity_limit(mut self, max_complexity: usize) -> Self {
+        self.schema_builder = self.schema_builder.with_query_complexity_limit(max_complexity);
+        self
+    }
+
     /// Build the gateway
     pub fn build(self) -> Result<Gateway> {
         let mut schema_builder = self.schema_builder;
