@@ -38,6 +38,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - ⚡ **Rate Limiting** - Built-in rate limiting middleware
 - 📦 **Automatic Persisted Queries (APQ)** - Reduce bandwidth with query hash caching
 - 🔌 **Circuit Breaker** - Prevent cascading failures with automatic backend health management
+- 📋 **Batch Queries** - Execute multiple GraphQL operations in a single HTTP request
 
 ## 🚀 Quick Start
 
@@ -625,6 +626,49 @@ let gateway = Gateway::builder()
 | `Closed` | Normal operation |
 | `Open` | Failing fast, returning `SERVICE_UNAVAILABLE` |
 | `HalfOpen` | Testing if service recovered |
+
+### Batch Queries
+
+Execute multiple GraphQL operations in a single HTTP request for improved performance:
+
+**Single Query (standard):**
+```bash
+curl -X POST http://localhost:8888/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query": "{ users { id name } }"}'
+```
+
+**Batch Queries (multiple operations):**
+```bash
+curl -X POST http://localhost:8888/graphql \
+  -H "Content-Type: application/json" \
+  -d '[
+    {"query": "{ users { id name } }"},
+    {"query": "{ products { upc price } }"},
+    {"query": "mutation { createUser(input: {name: \"Alice\"}) { id } }"}
+  ]'
+```
+
+**Batch Response:**
+```json
+[
+  {"data": {"users": [{"id": "1", "name": "Bob"}]}},
+  {"data": {"products": [{"upc": "123", "price": 99}]}},
+  {"data": {"createUser": {"id": "2"}}}
+]
+```
+
+**Benefits:**
+- ✅ Reduces HTTP overhead for multiple operations
+- ✅ Automatic support - no configuration required
+- ✅ Compatible with Apollo Client batch link
+- ✅ Each query in batch supports APQ and middleware
+- ✅ Backward compatible - single queries work unchanged
+
+**Use Cases:**
+- Fetching data for multiple UI components in one request
+- Executing related mutations together
+- Reducing latency on mobile/slow networks
 
 ### Custom Error Handling
 
