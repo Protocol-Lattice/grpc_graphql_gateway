@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2025-12-11
+
+### Added
+- **Circuit Breaker Pattern**: New `with_circuit_breaker()` method on `GatewayBuilder` for backend resilience.
+  - `CircuitBreakerConfig` - Configure failure threshold, recovery timeout, and half-open requests
+  - `CircuitBreaker` - Per-service circuit breaker with Closed/Open/HalfOpen states
+  - `CircuitBreakerRegistry` - Thread-safe registry for managing per-service breakers
+  - `CircuitBreakerError` - Proper error handling with `SERVICE_UNAVAILABLE` code
+  - Automatic state transitions and exponential recovery testing
+
+### Reliability
+- Circuit breaker prevents cascading failures when backend services are unhealthy
+- Fast-fail behavior reduces latency when services are known to be down
+- Configurable recovery testing allows gradual service restoration
+
 ## [0.2.0] - 2025-12-11
 
 ### Added
