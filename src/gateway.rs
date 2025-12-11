@@ -87,6 +87,8 @@ pub struct GatewayBuilder {
     health_checks_enabled: bool,
     /// Enable metrics endpoint
     metrics_enabled: bool,
+    /// Enable OpenTelemetry tracing
+    tracing_enabled: bool,
 }
 
 impl GatewayBuilder {
@@ -101,6 +103,7 @@ impl GatewayBuilder {
             service_allowlist: None,
             health_checks_enabled: false,
             metrics_enabled: false,
+            tracing_enabled: false,
         }
     }
 
@@ -303,6 +306,73 @@ impl GatewayBuilder {
     /// ```
     pub fn enable_metrics(mut self) -> Self {
         self.metrics_enabled = true;
+        self
+    }
+
+    /// Enable OpenTelemetry distributed tracing.
+    ///
+    /// Creates spans for GraphQL operations and gRPC backend calls,
+    /// enabling end-to-end visibility across your distributed system.
+    ///
+    /// # Spans Created
+    ///
+    /// - `graphql.query` / `graphql.mutation` - For GraphQL operations
+    /// - `grpc.call` - For gRPC backend calls
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::Gateway;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .enable_tracing()
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn enable_tracing(mut self) -> Self {
+        self.tracing_enabled = true;
+        self
+    }
+
+    /// Disable GraphQL introspection queries.
+    ///
+    /// This is a security best practice for production environments to prevent
+    /// attackers from discovering your schema structure through `__schema` and `__type` queries.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::Gateway;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .disable_introspection()
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Environment-Based Toggle
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::Gateway;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let is_prod = std::env::var("ENV").map(|e| e == "production").unwrap_or(false);
+    ///
+    /// let mut builder = Gateway::builder();
+    /// if is_prod {
+    ///     builder = builder.disable_introspection();
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn disable_introspection(mut self) -> Self {
+        self.schema_builder = self.schema_builder.disable_introspection();
         self
     }
 

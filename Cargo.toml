@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -63,6 +63,16 @@ nonzero_ext = "0.3"
 # Metrics & Observability
 prometheus = "0.13"
 once_cell = "1.19"
+
+# OpenTelemetry / Distributed Tracing
+opentelemetry = "0.21"
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.14", optional = true }
+tracing-opentelemetry = "0.22"
+
+[features]
+default = []
+otlp = ["opentelemetry-otlp"]
 
 [build-dependencies]
 tonic-build = "0.12"
