@@ -29,6 +29,12 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - 📝 **Rich Examples** - Complete working examples for all features
 - 🧪 **Well Tested** - Comprehensive test coverage
 
+### Production Ready
+- 🏥 **Health Checks** - `/health` and `/ready` endpoints for Kubernetes liveness/readiness probes
+- 📊 **Prometheus Metrics** - `/metrics` endpoint with request counts, latencies, and error rates
+- 🛡️ **DoS Protection** - Query depth and complexity limiting to prevent expensive queries
+- ⚡ **Rate Limiting** - Built-in rate limiting middleware
+
 ## 🚀 Quick Start
 
 ### Installation
@@ -395,6 +401,75 @@ query {
 | Public API | 5-10 | 50-100 |
 | Authenticated Users | 10-15 | 100-500 |
 | Internal/Trusted | 15-25 | 500-1000 |
+
+### Health Checks
+
+Enable Kubernetes-compatible health check endpoints:
+
+```rust
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    .enable_health_checks()  // Adds /health and /ready endpoints
+    .add_grpc_client("service", client)
+    .build()?;
+```
+
+**Endpoints:**
+
+| Endpoint | Purpose | Response |
+|----------|---------|----------|
+| `GET /health` | Liveness probe | `200 OK` if server is running |
+| `GET /ready` | Readiness probe | `200 OK` if gRPC clients are configured |
+
+**Kubernetes Deployment:**
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8888
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8888
+  initialDelaySeconds: 5
+  periodSeconds: 10
+```
+
+### Prometheus Metrics
+
+Enable Prometheus-compatible metrics endpoint:
+
+```rust
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    .enable_metrics()  // Adds /metrics endpoint
+    .add_grpc_client("service", client)
+    .build()?;
+```
+
+**Metrics Exposed:**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `graphql_requests_total` | Counter | Total requests by operation type |
+| `graphql_request_duration_seconds` | Histogram | Request latency |
+| `graphql_errors_total` | Counter | Errors by type |
+| `grpc_backend_requests_total` | Counter | gRPC backend calls |
+| `grpc_backend_duration_seconds` | Histogram | gRPC latency |
+
+**Prometheus Scrape Config:**
+
+```yaml
+scrape_configs:
+  - job_name: 'graphql-gateway'
+    static_configs:
+      - targets: ['gateway:8888']
+    metrics_path: '/metrics'
+```
 
 ### Custom Error Handling
 

@@ -1,6 +1,9 @@
 //! Runtime support for GraphQL gateway - HTTP and WebSocket integration.
 
 use crate::error::{GraphQLError, Result};
+use crate::grpc_client::GrpcClientPool;
+use crate::health::{health_handler, readiness_handler, HealthState};
+use crate::metrics::GatewayMetrics;
 use crate::middleware::{Context, Middleware};
 use crate::schema::{DynamicSchema, GrpcResponseCache};
 use async_graphql::ServerError;
@@ -9,7 +12,7 @@ use axum::{
     extract::State,
     http::HeaderMap,
     response::{Html, IntoResponse},
-    routing::{get_service, post},
+    routing::{get, get_service, post},
     Extension, Router,
 };
 use std::sync::Arc;
@@ -22,6 +25,12 @@ pub struct ServeMux {
     schema: DynamicSchema,
     middlewares: Vec<Arc<dyn Middleware>>,
     error_handler: Option<Arc<dyn Fn(Vec<GraphQLError>) + Send + Sync>>,
+    /// gRPC client pool for health checks
+    client_pool: Option<GrpcClientPool>,
+    /// Enable health check endpoints
+    health_checks_enabled: bool,
+    /// Enable metrics endpoint
+    metrics_enabled: bool,
 }
 
 impl ServeMux {
@@ -31,7 +40,25 @@ impl ServeMux {
             schema,
             middlewares: Vec::new(),
             error_handler: None,
+            client_pool: None,
+            health_checks_enabled: false,
+            metrics_enabled: false,
         }
+    }
+
+    /// Set the gRPC client pool (needed for health checks)
+    pub fn set_client_pool(&mut self, pool: GrpcClientPool) {
+        self.client_pool = Some(pool);
+    }
+
+    /// Enable health check endpoints
+    pub fn enable_health_checks(&mut self) {
+        self.health_checks_enabled = true;
+    }
+
+    /// Enable metrics endpoint
+    pub fn enable_metrics(&mut self) {
+        self.metrics_enabled = true;
     }
 
     /// Add middleware to the execution pipeline
@@ -108,17 +135,38 @@ impl ServeMux {
 
     /// Convert to Axum router
     pub fn into_router(self) -> Router {
+        let health_checks_enabled = self.health_checks_enabled;
+        let metrics_enabled = self.metrics_enabled;
+        let client_pool = self.client_pool.clone();
+        
         let state = Arc::new(self);
         let subscription = GraphQLSubscription::new(state.schema.executor());
 
-        Router::new()
+        let mut router = Router::new()
             .route(
                 "/graphql",
                 post(handle_graphql_post).get(graphql_playground),
             )
             .route_service("/graphql/ws", get_service(subscription))
             .layer(Extension(state.schema.executor()))
-            .with_state(state)
+            .with_state(state);
+
+        // Add health check routes if enabled
+        if health_checks_enabled {
+            let health_state = Arc::new(HealthState::new(
+                client_pool.unwrap_or_else(GrpcClientPool::new)
+            ));
+            router = router
+                .route("/health", get(health_handler))
+                .route("/ready", get(readiness_handler).with_state(health_state));
+        }
+
+        // Add metrics route if enabled
+        if metrics_enabled {
+            router = router.route("/metrics", get(metrics_handler));
+        }
+
+        router
     }
 }
 
@@ -128,6 +176,9 @@ impl Clone for ServeMux {
             schema: self.schema.clone(),
             middlewares: self.middlewares.clone(),
             error_handler: self.error_handler.clone(),
+            client_pool: self.client_pool.clone(),
+            health_checks_enabled: self.health_checks_enabled,
+            metrics_enabled: self.metrics_enabled,
         }
     }
 }
@@ -147,6 +198,16 @@ async fn graphql_playground() -> impl IntoResponse {
         async_graphql::http::GraphQLPlaygroundConfig::new("/graphql")
             .subscription_endpoint("/graphql/ws"),
     ))
+}
+
+/// Handler for Prometheus metrics endpoint
+async fn metrics_handler() -> impl IntoResponse {
+    let metrics = GatewayMetrics::global();
+    let body = metrics.render();
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        body,
+    )
 }
 
 #[cfg(test)]

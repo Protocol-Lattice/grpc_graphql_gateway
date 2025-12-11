@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2025-12-11
+
+### Added
+- **Health Checks**: New `enable_health_checks()` method on `GatewayBuilder` adds `/health` (liveness) and `/ready` (readiness) endpoints for Kubernetes/container orchestration.
+  - `GET /health` - Simple liveness probe, returns 200 if server is running
+  - `GET /ready` - Readiness probe, checks gRPC client configuration
+- **Prometheus Metrics**: New `enable_metrics()` method adds `/metrics` endpoint exposing Prometheus-compatible metrics:
+  - `graphql_requests_total` - Total GraphQL requests by operation type
+  - `graphql_request_duration_seconds` - Request latency histogram
+  - `graphql_errors_total` - Total GraphQL errors
+  - `grpc_backend_requests_total` - Total gRPC backend calls
+  - `grpc_backend_duration_seconds` - gRPC backend latency histogram
+- **Metrics API**: New `GatewayMetrics`, `RequestTimer`, and `GrpcTimer` types for programmatic metrics recording.
+- **Health API**: New `HealthResponse`, `HealthStatus`, and `ComponentHealth` types for health check responses.
+- **Tests**: Comprehensive test coverage for health and metrics modules.
+
 ## [0.1.7] - 2025-12-11
 
 ### Added
@@ -88,7 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatic `_entities` query generation for entity resolution
   - `EntityResolver` trait for custom entity resolution logic
 
-[Unreleased]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.7...HEAD
+[0.1.8]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Protocol-Lattice/grpc-graphql-gateway-rs/compare/v0.1.4...v0.1.5
