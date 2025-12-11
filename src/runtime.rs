@@ -5,6 +5,9 @@ use crate::grpc_client::GrpcClientPool;
 use crate::health::{health_handler, readiness_handler, HealthState};
 use crate::metrics::GatewayMetrics;
 use crate::middleware::{Context, Middleware};
+use crate::persisted_queries::{
+    process_apq_request, PersistedQueryConfig, PersistedQueryError, SharedPersistedQueryStore,
+};
 use crate::schema::{DynamicSchema, GrpcResponseCache};
 use async_graphql::ServerError;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
@@ -31,6 +34,8 @@ pub struct ServeMux {
     health_checks_enabled: bool,
     /// Enable metrics endpoint
     metrics_enabled: bool,
+    /// APQ store for persisted queries
+    apq_store: Option<SharedPersistedQueryStore>,
 }
 
 impl ServeMux {
@@ -43,6 +48,7 @@ impl ServeMux {
             client_pool: None,
             health_checks_enabled: false,
             metrics_enabled: false,
+            apq_store: None,
         }
     }
 
@@ -59,6 +65,11 @@ impl ServeMux {
     /// Enable metrics endpoint
     pub fn enable_metrics(&mut self) {
         self.metrics_enabled = true;
+    }
+
+    /// Enable Automatic Persisted Queries (APQ)
+    pub fn enable_persisted_queries(&mut self, config: PersistedQueryConfig) {
+        self.apq_store = Some(crate::persisted_queries::create_apq_store(config));
     }
 
     /// Add middleware to the execution pipeline
@@ -90,7 +101,7 @@ impl ServeMux {
     async fn execute_with_middlewares(
         &self,
         headers: HeaderMap,
-        request: GraphQLRequest,
+        request: async_graphql::Request,
     ) -> Result<async_graphql::Response> {
         let mut ctx = Context {
             headers: headers.clone(),
@@ -101,7 +112,7 @@ impl ServeMux {
             middleware.call(&mut ctx).await?;
         }
 
-        let mut gql_request = request.into_inner();
+        let mut gql_request = request;
         gql_request = gql_request.data(ctx);
         gql_request = gql_request.data(GrpcResponseCache::default());
 
@@ -111,16 +122,31 @@ impl ServeMux {
     /// Handle GraphQL HTTP request
     ///
     /// This method executes the request pipeline:
-    /// 1. Creates a context from headers
-    /// 2. Runs all middlewares
-    /// 3. Executes the GraphQL query against the schema
-    /// 4. Handles any errors
+    /// 1. Process APQ (if enabled) - lookup/cache query by hash
+    /// 2. Creates a context from headers
+    /// 3. Runs all middlewares
+    /// 4. Executes the GraphQL query against the schema
+    /// 5. Handles any errors
     pub async fn handle_http(
         &self,
         headers: HeaderMap,
         request: GraphQLRequest,
     ) -> GraphQLResponse {
-        match self.execute_with_middlewares(headers, request).await {
+        let inner_request = request.into_inner();
+        
+        // Process APQ if enabled
+        let processed_request = if let Some(ref apq_store) = self.apq_store {
+            match self.process_apq_request(apq_store, inner_request) {
+                Ok(req) => req,
+                Err(apq_err) => {
+                    return self.apq_error_response(apq_err);
+                }
+            }
+        } else {
+            inner_request
+        };
+
+        match self.execute_with_middlewares(headers, processed_request).await {
             Ok(resp) => resp.into(),
             Err(err) => {
                 let gql_err: GraphQLError = err.into();
@@ -131,6 +157,56 @@ impl ServeMux {
                 async_graphql::Response::from_errors(vec![server_err]).into()
             }
         }
+    }
+
+    /// Process APQ for a request
+    fn process_apq_request(
+        &self,
+        store: &SharedPersistedQueryStore,
+        mut request: async_graphql::Request,
+    ) -> std::result::Result<async_graphql::Request, PersistedQueryError> {
+        // Get the query and extensions from the request
+        let query = if request.query.is_empty() {
+            None
+        } else {
+            Some(request.query.as_str())
+        };
+        
+        // Convert extensions to serde_json::Value for APQ processing
+        let extensions_value = if request.extensions.is_empty() {
+            None
+        } else {
+            serde_json::to_value(&request.extensions).ok()
+        };
+
+        // Process APQ
+        match process_apq_request(store, query, extensions_value.as_ref())? {
+            Some(resolved_query) => {
+                request.query = resolved_query;
+                Ok(request)
+            }
+            None => {
+                // No query (shouldn't happen if APQ processing succeeded)
+                Err(PersistedQueryError::NotFound)
+            }
+        }
+    }
+
+    /// Create an error response for APQ errors
+    fn apq_error_response(&self, err: PersistedQueryError) -> GraphQLResponse {
+        let error_extensions = err.to_extensions();
+        let code = error_extensions.get("code")
+            .and_then(|v| v.as_str())
+            .unwrap_or("PERSISTED_QUERY_ERROR");
+        
+        let mut server_err = ServerError::new(err.to_string(), None);
+        server_err.extensions = Some({
+            let mut ext = async_graphql::ErrorExtensionValues::default();
+            ext.set("code", code);
+            ext
+        });
+        
+        async_graphql::Response::from_errors(vec![server_err]).into()
     }
 
     /// Convert to Axum router
@@ -179,6 +255,7 @@ impl Clone for ServeMux {
             client_pool: self.client_pool.clone(),
             health_checks_enabled: self.health_checks_enabled,
             metrics_enabled: self.metrics_enabled,
+            apq_store: self.apq_store.clone(),
         }
     }
 }

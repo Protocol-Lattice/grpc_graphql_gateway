@@ -32,10 +32,11 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 ### Production Ready
 - 🏥 **Health Checks** - `/health` and `/ready` endpoints for Kubernetes liveness/readiness probes
 - 📊 **Prometheus Metrics** - `/metrics` endpoint with request counts, latencies, and error rates
-- � **OpenTelemetry Tracing** - Distributed tracing with GraphQL and gRPC span tracking
-- �🛡️ **DoS Protection** - Query depth and complexity limiting to prevent expensive queries
+- 🔭 **OpenTelemetry Tracing** - Distributed tracing with GraphQL and gRPC span tracking
+- 🛡️ **DoS Protection** - Query depth and complexity limiting to prevent expensive queries
 - 🔒 **Introspection Control** - Disable schema introspection in production for security
 - ⚡ **Rate Limiting** - Built-in rate limiting middleware
+- 📦 **Automatic Persisted Queries (APQ)** - Reduce bandwidth with query hash caching
 
 ## 🚀 Quick Start
 
@@ -43,7 +44,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 
 ```toml
 [dependencies]
-grpc-graphql-gateway = "0.1"
+grpc-graphql-gateway = "0.2"
 tokio = { version = "1", features = ["full"] }
 tonic = "0.12"
 ```
@@ -540,6 +541,49 @@ if is_production {
 
 let gateway = builder.build()?;
 ```
+
+### Automatic Persisted Queries (APQ)
+
+Reduce bandwidth by caching queries on the server and allowing clients to send query hashes:
+
+```rust
+use grpc_graphql_gateway::{Gateway, PersistedQueryConfig};
+use std::time::Duration;
+
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    .with_persisted_queries(PersistedQueryConfig {
+        cache_size: 1000,                        // Max cached queries
+        ttl: Some(Duration::from_secs(3600)),    // 1 hour expiration
+    })
+    .add_grpc_client("service", client)
+    .build()?;
+```
+
+**How APQ Works:**
+
+1. **First request**: Client sends hash only → Gateway returns `PERSISTED_QUERY_NOT_FOUND`
+2. **Retry**: Client sends hash + full query → Gateway caches and executes
+3. **Subsequent requests**: Client sends hash only → Gateway uses cached query
+
+**Client Request Format:**
+
+```json
+{
+  "extensions": {
+    "persistedQuery": {
+      "version": 1,
+      "sha256Hash": "ecf4edb46db40b5132295c0291d62fb65d6759a9eedfa4d5d612dd5ec54a6b38"
+    }
+  }
+}
+```
+
+**Benefits:**
+- ✅ Reduces request payload size by ~90% for large queries
+- ✅ Compatible with Apollo Client's APQ implementation
+- ✅ LRU eviction prevents unbounded memory growth
+- ✅ Optional TTL for cache expiration
 
 ### Custom Error Handling
 

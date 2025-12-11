@@ -89,6 +89,8 @@ pub struct GatewayBuilder {
     metrics_enabled: bool,
     /// Enable OpenTelemetry tracing
     tracing_enabled: bool,
+    /// APQ configuration
+    apq_config: Option<crate::persisted_queries::PersistedQueryConfig>,
 }
 
 impl GatewayBuilder {
@@ -104,6 +106,7 @@ impl GatewayBuilder {
             health_checks_enabled: false,
             metrics_enabled: false,
             tracing_enabled: false,
+            apq_config: None,
         }
     }
 
@@ -376,6 +379,48 @@ impl GatewayBuilder {
         self
     }
 
+    /// Enable Automatic Persisted Queries (APQ).
+    ///
+    /// APQ reduces bandwidth by allowing clients to send a hash of the query instead
+    /// of the full query string. Queries are cached on the server and retrieved by hash.
+    ///
+    /// # How It Works
+    ///
+    /// 1. Client sends hash only → Server returns "PersistedQueryNotFound"
+    /// 2. Client sends hash + query → Server caches and executes
+    /// 3. Subsequent requests send hash only → Server uses cached query
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, PersistedQueryConfig};
+    /// use std::time::Duration;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .with_persisted_queries(PersistedQueryConfig {
+    ///         cache_size: 1000,
+    ///         ttl: Some(Duration::from_secs(3600)),
+    ///     })
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Default Configuration
+    ///
+    /// Use `PersistedQueryConfig::default()` for sensible defaults:
+    /// - `cache_size`: 1000 queries
+    /// - `ttl`: None (no expiration)
+    pub fn with_persisted_queries(
+        mut self,
+        config: crate::persisted_queries::PersistedQueryConfig,
+    ) -> Self {
+        self.apq_config = Some(config);
+        self
+    }
+
     /// Build the gateway
     pub fn build(self) -> Result<Gateway> {
         let mut schema_builder = self.schema_builder;
@@ -407,6 +452,11 @@ impl GatewayBuilder {
         // Configure metrics
         if self.metrics_enabled {
             mux.enable_metrics();
+        }
+
+        // Configure APQ
+        if let Some(apq_config) = self.apq_config {
+            mux.enable_persisted_queries(apq_config);
         }
 
         Ok(Gateway {
