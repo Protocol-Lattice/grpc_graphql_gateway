@@ -5,6 +5,7 @@ use crate::grpc_client::{GrpcClient, GrpcClientPool};
 use crate::middleware::Middleware;
 use crate::runtime::ServeMux;
 use crate::schema::{DynamicSchema, SchemaBuilder};
+use crate::shutdown::{run_with_graceful_shutdown, ShutdownConfig};
 use axum::Router;
 use std::path::Path;
 use std::sync::Arc;
@@ -93,6 +94,8 @@ pub struct GatewayBuilder {
     apq_config: Option<crate::persisted_queries::PersistedQueryConfig>,
     /// Circuit breaker configuration
     circuit_breaker_config: Option<crate::circuit_breaker::CircuitBreakerConfig>,
+    /// Graceful shutdown configuration
+    shutdown_config: Option<ShutdownConfig>,
 }
 
 impl GatewayBuilder {
@@ -110,6 +113,7 @@ impl GatewayBuilder {
             tracing_enabled: false,
             apq_config: None,
             circuit_breaker_config: None,
+            shutdown_config: None,
         }
     }
 
@@ -520,6 +524,7 @@ impl GatewayBuilder {
 
     /// Build and start the gateway server
     pub async fn serve(self, addr: impl Into<String>) -> Result<()> {
+        let shutdown_config = self.shutdown_config.clone();
         let gateway = self.build()?;
         let addr = addr.into();
         let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -527,7 +532,94 @@ impl GatewayBuilder {
         tracing::info!("Gateway server listening on {}", addr);
 
         let app = gateway.into_router();
-        axum::serve(listener, app).await?;
+
+        // Use graceful shutdown if configured
+        if let Some(config) = shutdown_config {
+            run_with_graceful_shutdown(listener, app, config).await?;
+        } else {
+            axum::serve(listener, app).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Enable graceful shutdown with the specified configuration.
+    ///
+    /// When graceful shutdown is enabled, the server will:
+    /// 1. Stop accepting new connections on SIGTERM/SIGINT
+    /// 2. Wait for in-flight requests to complete (up to timeout)
+    /// 3. Clean up resources and exit
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, ShutdownConfig};
+    /// use std::time::Duration;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// Gateway::builder()
+    ///     .with_graceful_shutdown(ShutdownConfig {
+    ///         timeout: Duration::from_secs(30),
+    ///         ..Default::default()
+    ///     })
+    ///     .serve("0.0.0.0:8080")
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Default Configuration
+    ///
+    /// Use `ShutdownConfig::default()` for sensible defaults:
+    /// - `timeout`: 30 seconds
+    /// - `handle_signals`: true (handles SIGTERM/SIGINT)
+    /// - `force_shutdown_delay`: 5 seconds
+    pub fn with_graceful_shutdown(mut self, config: ShutdownConfig) -> Self {
+        self.shutdown_config = Some(config);
+        self
+    }
+
+    /// Build and start the gateway server with explicit shutdown signal.
+    ///
+    /// This method allows you to provide a custom shutdown future, giving
+    /// you full control over when the server shuts down.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::Gateway;
+    /// use tokio::sync::oneshot;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (tx, rx) = oneshot::channel::<()>();
+    ///
+    /// // Spawn a task that triggers shutdown after some condition
+    /// tokio::spawn(async move {
+    ///     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    ///     let _ = tx.send(());
+    /// });
+    ///
+    /// Gateway::builder()
+    ///     // ... configuration ...
+    ///     .serve_with_shutdown("0.0.0.0:8080", async { let _ = rx.await; })
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn serve_with_shutdown<F>(self, addr: impl Into<String>, shutdown_signal: F) -> Result<()>
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let gateway = self.build()?;
+        let addr = addr.into();
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+        tracing::info!("Gateway server listening on {}", addr);
+
+        let app = gateway.into_router();
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal)
+            .await?;
 
         Ok(())
     }
