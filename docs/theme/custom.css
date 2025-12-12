@@ -1,0 +1,148 @@
+/* Custom styles for gRPC-GraphQL Gateway documentation */
+
+/* Enhanced header styling */
+h1 {
+  border-bottom: 2px solid var(--links);
+  padding-bottom: 0.3em;
+}
+
+/* Code block styling */
+pre {
+  border-left: 3px solid var(--links);
+}
+
+/* Table styling */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+}
+
+th {
+  background-color: var(--quote-bg);
+  padding: 0.75em;
+  text-align: left;
+  border-bottom: 2px solid var(--links);
+}
+
+td {
+  padding: 0.75em;
+  border-bottom: 1px solid var(--table-border-color);
+}
+
+tr:hover {
+  background-color: var(--quote-bg);
+}
+
+/* Inline code styling */
+code {
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+}
+
+/* Links */
+a {
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Blockquotes for notes */
+blockquote {
+  border-left: 4px solid var(--links);
+  padding-left: 1em;
+  margin: 1em 0;
+  background-color: var(--quote-bg);
+  padding: 1em;
+  border-radius: 0 4px 4px 0;
+}
+
+/* Badge-like elements */
+.badge {
+  display: inline-block;
+  padding: 0.2em 0.6em;
+  font-size: 0.85em;
+  font-weight: 600;
+  border-radius: 4px;
+  background-color: var(--links);
+  color: var(--bg);
+}
+
+/* Emoji styling */
+h2, h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+/* Warning/Note boxes */
+.warning {
+  background-color: #fff3cd;
+  border-left: 4px solid #ffc107;
+  padding: 1em;
+  margin: 1em 0;
+  border-radius: 0 4px 4px 0;
+}
+
+.info {
+  background-color: #cce5ff;
+  border-left: 4px solid #007bff;
+  padding: 1em;
+  margin: 1em 0;
+  border-radius: 0 4px 4px 0;
+}
+
+/* ASCII diagram styling */
+pre code.language-text,
+pre code.language-plaintext {
+  font-size: 0.9em;
+  line-height: 1.4;
+}
+
+/* Improve readability */
+.content {
+  max-width: 900px;
+}
+
+p {
+  line-height: 1.7;
+}
+
+li {
+  margin: 0.5em 0;
+}
+
+/* Feature grid styling */
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 1em;
+  margin: 1em 0;
+}
+
+.feature {
+  padding: 1em;
+  background-color: var(--quote-bg);
+  border-radius: 4px;
+}
+
+/* Dark mode improvements */
+.ayu .warning {
+  background-color: rgba(255, 243, 205, 0.1);
+  color: #ffc107;
+}
+
+.coal .warning,
+.navy .warning {
+  background-color: rgba(255, 243, 205, 0.05);
+  color: #ffc107;
+}
+
+.ayu .info,
+.coal .info,
+.navy .info {
+  background-color: rgba(204, 229, 255, 0.1);
+  color: #66b3ff;
+}

@@ -1,0 +1,34 @@
+[book]
+title = "gRPC-GraphQL Gateway"
+description = "A high-performance Rust gateway that bridges gRPC services to GraphQL with full Apollo Federation v2 support"
+authors = ["Protocol Lattice"]
+language = "en"
+
+[build]
+build-dir = "book"
+create-missing = true
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/Protocol-Lattice/grpc_graphql_gateway"
+edit-url-template = "https://github.com/Protocol-Lattice/grpc_graphql_gateway/edit/main/docs/{path}"
+site-url = "/grpc_graphql_gateway/"
+cname = ""
+additional-css = ["theme/custom.css"]
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 30
+teaser-word-count = 30
+
+[output.html.playground]
+editable = false
+copyable = true
+copy-js = true
+line-numbers = true
+runnable = false
