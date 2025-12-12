@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2025-12-12
+
+### Added
+- **Response Compression**: New `compression` module for automatic HTTP response compression.
+  - `CompressionConfig` - Configure compression level, algorithms, and minimum size threshold
+  - `CompressionLevel` - Control compression speed vs ratio trade-off (Fast/Default/Best)
+  - `with_compression()` - Builder method to enable response compression
+  - `CompressionStats` - Statistics for monitoring compression performance
+  - `create_compression_layer()` - Create a tower-http compression layer
+
+### Features
+- **Multiple Algorithms**: Support for Brotli (`br`), Gzip, Deflate, and Zstd compression
+- **Preset Configurations**: `CompressionConfig::fast()`, `::best()`, `::default()`, `::disabled()`
+- **Minimum Size Threshold**: Skip compression for small responses where overhead exceeds savings
+- **Content-Based Selection**: Gateway selects best algorithm based on client `Accept-Encoding`
+
+### Performance
+- JSON responses typically compress 50-90% with Brotli
+- Reduces bandwidth usage significantly for large query responses
+- Configurable compression level to balance CPU vs compression ratio
+
 ## [0.2.4] - 2025-12-12
 
 ### Added

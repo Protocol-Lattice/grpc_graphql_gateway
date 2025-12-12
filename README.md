@@ -38,9 +38,10 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - ⚡ **Rate Limiting** - Built-in rate limiting middleware
 - 📦 **Automatic Persisted Queries (APQ)** - Reduce bandwidth with query hash caching
 - 🔌 **Circuit Breaker** - Prevent cascading failures with automatic backend health management
-- � **Response Caching** - In-memory LRU cache with TTL and mutation-triggered invalidation
-- �📋 **Batch Queries** - Execute multiple GraphQL operations in a single HTTP request
+- 🗄️ **Response Caching** - In-memory LRU cache with TTL and mutation-triggered invalidation
+- 📋 **Batch Queries** - Execute multiple GraphQL operations in a single HTTP request
 - 🛑 **Graceful Shutdown** - Clean server shutdown with in-flight request draining
+- 🗜️ **Response Compression** - Automatic gzip/brotli compression for reduced bandwidth
 
 ## 🚀 Quick Start
 
@@ -810,6 +811,87 @@ curl -X POST http://localhost:8888/graphql \
 - Fetching data for multiple UI components in one request
 - Executing related mutations together
 - Reducing latency on mobile/slow networks
+
+### Response Compression
+
+Enable automatic HTTP response compression to reduce bandwidth usage:
+
+```rust
+use grpc_graphql_gateway::{Gateway, CompressionConfig, CompressionLevel};
+
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    .with_compression(CompressionConfig {
+        enabled: true,
+        level: CompressionLevel::Default,
+        min_size_bytes: 1024,  // Only compress responses > 1KB
+        algorithms: vec!["br".into(), "gzip".into()],
+    })
+    .add_grpc_client("service", client)
+    .build()?;
+```
+
+**Preset Configurations:**
+
+```rust
+// Fast compression for low latency
+Gateway::builder()
+    .with_compression(CompressionConfig::fast())
+
+// Best compression for maximum bandwidth savings
+Gateway::builder()
+    .with_compression(CompressionConfig::best())
+
+// Default balanced configuration
+Gateway::builder()
+    .with_compression(CompressionConfig::default())
+
+// Disable compression
+Gateway::builder()
+    .with_compression(CompressionConfig::disabled())
+```
+
+**Supported Algorithms:**
+
+| Algorithm | Header | Best For |
+|-----------|--------|----------|
+| Brotli | `br` | Modern browsers, best compression ratio |
+| Gzip | `gzip` | Universal support, good compression |
+| Deflate | `deflate` | Legacy compatibility |
+| Zstd | `zstd` | Modern, fast compression |
+
+**How It Works:**
+
+1. Client sends request with `Accept-Encoding: gzip, deflate, br`
+2. Gateway selects the best algorithm (preferring brotli > gzip > deflate)
+3. Response body is compressed before sending
+4. Gateway sets `Content-Encoding` header
+5. Client decompresses automatically
+
+**Testing with curl:**
+
+```bash
+# Request with compression support
+curl -X POST http://localhost:8888/graphql \
+  -H "Content-Type: application/json" \
+  -H "Accept-Encoding: gzip, br" \
+  --compressed \
+  -d '{"query": "{ users { id name email } }"}'
+
+# Check response headers (will show Content-Encoding: br or gzip)
+curl -X POST http://localhost:8888/graphql \
+  -H "Content-Type: application/json" \
+  -H "Accept-Encoding: gzip, br" \
+  -v -o /dev/null \
+  -d '{"query": "{ users { id name email } }"}'
+```
+
+**Benefits:**
+- ✅ 50-90% reduction in response size for JSON data
+- ✅ Automatic algorithm selection based on client support
+- ✅ Configurable minimum size threshold
+- ✅ Works seamlessly with response caching
+- ✅ Zero configuration for default behavior
 
 ### Custom Error Handling
 

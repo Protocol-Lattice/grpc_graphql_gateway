@@ -2,6 +2,7 @@
 
 use crate::cache::{CacheConfig, CacheLookupResult, SharedResponseCache};
 use crate::circuit_breaker::{CircuitBreakerConfig, SharedCircuitBreakerRegistry};
+use crate::compression::{create_compression_layer, CompressionConfig};
 use crate::error::{GraphQLError, Result};
 use crate::grpc_client::GrpcClientPool;
 use crate::health::{health_handler, readiness_handler, HealthState};
@@ -43,6 +44,8 @@ pub struct ServeMux {
     circuit_breaker: Option<SharedCircuitBreakerRegistry>,
     /// Response cache
     response_cache: Option<SharedResponseCache>,
+    /// Response compression configuration
+    compression_config: Option<CompressionConfig>,
 }
 
 impl ServeMux {
@@ -58,6 +61,7 @@ impl ServeMux {
             apq_store: None,
             circuit_breaker: None,
             response_cache: None,
+            compression_config: None,
         }
     }
 
@@ -99,6 +103,16 @@ impl ServeMux {
     /// Get the response cache (if enabled)
     pub fn response_cache(&self) -> Option<&SharedResponseCache> {
         self.response_cache.as_ref()
+    }
+
+    /// Enable response compression
+    pub fn enable_compression(&mut self, config: CompressionConfig) {
+        self.compression_config = Some(config);
+    }
+
+    /// Get the compression config (if enabled)
+    pub fn compression_config(&self) -> Option<&CompressionConfig> {
+        self.compression_config.as_ref()
     }
 
     /// Add middleware to the execution pipeline
@@ -329,6 +343,7 @@ impl ServeMux {
         let health_checks_enabled = self.health_checks_enabled;
         let metrics_enabled = self.metrics_enabled;
         let client_pool = self.client_pool.clone();
+        let compression_config = self.compression_config.clone();
         
         let state = Arc::new(self);
         let subscription = GraphQLSubscription::new(state.schema.executor());
@@ -341,6 +356,13 @@ impl ServeMux {
             .route_service("/graphql/ws", get_service(subscription))
             .layer(Extension(state.schema.executor()))
             .with_state(state);
+
+        // Add compression layer if enabled
+        if let Some(ref config) = compression_config {
+            if config.enabled {
+                router = router.layer(create_compression_layer(config));
+            }
+        }
 
         // Add health check routes if enabled
         if health_checks_enabled {
@@ -373,6 +395,7 @@ impl Clone for ServeMux {
             apq_store: self.apq_store.clone(),
             circuit_breaker: self.circuit_breaker.clone(),
             response_cache: self.response_cache.clone(),
+            compression_config: self.compression_config.clone(),
         }
     }
 }

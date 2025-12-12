@@ -1,5 +1,6 @@
 //! Gateway builder and main orchestration
 
+use crate::compression::CompressionConfig;
 use crate::error::{GraphQLError, Result};
 use crate::grpc_client::{GrpcClient, GrpcClientPool};
 use crate::middleware::Middleware;
@@ -98,6 +99,8 @@ pub struct GatewayBuilder {
     shutdown_config: Option<ShutdownConfig>,
     /// Response cache configuration
     cache_config: Option<crate::cache::CacheConfig>,
+    /// Compression configuration
+    compression_config: Option<CompressionConfig>,
 }
 
 impl GatewayBuilder {
@@ -117,6 +120,7 @@ impl GatewayBuilder {
             circuit_breaker_config: None,
             shutdown_config: None,
             cache_config: None,
+            compression_config: None,
         }
     }
 
@@ -529,6 +533,71 @@ impl GatewayBuilder {
         self
     }
 
+    /// Enable response compression with gzip, brotli, and deflate.
+    ///
+    /// Response compression reduces bandwidth usage by compressing HTTP response bodies
+    /// before sending them to clients. This is particularly beneficial for GraphQL responses
+    /// which are typically JSON and compress very well (50-90% size reduction).
+    ///
+    /// # Supported Algorithms
+    ///
+    /// - **Brotli** (`br`) - Best compression ratio, preferred for modern browsers
+    /// - **Gzip** (`gzip`) - Widely supported, good compression
+    /// - **Deflate** (`deflate`) - Legacy support
+    /// - **Zstd** (`zstd`) - Modern, fast compression
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, CompressionConfig, CompressionLevel};
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .with_compression(CompressionConfig {
+    ///         enabled: true,
+    ///         level: CompressionLevel::Default,
+    ///         min_size_bytes: 1024,  // Only compress responses > 1KB
+    ///         algorithms: vec!["br".into(), "gzip".into()],
+    ///     })
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Preset Configurations
+    ///
+    /// Use preset configs for common use cases:
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, CompressionConfig};
+    ///
+    /// // Fast compression for low latency
+    /// # fn fast() { let _ =
+    /// Gateway::builder().with_compression(CompressionConfig::fast())
+    /// # ; }
+    ///
+    /// // Best compression for bandwidth savings
+    /// # fn best() { let _ =
+    /// Gateway::builder().with_compression(CompressionConfig::best())
+    /// # ; }
+    ///
+    /// // Default balanced configuration
+    /// # fn default() { let _ =
+    /// Gateway::builder().with_compression(CompressionConfig::default())
+    /// # ; }
+    /// ```
+    ///
+    /// # Performance Considerations
+    ///
+    /// - **CPU Cost**: Compression uses CPU. Use `CompressionLevel::Fast` for latency-sensitive apps.
+    /// - **Min Size**: Set `min_size_bytes` to skip compression for small responses.
+    /// - **Caching**: Compressed responses work well with the response cache.
+    pub fn with_compression(mut self, config: CompressionConfig) -> Self {
+        self.compression_config = Some(config);
+        self
+    }
+
     /// Build the gateway
     pub fn build(self) -> Result<Gateway> {
         let mut schema_builder = self.schema_builder;
@@ -575,6 +644,11 @@ impl GatewayBuilder {
         // Configure Response Cache
         if let Some(cache_config) = self.cache_config {
             mux.enable_response_cache(cache_config);
+        }
+
+        // Configure Compression
+        if let Some(compression_config) = self.compression_config {
+            mux.enable_compression(compression_config);
         }
 
         Ok(Gateway {
