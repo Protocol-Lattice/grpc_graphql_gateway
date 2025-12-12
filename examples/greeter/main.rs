@@ -95,6 +95,13 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
             recovery_timeout: Duration::from_secs(10),         // Test recovery after 10s
             half_open_max_requests: 2,                         // Allow 2 test requests
         })
+        // Enable Response Caching for performance
+        .with_response_cache(grpc_graphql_gateway::CacheConfig {
+            max_size: 1000,                                    // Max 1000 cached responses
+            default_ttl: Duration::from_secs(60),              // 1 minute TTL
+            stale_while_revalidate: Some(Duration::from_secs(30)), // Serve stale for 30s
+            invalidate_on_mutation: true,                      // Auto-invalidate on mutations
+        })
         .serve(addr.to_string())
         .await?;
 

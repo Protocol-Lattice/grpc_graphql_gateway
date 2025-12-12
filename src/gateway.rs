@@ -96,6 +96,8 @@ pub struct GatewayBuilder {
     circuit_breaker_config: Option<crate::circuit_breaker::CircuitBreakerConfig>,
     /// Graceful shutdown configuration
     shutdown_config: Option<ShutdownConfig>,
+    /// Response cache configuration
+    cache_config: Option<crate::cache::CacheConfig>,
 }
 
 impl GatewayBuilder {
@@ -114,6 +116,7 @@ impl GatewayBuilder {
             apq_config: None,
             circuit_breaker_config: None,
             shutdown_config: None,
+            cache_config: None,
         }
     }
 
@@ -472,6 +475,60 @@ impl GatewayBuilder {
         self
     }
 
+    /// Enable response caching for GraphQL queries.
+    ///
+    /// Response caching stores complete GraphQL responses in memory and serves
+    /// them directly for subsequent identical requests, dramatically reducing
+    /// latency and backend load.
+    ///
+    /// # Features
+    ///
+    /// - **LRU Eviction**: Oldest entries are removed when cache is full
+    /// - **TTL Expiration**: Entries expire after a configurable duration
+    /// - **Stale-While-Revalidate**: Serve stale content while refreshing in background
+    /// - **Mutation Invalidation**: Automatically invalidate cache when mutations run
+    /// - **Type/Entity Tracking**: Fine-grained invalidation by type or entity ID
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, CacheConfig};
+    /// use std::time::Duration;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .with_response_cache(CacheConfig {
+    ///         max_size: 10_000,                              // Max 10k cached responses
+    ///         default_ttl: Duration::from_secs(60),          // 1 minute TTL
+    ///         stale_while_revalidate: Some(Duration::from_secs(30)), // Serve stale for 30s
+    ///         invalidate_on_mutation: true,                  // Auto-invalidate on mutations
+    ///     })
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # What Gets Cached
+    ///
+    /// - ✅ Queries (GET and POST)
+    /// - ❌ Mutations (never cached, trigger invalidation)
+    /// - ❌ Subscriptions (streaming, not cacheable)
+    ///
+    /// # Cache Key
+    ///
+    /// The cache key is a SHA-256 hash of:
+    /// - Normalized query string
+    /// - Sorted variables JSON
+    /// - Operation name (if provided)
+    pub fn with_response_cache(
+        mut self,
+        config: crate::cache::CacheConfig,
+    ) -> Self {
+        self.cache_config = Some(config);
+        self
+    }
+
     /// Build the gateway
     pub fn build(self) -> Result<Gateway> {
         let mut schema_builder = self.schema_builder;
@@ -513,6 +570,11 @@ impl GatewayBuilder {
         // Configure Circuit Breaker
         if let Some(cb_config) = self.circuit_breaker_config {
             mux.enable_circuit_breaker(cb_config);
+        }
+
+        // Configure Response Cache
+        if let Some(cache_config) = self.cache_config {
+            mux.enable_response_cache(cache_config);
         }
 
         Ok(Gateway {

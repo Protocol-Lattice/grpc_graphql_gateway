@@ -1,8 +1,7 @@
 //! Runtime support for GraphQL gateway - HTTP and WebSocket integration.
 
-use crate::circuit_breaker::{
-    CircuitBreakerConfig, SharedCircuitBreakerRegistry,
-};
+use crate::cache::{CacheConfig, CacheLookupResult, SharedResponseCache};
+use crate::circuit_breaker::{CircuitBreakerConfig, SharedCircuitBreakerRegistry};
 use crate::error::{GraphQLError, Result};
 use crate::grpc_client::GrpcClientPool;
 use crate::health::{health_handler, readiness_handler, HealthState};
@@ -21,6 +20,7 @@ use axum::{
     routing::{get, get_service, post},
     Extension, Router,
 };
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// ServeMux - main gateway handler
@@ -41,6 +41,8 @@ pub struct ServeMux {
     apq_store: Option<SharedPersistedQueryStore>,
     /// Circuit breaker registry
     circuit_breaker: Option<SharedCircuitBreakerRegistry>,
+    /// Response cache
+    response_cache: Option<SharedResponseCache>,
 }
 
 impl ServeMux {
@@ -55,6 +57,7 @@ impl ServeMux {
             metrics_enabled: false,
             apq_store: None,
             circuit_breaker: None,
+            response_cache: None,
         }
     }
 
@@ -86,6 +89,16 @@ impl ServeMux {
     /// Get the circuit breaker registry (if enabled)
     pub fn circuit_breaker(&self) -> Option<&SharedCircuitBreakerRegistry> {
         self.circuit_breaker.as_ref()
+    }
+
+    /// Enable response caching
+    pub fn enable_response_cache(&mut self, config: CacheConfig) {
+        self.response_cache = Some(crate::cache::create_response_cache(config));
+    }
+
+    /// Get the response cache (if enabled)
+    pub fn response_cache(&self) -> Option<&SharedResponseCache> {
+        self.response_cache.as_ref()
     }
 
     /// Add middleware to the execution pipeline
@@ -139,10 +152,12 @@ impl ServeMux {
     ///
     /// This method executes the request pipeline:
     /// 1. Process APQ (if enabled) - lookup/cache query by hash
-    /// 2. Creates a context from headers
-    /// 3. Runs all middlewares
-    /// 4. Executes the GraphQL query against the schema
-    /// 5. Handles any errors
+    /// 2. Check response cache (if enabled) - return cached response if available
+    /// 3. Creates a context from headers
+    /// 4. Runs all middlewares
+    /// 5. Executes the GraphQL query against the schema
+    /// 6. Caches response (if cacheable)
+    /// 7. Handles any errors
     pub async fn handle_http(
         &self,
         headers: HeaderMap,
@@ -162,8 +177,76 @@ impl ServeMux {
             inner_request
         };
 
+        // Check if this is a mutation (mutations are never cached and trigger invalidation)
+        let is_mutation = crate::cache::is_mutation(&processed_request.query);
+
+        // Try cache lookup for non-mutations
+        if !is_mutation {
+            if let Some(ref cache) = self.response_cache {
+                let cache_key = crate::cache::ResponseCache::generate_cache_key(
+                    &processed_request.query,
+                    Some(&serde_json::to_value(&processed_request.variables).unwrap_or_default()),
+                    processed_request.operation_name.as_deref(),
+                );
+
+                match cache.get(&cache_key) {
+                    CacheLookupResult::Hit(cached) => {
+                        tracing::debug!("Response cache hit");
+                        return self.cached_to_response(cached.data);
+                    }
+                    CacheLookupResult::Stale(cached) => {
+                        // Return stale immediately, could trigger background revalidation
+                        // For simplicity, we just return stale data
+                        tracing::debug!("Response cache stale hit");
+                        return self.cached_to_response(cached.data);
+                    }
+                    CacheLookupResult::Miss => {
+                        // Continue to execute
+                    }
+                }
+            }
+        }
+
+        // Store query info for potential caching (need this before moving processed_request)
+        let cache_query_info = if self.response_cache.is_some() && !is_mutation {
+            Some((
+                processed_request.query.clone(),
+                serde_json::to_value(&processed_request.variables).unwrap_or_default(),
+                processed_request.operation_name.clone(),
+            ))
+        } else {
+            None
+        };
+
+        // Execute the query
         match self.execute_with_middlewares(headers, processed_request).await {
-            Ok(resp) => resp.into(),
+            Ok(resp) => {
+                // Handle mutation cache invalidation
+                if is_mutation {
+                    if let Some(ref cache) = self.response_cache {
+                        if let Ok(resp_json) = serde_json::to_value(&resp) {
+                            cache.invalidate_for_mutation(&resp_json);
+                        }
+                    }
+                } else if let Some((query, vars, op_name)) = cache_query_info {
+                    // Cache the response for queries
+                    if let Some(ref cache) = self.response_cache {
+                        let cache_key = crate::cache::ResponseCache::generate_cache_key(
+                            &query,
+                            Some(&vars),
+                            op_name.as_deref(),
+                        );
+
+                        if let Ok(resp_json) = serde_json::to_value(&resp) {
+                            // Extract types and entities for invalidation tracking
+                            let types = extract_types_from_response(&resp_json);
+                            let entities = extract_entities_from_response(&resp_json);
+                            cache.put(cache_key, resp_json, types, entities);
+                        }
+                    }
+                }
+                resp.into()
+            }
             Err(err) => {
                 let gql_err: GraphQLError = err.into();
                 if let Some(handler) = &self.error_handler {
@@ -171,6 +254,22 @@ impl ServeMux {
                 }
                 let server_err = ServerError::new(gql_err.message.clone(), None);
                 async_graphql::Response::from_errors(vec![server_err]).into()
+            }
+        }
+    }
+
+    /// Convert cached JSON to GraphQL response
+    fn cached_to_response(&self, data: serde_json::Value) -> GraphQLResponse {
+        // Try to deserialize as Response, or create a simple data response
+        match serde_json::from_value::<async_graphql::Response>(data.clone()) {
+            Ok(resp) => resp.into(),
+            Err(_) => {
+                // Fallback: wrap in a simple response
+                let resp = async_graphql::Response::new(
+                    serde_json::from_value::<async_graphql::Value>(data)
+                        .unwrap_or(async_graphql::Value::Null)
+                );
+                resp.into()
             }
         }
     }
@@ -273,7 +372,67 @@ impl Clone for ServeMux {
             metrics_enabled: self.metrics_enabled,
             apq_store: self.apq_store.clone(),
             circuit_breaker: self.circuit_breaker.clone(),
+            response_cache: self.response_cache.clone(),
         }
+    }
+}
+
+/// Extract type names from __typename fields in response
+fn extract_types_from_response(response: &serde_json::Value) -> HashSet<String> {
+    let mut types = HashSet::new();
+    extract_types_recursive(response, &mut types);
+    types
+}
+
+fn extract_types_recursive(value: &serde_json::Value, types: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(type_name)) = map.get("__typename") {
+                types.insert(type_name.clone());
+            }
+            for v in map.values() {
+                extract_types_recursive(v, types);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                extract_types_recursive(item, types);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extract entity keys (Type#id) from response
+fn extract_entities_from_response(response: &serde_json::Value) -> HashSet<String> {
+    let mut entities = HashSet::new();
+    extract_entities_recursive(response, &mut entities);
+    entities
+}
+
+fn extract_entities_recursive(value: &serde_json::Value, entities: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let type_name = map.get("__typename").and_then(|t| t.as_str());
+            let id = map
+                .get("id")
+                .and_then(|i| i.as_str())
+                .or_else(|| map.get("_id").and_then(|i| i.as_str()));
+
+            if let (Some(tn), Some(id_val)) = (type_name, id) {
+                entities.insert(format!("{}#{}", tn, id_val));
+            }
+
+            for v in map.values() {
+                extract_entities_recursive(v, entities);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                extract_entities_recursive(item, entities);
+            }
+        }
+        _ => {}
     }
 }
 

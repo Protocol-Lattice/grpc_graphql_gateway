@@ -10,6 +10,7 @@
 //! - **Subscriptions**: Real-time data via GraphQL subscriptions (WebSocket)
 //! - **Multiplex Subscriptions**: Support for multiple concurrent subscriptions per WebSocket connection
 //! - **Middleware**: Extensible middleware system for auth and logging
+//! - **Response Caching**: In-memory LRU cache with TTL and mutation-triggered invalidation
 //!
 //! ## Main Components
 //!
@@ -52,6 +53,7 @@ pub mod graphql {
     include!("generated/graphql.rs");
 }
 
+pub mod cache;
 pub mod circuit_breaker;
 pub mod dataloader;
 pub mod error;
@@ -69,6 +71,10 @@ pub mod subscription;
 pub mod tracing_otel;
 pub mod types;
 
+pub use cache::{
+    create_response_cache, is_mutation, CacheConfig, CacheLookupResult, CacheStats,
+    CachedResponse, ResponseCache, SharedResponseCache,
+};
 pub use circuit_breaker::{
     create_circuit_breaker_registry, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError,
     CircuitBreakerRegistry, CircuitState, SharedCircuitBreakerRegistry,
