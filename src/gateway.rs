@@ -3,6 +3,7 @@
 use crate::compression::CompressionConfig;
 use crate::error::{GraphQLError, Result};
 use crate::grpc_client::{GrpcClient, GrpcClientPool};
+use crate::headers::HeaderPropagationConfig;
 use crate::middleware::Middleware;
 use crate::runtime::ServeMux;
 use crate::schema::{DynamicSchema, SchemaBuilder};
@@ -101,6 +102,8 @@ pub struct GatewayBuilder {
     cache_config: Option<crate::cache::CacheConfig>,
     /// Compression configuration
     compression_config: Option<CompressionConfig>,
+    /// Header propagation configuration
+    header_propagation_config: Option<HeaderPropagationConfig>,
 }
 
 impl GatewayBuilder {
@@ -121,6 +124,7 @@ impl GatewayBuilder {
             shutdown_config: None,
             cache_config: None,
             compression_config: None,
+            header_propagation_config: None,
         }
     }
 
@@ -598,6 +602,54 @@ impl GatewayBuilder {
         self
     }
 
+    /// Enable header propagation from GraphQL requests to gRPC backends.
+    ///
+    /// This forwards specified HTTP headers from incoming GraphQL requests
+    /// to outgoing gRPC metadata. Essential for authentication, distributed
+    /// tracing, and context propagation.
+    ///
+    /// # Security
+    ///
+    /// Uses an **allowlist** approach - only explicitly configured headers
+    /// are forwarded to prevent accidental leakage of sensitive data.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, HeaderPropagationConfig};
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .with_header_propagation(HeaderPropagationConfig::new()
+    ///         .propagate("authorization")
+    ///         .propagate("x-request-id")
+    ///         .propagate("x-tenant-id"))
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Common Headers
+    ///
+    /// Use `HeaderPropagationConfig::common()` for a preset that includes:
+    /// - `authorization` - Bearer tokens
+    /// - `x-request-id`, `x-correlation-id` - Request tracking
+    /// - `traceparent`, `tracestate` - W3C Trace Context
+    /// - `x-b3-*` - Zipkin B3 headers
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, HeaderPropagationConfig};
+    ///
+    /// # fn example() { let _ =
+    /// Gateway::builder().with_header_propagation(HeaderPropagationConfig::common())
+    /// # ; }
+    /// ```
+    pub fn with_header_propagation(mut self, config: HeaderPropagationConfig) -> Self {
+        self.header_propagation_config = Some(config);
+        self
+    }
+
     /// Build the gateway
     pub fn build(self) -> Result<Gateway> {
         let mut schema_builder = self.schema_builder;
@@ -606,6 +658,9 @@ impl GatewayBuilder {
         }
         if let Some(services) = self.service_allowlist {
             schema_builder = schema_builder.with_services(services);
+        }
+        if let Some(header_config) = self.header_propagation_config.as_ref() {
+            schema_builder = schema_builder.with_header_propagation(header_config.clone());
         }
 
         let schema = schema_builder.build(&self.client_pool)?;

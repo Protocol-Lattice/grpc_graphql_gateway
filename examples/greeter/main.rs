@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use futures::StreamExt;
-use grpc_graphql_gateway::{Gateway, GrpcClient, Middleware, RateLimitMiddleware};
+use grpc_graphql_gateway::{Gateway, GrpcClient, HeaderPropagationConfig, Middleware, RateLimitMiddleware};
 use tokio::fs;
 use tokio::sync::RwLock;
 use tokio_stream::wrappers::IntervalStream;
@@ -104,6 +104,12 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         })
         // Enable Response Compression for bandwidth savings
         .with_compression(grpc_graphql_gateway::CompressionConfig::default())
+        // Enable Header Propagation for auth and tracing
+        .with_header_propagation(HeaderPropagationConfig::new()
+            .propagate("authorization")
+            .propagate("x-request-id")
+            .propagate("x-tenant-id")
+            .propagate_with_prefix("x-custom-"))
         .serve(addr.to_string())
         .await?;
 
@@ -176,6 +182,18 @@ impl Greeter for ExampleGreeter {
         &self,
         request: Request<HelloRequest>,
     ) -> Result<Response<HelloReply>, Status> {
+        // Log any propagated headers/metadata
+        let metadata = request.metadata();
+        if let Some(auth) = metadata.get("authorization") {
+            info!("Received Authorization header: {:?}", auth);
+        }
+        if let Some(req_id) = metadata.get("x-request-id") {
+            info!("Received X-Request-ID: {:?}", req_id);
+        }
+        if let Some(tenant) = metadata.get("x-tenant-id") {
+            info!("Received X-Tenant-ID: {:?}", tenant);
+        }
+        
         let req = request.into_inner();
         let reply = self.build_reply(normalize_name(req.name), "query").await;
         Ok(Response::new(reply))

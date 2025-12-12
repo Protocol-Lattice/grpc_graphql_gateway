@@ -8,6 +8,7 @@ use crate::error::{Error, Result};
 use crate::federation::{EntityResolver, FederationConfig, GrpcEntityResolver};
 use crate::graphql::{GraphqlField, GraphqlResponse, GraphqlSchema, GraphqlService, GraphqlType};
 use crate::grpc_client::{GrpcClient, GrpcClientPool};
+use crate::headers::HeaderPropagationConfig;
 use async_graphql::dynamic::{
     Enum, EnumItem, Field, FieldFuture, FieldValue, InputObject, InputValue, Object,
     ResolverContext, Schema as AsyncSchema, Subscription, SubscriptionField,
@@ -82,6 +83,8 @@ pub struct SchemaBuilder {
     query_complexity_limit: Option<usize>,
     /// Whether introspection is disabled
     introspection_disabled: bool,
+    /// Header propagation config
+    header_propagation_config: Option<HeaderPropagationConfig>,
 }
 
 impl SchemaBuilder {
@@ -95,6 +98,7 @@ impl SchemaBuilder {
             query_depth_limit: None,
             query_complexity_limit: None,
             introspection_disabled: false,
+            header_propagation_config: None,
         }
     }
 
@@ -205,6 +209,24 @@ impl SchemaBuilder {
         self
     }
 
+    /// Set header propagation configuration for forwarding headers to gRPC.
+    ///
+    /// This allows specified HTTP headers from GraphQL requests to be
+    /// forwarded as gRPC metadata to backend services.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{SchemaBuilder, HeaderPropagationConfig};
+    ///
+    /// let builder = SchemaBuilder::new()
+    ///     .with_header_propagation(HeaderPropagationConfig::common());
+    /// ```
+    pub fn with_header_propagation(mut self, config: HeaderPropagationConfig) -> Self {
+        self.header_propagation_config = Some(config);
+        self
+    }
+
     /// Build the GraphQL schema from the provided descriptor set.
     pub fn build(self, client_pool: &GrpcClientPool) -> Result<DynamicSchema> {
         let bytes = self
@@ -287,6 +309,7 @@ impl SchemaBuilder {
                             field_ext.clone(),
                             &mut registry,
                             client_pool.clone(),
+                            self.header_propagation_config.clone(),
                         )?;
                         let mut query = query_root.take().unwrap_or_else(|| Object::new("Query"));
                         query = query.field(field);
@@ -301,6 +324,7 @@ impl SchemaBuilder {
                             field_ext.clone(),
                             &mut registry,
                             client_pool.clone(),
+                            self.header_propagation_config.clone(),
                         )?;
                         let mut mutation = mutation_root
                             .take()
@@ -317,6 +341,7 @@ impl SchemaBuilder {
                             field_ext.clone(),
                             &mut registry,
                             client_pool.clone(),
+                            self.header_propagation_config.clone(),
                         )?;
                         let mut subscription = subscription_root
                             .take()
@@ -982,6 +1007,7 @@ fn build_field(
     field_ext: ExtensionDescriptor,
     registry: &mut TypeRegistry,
     client_pool: GrpcClientPool,
+    header_propagation: Option<HeaderPropagationConfig>,
 ) -> Result<Field> {
     let config = OperationConfig::new(service, method, schema_opts, field_ext, registry)?;
     let args = config.args.clone();
@@ -989,6 +1015,7 @@ fn build_field(
     let field = Field::new(name, config.return_type.clone(), move |ctx| {
         let client_pool = client_pool.clone();
         let config = config.clone();
+        let header_propagation = header_propagation.clone();
         FieldFuture::new(async move {
             let client = client_pool.get(&config.service_name).ok_or_else(|| {
                 async_graphql::Error::new(format!("gRPC client {} not found", config.service_name))
@@ -1023,8 +1050,19 @@ fn build_field(
                 .parse()
                 .map_err(|e| async_graphql::Error::new(format!("invalid gRPC path: {e}")))?;
 
+            // Build the gRPC request and apply header propagation
+            let mut grpc_request = tonic::Request::new(request_msg);
+            
+            // Extract headers from middleware context and apply to gRPC request
+            if let Some(ref propagation_config) = header_propagation {
+                if let Some(middleware_ctx) = ctx.data_opt::<crate::middleware::Context>() {
+                    let metadata = propagation_config.extract_metadata(&middleware_ctx.headers);
+                    grpc_request = crate::headers::apply_metadata_to_request(grpc_request, metadata);
+                }
+            }
+
             let response = grpc
-                .unary(tonic::Request::new(request_msg), path, codec)
+                .unary(grpc_request, path, codec)
                 .await
                 .map_err(|e| async_graphql::Error::new(format!("gRPC error: {e}")))?
                 .into_inner();
@@ -1053,6 +1091,7 @@ fn build_subscription_field(
     field_ext: ExtensionDescriptor,
     registry: &mut TypeRegistry,
     client_pool: GrpcClientPool,
+    header_propagation: Option<HeaderPropagationConfig>,
 ) -> Result<SubscriptionField> {
     let config = OperationConfig::new(service, method, schema_opts, field_ext, registry)?;
     let args = config.args.clone();
@@ -1060,6 +1099,7 @@ fn build_subscription_field(
     let field = SubscriptionField::new(name, config.return_type.clone(), move |ctx| {
         let client_pool = client_pool.clone();
         let config = config.clone();
+        let header_propagation = header_propagation.clone();
         SubscriptionFieldFuture::new(async move {
             let client = client_pool.get(&config.service_name).ok_or_else(|| {
                 async_graphql::Error::new(format!("gRPC client {} not found", config.service_name))
@@ -1082,8 +1122,19 @@ fn build_subscription_field(
                 .parse()
                 .map_err(|e| async_graphql::Error::new(format!("invalid gRPC path: {e}")))?;
 
+            // Build the gRPC request and apply header propagation
+            let mut grpc_request = tonic::Request::new(request_msg);
+            
+            // Extract headers from middleware context and apply to gRPC request
+            if let Some(ref propagation_config) = header_propagation {
+                if let Some(middleware_ctx) = ctx.data_opt::<crate::middleware::Context>() {
+                    let metadata = propagation_config.extract_metadata(&middleware_ctx.headers);
+                    grpc_request = crate::headers::apply_metadata_to_request(grpc_request, metadata);
+                }
+            }
+
             let response = grpc
-                .server_streaming(tonic::Request::new(request_msg), path, codec)
+                .server_streaming(grpc_request, path, codec)
                 .await
                 .map_err(|e| async_graphql::Error::new(format!("gRPC error: {e}")))?;
 

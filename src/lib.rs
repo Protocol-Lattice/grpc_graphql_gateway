@@ -57,6 +57,7 @@ pub mod cache;
 pub mod circuit_breaker;
 pub mod compression;
 pub mod dataloader;
+pub mod headers;
 pub mod error;
 pub mod federation;
 pub mod gateway;
@@ -84,6 +85,7 @@ pub use compression::{
     create_compression_layer, CompressionConfig, CompressionLevel, CompressionStats,
 };
 pub use dataloader::EntityDataLoader;
+pub use headers::{apply_metadata_to_request, HeaderPropagationConfig};
 pub use error::{Error, Result};
 pub use federation::{
     EntityConfig, EntityResolver, EntityResolverMapping, FederationConfig, GrpcEntityResolver,

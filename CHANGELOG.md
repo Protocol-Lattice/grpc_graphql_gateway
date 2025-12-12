@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2025-12-12
+
+### Added
+- **Header Propagation**: New `headers` module for forwarding HTTP headers to gRPC metadata.
+  - `HeaderPropagationConfig` - Configure which headers are forwarded to gRPC backends
+  - `with_header_propagation()` - Builder method to enable header propagation
+  - `apply_metadata_to_request()` - Helper to apply extracted metadata to gRPC requests
+
+### Features
+- **Allowlist Approach**: Security-first design - only explicitly configured headers are forwarded
+- **Exact Header Matching**: `.propagate("authorization")` for specific headers
+- **Prefix Matching**: `.propagate_with_prefix("x-custom-")` for header groups
+- **Common Presets**: `HeaderPropagationConfig::common()` includes auth and tracing headers
+- **Exclusions**: `.exclude("cookie")` to block specific headers even with `propagate_all_headers()`
+
+### Use Cases
+- Forward `Authorization` headers for backend authentication
+- Propagate `X-Request-ID`, `traceparent` for distributed tracing
+- Pass `X-Tenant-ID` for multi-tenant applications
+- Forward `Accept-Language` for localization
+
 ## [0.2.5] - 2025-12-12
 
 ### Added
