@@ -55,6 +55,7 @@ pub mod graphql {
 
 pub mod cache;
 pub mod circuit_breaker;
+pub mod compression;
 pub mod dataloader;
 pub mod error;
 pub mod federation;
@@ -78,6 +79,9 @@ pub use cache::{
 pub use circuit_breaker::{
     create_circuit_breaker_registry, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError,
     CircuitBreakerRegistry, CircuitState, SharedCircuitBreakerRegistry,
+};
+pub use compression::{
+    create_compression_layer, CompressionConfig, CompressionLevel, CompressionStats,
 };
 pub use dataloader::EntityDataLoader;
 pub use error::{Error, Result};

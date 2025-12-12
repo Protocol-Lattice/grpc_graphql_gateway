@@ -102,6 +102,8 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
             stale_while_revalidate: Some(Duration::from_secs(30)), // Serve stale for 30s
             invalidate_on_mutation: true,                      // Auto-invalidate on mutations
         })
+        // Enable Response Compression for bandwidth savings
+        .with_compression(grpc_graphql_gateway::CompressionConfig::default())
         .serve(addr.to_string())
         .await?;
 
