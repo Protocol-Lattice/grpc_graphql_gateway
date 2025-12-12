@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2025-12-12
+
+### Added
+- **Multi-Descriptor Support (Schema Stitching)**: Combine multiple protobuf descriptor sets from different microservices into a unified GraphQL schema.
+  - `add_descriptor_set_bytes()` - Add additional descriptor sets by bytes
+  - `add_descriptor_set_file()` - Add additional descriptor sets from files
+  - `descriptor_count()` - Get the number of configured descriptor sets
+  - Seamless merging of services, types, and extensions from multiple sources
+
+### Features
+- **Microservice Architecture Support**: Each team can own their proto files independently
+- **Schema Stitching**: Combine multiple services into one unified GraphQL API
+- **Modular Development**: Add/remove services independently without rebuilding entire schema
+- **Duplicate Handling**: Automatically skips duplicate file descriptors
+
+### Use Cases
+- Combine `users.bin`, `products.bin`, `orders.bin` from different teams
+- Add new microservices to existing gateway without modifying core configuration
+- Build federated architectures with independent service deployments
+
 ## [0.2.6] - 2025-12-12
 
 ### Added

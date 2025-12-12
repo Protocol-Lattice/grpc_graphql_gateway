@@ -59,7 +59,7 @@ impl DynamicSchema {
 ///
 /// Builds a [`DynamicSchema`] from protobuf descriptors.
 ///
-/// # Example
+/// # Single Descriptor Set Example
 ///
 /// ```rust,no_run
 /// use grpc_graphql_gateway::{SchemaBuilder, GrpcClientPool};
@@ -72,8 +72,35 @@ impl DynamicSchema {
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Multi-Descriptor Set Example (Schema Stitching)
+///
+/// Combine multiple protobuf descriptor sets from different microservices
+/// into a unified GraphQL schema:
+///
+/// ```rust,no_run
+/// use grpc_graphql_gateway::{SchemaBuilder, GrpcClientPool};
+///
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let pool = GrpcClientPool::new();
+/// let schema = SchemaBuilder::new()
+///     // Primary descriptor set
+///     .with_descriptor_set_file("path/to/users.bin")?
+///     // Add additional services
+///     .add_descriptor_set_file("path/to/products.bin")?
+///     .add_descriptor_set_file("path/to/orders.bin")?
+///     .build(&pool)?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// This is particularly useful for:
+/// - **Microservice architectures**: Each team owns their proto files
+/// - **Schema stitching**: Combine multiple services into one GraphQL API
+/// - **Modular development**: Add/remove services independently
 pub struct SchemaBuilder {
-    descriptor_bytes: Option<Vec<u8>>,
+    /// Collection of descriptor sets to merge into a unified schema
+    descriptor_sets: Vec<Vec<u8>>,
     federation: bool,
     entity_resolver: Option<std::sync::Arc<dyn EntityResolver>>,
     service_allowlist: Option<HashSet<String>>,
@@ -91,7 +118,7 @@ impl SchemaBuilder {
     /// Create a new schema builder
     pub fn new() -> Self {
         Self {
-            descriptor_bytes: None,
+            descriptor_sets: Vec::new(),
             federation: false,
             entity_resolver: None,
             service_allowlist: None,
@@ -102,16 +129,81 @@ impl SchemaBuilder {
         }
     }
 
-    /// Provide a descriptor set from bytes
+    /// Provide the primary descriptor set from bytes.
+    ///
+    /// This clears any existing descriptors and sets this as the primary descriptor.
+    /// Use [`add_descriptor_set_bytes`] to add additional descriptor sets.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::SchemaBuilder;
+    ///
+    /// const DESCRIPTORS: &[u8] = include_bytes!("path/to/descriptor.bin");
+    ///
+    /// let builder = SchemaBuilder::new()
+    ///     .with_descriptor_set_bytes(DESCRIPTORS);
+    /// ```
     pub fn with_descriptor_set_bytes(mut self, bytes: impl AsRef<[u8]>) -> Self {
-        self.descriptor_bytes = Some(bytes.as_ref().to_vec());
+        self.descriptor_sets.clear();
+        self.descriptor_sets.push(bytes.as_ref().to_vec());
         self
     }
 
-    /// Provide a descriptor set from a file
+    /// Add an additional descriptor set from bytes.
+    ///
+    /// Use this to combine multiple protobuf descriptor sets from different
+    /// microservices into a unified GraphQL schema.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::SchemaBuilder;
+    ///
+    /// const USERS_DESCRIPTORS: &[u8] = include_bytes!("path/to/users.bin");
+    /// const PRODUCTS_DESCRIPTORS: &[u8] = include_bytes!("path/to/products.bin");
+    ///
+    /// let builder = SchemaBuilder::new()
+    ///     .with_descriptor_set_bytes(USERS_DESCRIPTORS)
+    ///     .add_descriptor_set_bytes(PRODUCTS_DESCRIPTORS);
+    /// ```
+    pub fn add_descriptor_set_bytes(mut self, bytes: impl AsRef<[u8]>) -> Self {
+        self.descriptor_sets.push(bytes.as_ref().to_vec());
+        self
+    }
+
+    /// Provide the primary descriptor set from a file.
+    ///
+    /// This clears any existing descriptors and sets this as the primary descriptor.
+    /// Use [`add_descriptor_set_file`] to add additional descriptor sets.
     pub fn with_descriptor_set_file(mut self, path: impl AsRef<Path>) -> Result<Self> {
         let data = std::fs::read(path).map_err(Error::Io)?;
-        self.descriptor_bytes = Some(data);
+        self.descriptor_sets.clear();
+        self.descriptor_sets.push(data);
+        Ok(self)
+    }
+
+    /// Add an additional descriptor set from a file.
+    ///
+    /// Use this to combine multiple protobuf descriptor sets from different
+    /// microservices into a unified GraphQL schema.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::SchemaBuilder;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let builder = SchemaBuilder::new()
+    ///     .with_descriptor_set_file("path/to/users.bin")?
+    ///     .add_descriptor_set_file("path/to/products.bin")?
+    ///     .add_descriptor_set_file("path/to/orders.bin")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn add_descriptor_set_file(mut self, path: impl AsRef<Path>) -> Result<Self> {
+        let data = std::fs::read(path).map_err(Error::Io)?;
+        self.descriptor_sets.push(data);
         Ok(self)
     }
 
@@ -227,14 +319,25 @@ impl SchemaBuilder {
         self
     }
 
-    /// Build the GraphQL schema from the provided descriptor set.
+    /// Build the GraphQL schema from the provided descriptor sets.
+    ///
+    /// If multiple descriptor sets were added, they are merged into a unified
+    /// GraphQL schema, combining services from all sources.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - No descriptor sets were provided
+    /// - Any descriptor set fails to decode
+    /// - Required GraphQL extensions are missing
+    /// - Type conflicts exist between descriptor sets
     pub fn build(self, client_pool: &GrpcClientPool) -> Result<DynamicSchema> {
-        let bytes = self
-            .descriptor_bytes
-            .ok_or_else(|| Error::Schema("descriptor set is required".into()))?;
+        if self.descriptor_sets.is_empty() {
+            return Err(Error::Schema("at least one descriptor set is required".into()));
+        }
 
-        let pool = DescriptorPool::decode(bytes.as_slice())
-            .map_err(|e| Error::Schema(format!("failed to decode descriptor set: {e}")))?;
+        // Build a merged DescriptorPool from all descriptor sets
+        let pool = self.build_merged_descriptor_pool()?;
 
         let method_ext = pool
             .get_extension_by_name("graphql.schema")
@@ -476,6 +579,53 @@ impl SchemaBuilder {
             .map_err(|e| Error::Schema(format!("failed to build schema: {e}")))?;
 
         Ok(DynamicSchema { inner: schema })
+    }
+
+    /// Build a merged DescriptorPool from all configured descriptor sets.
+    ///
+    /// This method decodes the first descriptor set as the base pool,
+    /// then merges additional descriptor sets into it.
+    fn build_merged_descriptor_pool(&self) -> Result<DescriptorPool> {
+        let mut iter = self.descriptor_sets.iter();
+        
+        // Decode the first descriptor set as the base pool
+        let first = iter.next().ok_or_else(|| {
+            Error::Schema("at least one descriptor set is required".into())
+        })?;
+        
+        let mut pool = DescriptorPool::decode(first.as_slice())
+            .map_err(|e| Error::Schema(format!("failed to decode primary descriptor set: {e}")))?;
+        
+        // Merge additional descriptor sets
+        for (index, bytes) in iter.enumerate() {
+            pool.decode_file_descriptor_set(bytes.as_slice())
+                .map_err(|e| Error::Schema(format!(
+                    "failed to merge descriptor set #{}: {e}",
+                    index + 2
+                )))?;
+            
+            tracing::debug!(
+                "Merged descriptor set #{} ({} bytes) into schema pool",
+                index + 2,
+                bytes.len()
+            );
+        }
+        
+        if self.descriptor_sets.len() > 1 {
+            tracing::info!(
+                "Merged {} descriptor sets into unified schema ({} services, {} types)",
+                self.descriptor_sets.len(),
+                pool.services().count(),
+                pool.all_messages().count()
+            );
+        }
+        
+        Ok(pool)
+    }
+
+    /// Get the number of descriptor sets configured.
+    pub fn descriptor_count(&self) -> usize {
+        self.descriptor_sets.len()
     }
 }
 

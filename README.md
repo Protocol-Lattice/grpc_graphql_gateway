@@ -43,6 +43,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - 🛑 **Graceful Shutdown** - Clean server shutdown with in-flight request draining
 - 🗜️ **Response Compression** - Automatic gzip/brotli compression for reduced bandwidth
 - 🔀 **Header Propagation** - Forward HTTP headers to gRPC backends for auth and tracing
+- 🧩 **Multi-Descriptor Support** - Combine multiple protobuf descriptor sets for schema stitching
 
 ## 🚀 Quick Start
 
@@ -358,6 +359,61 @@ let gateway = Gateway::builder()
     .add_middleware(AuthMiddleware)
     .build()?;
 ```
+
+### Multi-Descriptor Support (Schema Stitching)
+
+Combine multiple protobuf descriptor sets from different microservices into a unified GraphQL schema:
+
+```rust
+use grpc_graphql_gateway::{Gateway, GrpcClient};
+
+// Load descriptor sets from different microservices
+const USERS_DESCRIPTORS: &[u8] = include_bytes!("path/to/users.bin");
+const PRODUCTS_DESCRIPTORS: &[u8] = include_bytes!("path/to/products.bin");
+const ORDERS_DESCRIPTORS: &[u8] = include_bytes!("path/to/orders.bin");
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = Gateway::builder()
+        // Primary descriptor set
+        .with_descriptor_set_bytes(USERS_DESCRIPTORS)
+        // Add additional services from other teams
+        .add_descriptor_set_bytes(PRODUCTS_DESCRIPTORS)
+        .add_descriptor_set_bytes(ORDERS_DESCRIPTORS)
+        // Add clients for each service
+        .add_grpc_client("users.UserService", GrpcClient::builder("http://users:50051").connect_lazy()?)
+        .add_grpc_client("products.ProductService", GrpcClient::builder("http://products:50052").connect_lazy()?)
+        .add_grpc_client("orders.OrderService", GrpcClient::builder("http://orders:50053").connect_lazy()?)
+        .build()?;
+
+    gateway.serve("0.0.0.0:8888").await?;
+    Ok(())
+}
+```
+
+**File-based loading:**
+
+```rust
+let gateway = Gateway::builder()
+    .with_descriptor_set_file("path/to/users.bin")?
+    .add_descriptor_set_file("path/to/products.bin")?
+    .add_descriptor_set_file("path/to/orders.bin")?
+    .build()?;
+```
+
+**Use Cases:**
+
+| Scenario | Description |
+|----------|-------------|
+| Microservice Architecture | Each team owns their proto files independently |
+| Schema Stitching | Combine multiple services into one unified GraphQL API |
+| Modular Development | Add/remove services without rebuilding entire gateway |
+| Independent Deployments | Update individual service descriptors without affecting others |
+
+**Notes:**
+- Duplicate file descriptors are automatically skipped
+- Services, types, and extensions from all descriptor sets are merged
+- GraphQL extensions (like `graphql.schema`, `graphql.field`) must be present in at least one descriptor set
 
 ### DoS Protection (Query Limits)
 
