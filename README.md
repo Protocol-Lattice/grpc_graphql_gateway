@@ -42,6 +42,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - 📋 **Batch Queries** - Execute multiple GraphQL operations in a single HTTP request
 - 🛑 **Graceful Shutdown** - Clean server shutdown with in-flight request draining
 - 🗜️ **Response Compression** - Automatic gzip/brotli compression for reduced bandwidth
+- 🔀 **Header Propagation** - Forward HTTP headers to gRPC backends for auth and tracing
 
 ## 🚀 Quick Start
 
@@ -892,6 +893,67 @@ curl -X POST http://localhost:8888/graphql \
 - ✅ Configurable minimum size threshold
 - ✅ Works seamlessly with response caching
 - ✅ Zero configuration for default behavior
+
+### Header Propagation
+
+Forward HTTP headers from GraphQL requests to gRPC backends as metadata. Essential for authentication, distributed tracing, and multi-tenant applications:
+
+```rust
+use grpc_graphql_gateway::{Gateway, HeaderPropagationConfig};
+
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    .with_header_propagation(HeaderPropagationConfig::new()
+        .propagate("authorization")       // Forward auth tokens
+        .propagate("x-request-id")        // Correlation IDs
+        .propagate("x-tenant-id")         // Multi-tenancy
+        .propagate_with_prefix("x-custom-"))  // Custom headers by prefix
+    .add_grpc_client("service", client)
+    .build()?;
+```
+
+**Using Common Presets:**
+
+```rust
+// Common preset includes:
+// - authorization
+// - x-request-id, x-correlation-id
+// - traceparent, tracestate (W3C Trace Context)
+// - x-b3-* (Zipkin B3 propagation)
+Gateway::builder()
+    .with_header_propagation(HeaderPropagationConfig::common())
+```
+
+**Propagation Methods:**
+
+| Method | Example | Use Case |
+|--------|---------|----------|
+| `.propagate("header")` | `.propagate("authorization")` | Specific header |
+| `.propagate_with_prefix("x-")` | `.propagate_with_prefix("x-custom-")` | Header group |
+| `.propagate_all_headers()` | `.propagate_all_headers().exclude("cookie")` | All (with exclusions) |
+
+**Testing with curl:**
+
+```bash
+# Headers are forwarded to gRPC backends as metadata
+curl -X POST http://localhost:8888/graphql \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer my-token" \
+  -H "X-Request-ID: req-12345" \
+  -H "X-Tenant-ID: tenant-abc" \
+  -d '{"query": "{ users { id name } }"}'
+```
+
+**Security:**
+- ✅ **Allowlist approach** - Only configured headers are forwarded
+- ✅ **Explicit exclusions** - Block specific headers with `.exclude()`
+- ✅ **Case-insensitive** - Headers normalized to lowercase for gRPC metadata
+
+**Use Cases:**
+- Forward `Authorization` for backend service authentication
+- Propagate `X-Request-ID` / `traceparent` for distributed tracing
+- Pass `X-Tenant-ID` for multi-tenant routing
+- Forward `Accept-Language` for localization
 
 ### Custom Error Handling
 
