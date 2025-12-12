@@ -38,7 +38,8 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - ⚡ **Rate Limiting** - Built-in rate limiting middleware
 - 📦 **Automatic Persisted Queries (APQ)** - Reduce bandwidth with query hash caching
 - 🔌 **Circuit Breaker** - Prevent cascading failures with automatic backend health management
-- 📋 **Batch Queries** - Execute multiple GraphQL operations in a single HTTP request
+- � **Response Caching** - In-memory LRU cache with TTL and mutation-triggered invalidation
+- �📋 **Batch Queries** - Execute multiple GraphQL operations in a single HTTP request
 - 🛑 **Graceful Shutdown** - Clean server shutdown with in-flight request draining
 
 ## 🚀 Quick Start
@@ -627,6 +628,90 @@ let gateway = Gateway::builder()
 | `Closed` | Normal operation |
 | `Open` | Failing fast, returning `SERVICE_UNAVAILABLE` |
 | `HalfOpen` | Testing if service recovered |
+
+### Response Caching
+
+Dramatically improve performance with in-memory response caching:
+
+```rust
+use grpc_graphql_gateway::{Gateway, CacheConfig};
+use std::time::Duration;
+
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    .with_response_cache(CacheConfig {
+        max_size: 10_000,                              // Max 10k cached responses
+        default_ttl: Duration::from_secs(60),          // 1 minute TTL
+        stale_while_revalidate: Some(Duration::from_secs(30)), // Serve stale for 30s
+        invalidate_on_mutation: true,                  // Auto-invalidate on mutations
+    })
+    .add_grpc_client("greeter.Greeter", client)
+    .build()?;
+```
+
+**How It Works:**
+
+1. **First Query**: Cache miss → Execute gRPC → Cache response → Return
+2. **Second Query**: Cache hit → Return cached response immediately (<1ms)
+3. **Mutation**: Execute mutation → Invalidate related cache entries
+4. **Next Query**: Cache miss (invalidated) → Execute gRPC → Cache → Return
+
+**Example with curl (greeter service):**
+
+```bash
+# Start the gateway
+cargo run --example greeter
+
+# 1. First query - cache miss, hits gRPC backend
+curl -X POST http://localhost:8888/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query": "{ sayHello(name: \"Alice\") { message } }"}'
+# Response: {"data":{"sayHello":{"message":"Hello Alice!"}}}
+# Logs: "Response cache miss" or no cache log
+
+# 2. Same query - cache hit, instant response
+curl -X POST http://localhost:8888/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query": "{ sayHello(name: \"Alice\") { message } }"}'
+# Response: {"data":{"sayHello":{"message":"Hello Alice!"}}}
+# Logs: "Response cache hit"
+
+# 3. Mutation - invalidates cache
+curl -X POST http://localhost:8888/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query": "mutation { updateGreeting(name: \"Alice\", greeting: \"Hi\") { message } }"}'
+# Response: {"data":{"updateGreeting":{"message":"Hi Alice!"}}}
+# Logs: "Cache invalidated after mutation"
+
+# 4. Query again - cache miss (was invalidated by mutation)
+curl -X POST http://localhost:8888/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query": "{ sayHello(name: \"Alice\") { message } }"}'
+# Response: {"data":{"sayHello":{"message":"Hi Alice!"}}}  <- Fresh data!
+# Logs: "Response cache miss"
+```
+
+**What Gets Cached:**
+
+| Operation | Cached? | Triggers Invalidation? |
+|-----------|---------|------------------------|
+| Query | ✅ Yes | No |
+| Mutation | ❌ No | ✅ Yes |
+| Subscription | ❌ No | No |
+
+**Cache Invalidation Strategies:**
+
+- **TTL-Based**: Entries expire after `default_ttl`
+- **Mutation-Based**: Mutations automatically invalidate related cache entries
+- **Type-Based**: Invalidate by GraphQL type (e.g., all `User` queries)
+- **Entity-Based**: Invalidate by entity ID (e.g., `User#123`)
+
+**Benefits:**
+- ✅ Sub-millisecond response times for cached queries
+- ✅ Reduced gRPC backend load (10-100x fewer calls)
+- ✅ Automatic cache invalidation on mutations
+- ✅ Stale-while-revalidate for best UX
+- ✅ Zero external dependencies (pure in-memory)
 
 ### Graceful Shutdown
 
