@@ -104,6 +104,8 @@ pub struct GatewayBuilder {
     compression_config: Option<CompressionConfig>,
     /// Header propagation configuration
     header_propagation_config: Option<HeaderPropagationConfig>,
+    /// Query whitelist configuration
+    query_whitelist_config: Option<crate::query_whitelist::QueryWhitelistConfig>,
 }
 
 impl GatewayBuilder {
@@ -125,6 +127,7 @@ impl GatewayBuilder {
             cache_config: None,
             compression_config: None,
             header_propagation_config: None,
+            query_whitelist_config: None,
         }
     }
 
@@ -716,6 +719,125 @@ impl GatewayBuilder {
         self
     }
 
+    /// Enable query whitelisting for production security.
+    ///
+    /// Query whitelisting (also known as "Stored Operations" or "Persisted Operations")
+    /// restricts which GraphQL queries can be executed. This is a **critical security feature**
+    /// for public-facing GraphQL APIs that prevents malicious or arbitrary queries.
+    ///
+    /// # Security Benefits
+    ///
+    /// - **No Arbitrary Queries**: Only pre-approved queries can be executed
+    /// - **Reduced Attack Surface**: Prevents schema exploration and DoS attacks
+    /// - **Compliance**: Required for PCI-DSS and other security standards
+    /// - **Performance**: Known queries can be optimized and monitored
+    ///
+    /// # Modes
+    ///
+    /// - `WhitelistMode::Enforce` - Reject non-whitelisted queries (production)
+    /// - `WhitelistMode::Warn` - Log warnings but allow all queries (staging)
+    /// - `WhitelistMode::Disabled` - No whitelist checking (development)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, QueryWhitelistConfig, WhitelistMode};
+    /// use std::collections::HashMap;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut allowed_queries = HashMap::new();
+    /// allowed_queries.insert(
+    ///     "getUserById".to_string(),
+    ///     "query getUserById($id: ID!) { user(id: $id) { id name email } }".to_string()
+    /// );
+    /// allowed_queries.insert(
+    ///     "listProducts".to_string(),
+    ///     "query { products { id name price } }".to_string()
+    /// );
+    ///
+    /// let gateway = Gateway::builder()
+    ///     .with_query_whitelist(QueryWhitelistConfig {
+    ///         mode: WhitelistMode::Enforce,
+    ///         allowed_queries,
+    ///         allow_introspection: true,  // Allow introspection in dev/staging
+    ///     })
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Loading from File
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, QueryWhitelistConfig, WhitelistMode};
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let config = QueryWhitelistConfig::from_json_file(
+    ///     "allowed_queries.json",
+    ///     WhitelistMode::Enforce
+    /// )?;
+    ///
+    /// let gateway = Gateway::builder()
+    ///     .with_query_whitelist(config)
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Builder Pattern
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, QueryWhitelistConfig, WhitelistMode};
+    ///
+    /// # fn example() { let _ =
+    /// Gateway::builder()
+    ///     .with_query_whitelist(
+    ///         QueryWhitelistConfig::enforce()
+    ///             .add_query("getUser".into(), "query { user { id } }".into())
+    ///             .add_query("listPosts".into(), "query { posts { title } }".into())
+    ///             .with_introspection(false)  // Disable introspection in production
+    ///     )
+    /// # ; }
+    /// ```
+    ///
+    /// # How Validation Works
+    ///
+    /// The whitelist validates queries by:
+    /// 1. **Operation ID**: If client provides an operation ID (via extensions), validate by ID
+    /// 2. **Query Hash**: Calculate SHA-256 hash of query and validate by hash
+    /// 3. **Introspection**: Optionally allow `__schema` and `__type` queries
+    ///
+    /// # Client Integration
+    ///
+    /// Clients can reference queries by ID using GraphQL extensions:
+    ///
+    /// ```json
+    /// {
+    ///   "operationName": "getUserById",
+    ///   "variables": {"id": "123"},
+    ///   "extensions": {
+    ///     "operationId": "getUserById"
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// # Works with APQ
+    ///
+    /// Query whitelisting works alongside Automatic Persisted Queries (APQ):
+    /// - **APQ**: Caches any query after first use (bandwidth optimization)
+    /// - **Whitelist**: Only allows pre-approved queries (security)
+    ///
+    /// Use both together for maximum security and performance.
+    pub fn with_query_whitelist(
+        mut self,
+        config: crate::query_whitelist::QueryWhitelistConfig,
+    ) -> Self {
+        self.query_whitelist_config = Some(config);
+        self
+    }
+
     /// Build the gateway
     pub fn build(self) -> Result<Gateway> {
         let mut schema_builder = self.schema_builder;
@@ -770,6 +892,11 @@ impl GatewayBuilder {
         // Configure Compression
         if let Some(compression_config) = self.compression_config {
             mux.enable_compression(compression_config);
+        }
+
+        // Configure Query Whitelist
+        if let Some(whitelist_config) = self.query_whitelist_config {
+            mux.enable_query_whitelist(whitelist_config);
         }
 
         Ok(Gateway {

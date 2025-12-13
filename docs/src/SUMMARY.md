@@ -43,6 +43,7 @@
 
 # Production
 
+- [Query Whitelisting](./production/query-whitelisting.md)
 - [Graceful Shutdown](./production/graceful-shutdown.md)
 - [Header Propagation](./production/header-propagation.md)
 - [Configuration Reference](./production/configuration.md)

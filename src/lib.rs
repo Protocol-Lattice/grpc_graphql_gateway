@@ -66,6 +66,7 @@ pub mod health;
 pub mod metrics;
 pub mod middleware;
 pub mod persisted_queries;
+pub mod query_whitelist;
 pub mod runtime;
 pub mod schema;
 pub mod shutdown;
@@ -99,6 +100,10 @@ pub use middleware::{Context, Middleware, RateLimitMiddleware};
 pub use persisted_queries::{
     create_apq_store, process_apq_request, PersistedQueryConfig, PersistedQueryError,
     PersistedQueryExtension, PersistedQueryStore, SharedPersistedQueryStore,
+};
+pub use query_whitelist::{
+    QueryWhitelist, QueryWhitelistConfig, QueryWhitelistError, SharedQueryWhitelist,
+    WhitelistMode, WhitelistStats,
 };
 pub use runtime::ServeMux;
 pub use schema::SchemaBuilder;
