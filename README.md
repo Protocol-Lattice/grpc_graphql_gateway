@@ -1317,8 +1317,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Crates.io](https://crates.io/crates/grpc_graphql_gateway)
 - [Repository](https://github.com/Protocol-Lattice/grpc_graphql_gateway)
 - [Examples](https://github.com/Protocol-Lattice/grpc_graphql_gateway/tree/main/examples)
-- [Federation Guide](FEDERATION.md)
-- [Entity Resolution Guide](ENTITY_RESOLUTION.md)
 
 ---
 
