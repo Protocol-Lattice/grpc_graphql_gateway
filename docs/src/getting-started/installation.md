@@ -4,7 +4,7 @@
 
 ```toml
 [dependencies]
-grpc-graphql-gateway = "0.2"
+grpc_graphql_gateway = "0.2"
 tokio = { version = "1", features = ["full"] }
 tonic = "0.12"
 ```
