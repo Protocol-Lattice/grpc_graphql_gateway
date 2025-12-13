@@ -3,7 +3,7 @@
 **A high-performance Rust gateway that bridges gRPC services to GraphQL with full Apollo Federation v2 support.**
 
 [![Crates.io](https://img.shields.io/crates/v/grpc_graphql_gateway.svg)](https://crates.io/crates/grpc_graphql_gateway)
-[![Documentation](https://docs.rs/grpc_graphql_gateway/badge.svg)](https://protocol-lattice.github.io/grpc_graphql_gateway)
+[![Documentation](https://img.shields.io/badge/docs-online-blue.svg)](https://protocol-lattice.github.io/grpc_graphql_gateway)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Transform your gRPC microservices into a unified GraphQL API with zero GraphQL code. This gateway dynamically generates GraphQL schemas from protobuf descriptors and routes requests to your gRPC backends via Tonic, providing a seamless bridge between gRPC and GraphQL ecosystems.
