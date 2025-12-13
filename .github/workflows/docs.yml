@@ -33,6 +33,15 @@ jobs:
       - name: Build documentation
         run: mdbook build docs
 
+      - name: Verify build output
+        run: |
+          echo "Checking built files..."
+          ls -la docs/book/
+          echo "Checking index.html exists..."
+          test -f docs/book/index.html && echo "✓ index.html exists" || echo "✗ index.html missing"
+          echo "Checking production docs..."
+          ls -la docs/book/production/
+
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
