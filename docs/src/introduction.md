@@ -35,6 +35,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - 🔭 **OpenTelemetry Tracing** - Distributed tracing with GraphQL and gRPC spans
 - 🛡️ **DoS Protection** - Query depth and complexity limiting
 - 🔒 **Introspection Control** - Disable schema introspection in production
+- 🔐 **Query Whitelisting** - Restrict to pre-approved queries (PCI-DSS compliant)
 - ⚡ **Rate Limiting** - Built-in rate limiting middleware
 - 📦 **Automatic Persisted Queries** - Reduce bandwidth with query hash caching
 - 🔌 **Circuit Breaker** - Prevent cascading failures

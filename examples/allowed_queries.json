@@ -1,0 +1,6 @@
+{
+  "sayHello": "query sayHello($name: String!) { hello(name: $name) { message meta { correlationId from { id displayName } } } }",
+  "simpleHello": "query { hello(name: \"World\") { message } }",
+  "getUser": "query getUser($id: ID!) { user(id: $id) { id displayName trusted } }",
+  "updateGreeting": "mutation updateGreeting($input: UpdateGreetingInput!) { updateGreeting(input: $input) { message } }"
+}

@@ -106,3 +106,8 @@ impl Middleware for IntrospectionMiddleware {
     }
 }
 ```
+
+## See Also
+
+- **[Query Whitelisting](../production/query-whitelisting.md)** - For maximum security, combine introspection control with query whitelisting to restrict both schema discovery and query execution
+- [DoS Protection](dos-protection.md) - Query depth and complexity limits

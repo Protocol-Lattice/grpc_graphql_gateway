@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2025-12-13
+
+### Added
+- **Query Whitelisting (Stored Operations)**: New `query_whitelist` module for production security.
+  - `QueryWhitelistConfig` - Configure allowed queries, enforcement mode, and introspection
+  - `WhitelistMode` - Enforce, Warn, or Disabled modes for flexible deployment
+  - `QueryWhitelist` - Hash-based and ID-based query validation
+  - `with_query_whitelist()` - Builder method to enable query whitelisting
+  - `from_json_file()` - Load allowed queries from JSON configuration
+
+### Security Features
+- **Enforce Mode**: Reject non-whitelisted queries in production (required for PCI-DSS compliance)
+- **Warn Mode**: Log warnings but allow all queries (useful for staging environments)
+- **Introspection Control**: Optionally allow `__schema` and `__type` queries in whitelisted mode
+- **Dual Validation**: Validate queries by SHA-256 hash or custom operation ID
+- **Runtime Registration**: Dynamically register new allowed queries at runtime
+
+### Benefits
+- Prevents arbitrary/malicious queries in production
+- Reduces attack surface (no schema exploration or DoS via complex queries)
+- Compatible with APQ (Automatic Persisted Queries) for bandwidth + security
+- Works with Apollo Client, Relay, and other GraphQL clients
+- Required for many security compliance standards (PCI-DSS, SOC 2)
+
+### Use Cases
+- Public-facing GraphQL APIs requiring strict query control
+- Compliance with PCI-DSS and other security standards
+- Mobile apps with pre-defined query sets
+- Pre-production query testing and validation
+
 ## [0.2.7] - 2025-12-12
 
 ### Added

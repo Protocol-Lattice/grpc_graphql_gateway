@@ -35,6 +35,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - 🔭 **OpenTelemetry Tracing** - Distributed tracing with GraphQL and gRPC span tracking
 - 🛡️ **DoS Protection** - Query depth and complexity limiting to prevent expensive queries
 - 🔒 **Introspection Control** - Disable schema introspection in production for security
+- 🔐 **Query Whitelisting** - Restrict to pre-approved queries for maximum security (PCI-DSS compliant)
 - ⚡ **Rate Limiting** - Built-in rate limiting middleware
 - 📦 **Automatic Persisted Queries (APQ)** - Reduce bandwidth with query hash caching
 - 🔌 **Circuit Breaker** - Prevent cascading failures with automatic backend health management
@@ -646,6 +647,125 @@ let gateway = Gateway::builder()
 - ✅ Compatible with Apollo Client's APQ implementation
 - ✅ LRU eviction prevents unbounded memory growth
 - ✅ Optional TTL for cache expiration
+
+### Query Whitelisting (Stored Operations)
+
+Restrict which GraphQL queries can be executed for maximum security. This is a **critical feature** for public-facing GraphQL APIs and required for many compliance standards (PCI-DSS, SOC 2).
+
+```rust
+use grpc_graphql_gateway::{Gateway, QueryWhitelistConfig, WhitelistMode};
+use std::collections::HashMap;
+
+let mut allowed_queries = HashMap::new();
+allowed_queries.insert(
+    "getUserById".to_string(),
+    "query getUserById($id: ID!) { user(id: $id) { id name email } }".to_string()
+);
+allowed_queries.insert(
+   "listProducts".to_string(),
+    "query { products { id name price } }".to_string()
+);
+
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    .with_query_whitelist(QueryWhitelistConfig {
+        mode: WhitelistMode::Enforce,  // Reject non-whitelisted queries
+        allowed_queries,
+        allow_introspection: false,    // Block introspection in production
+    })
+    .add_grpc_client(\"service\", client)
+    .build()?;
+```
+
+**Enforcement Modes:**
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `Enforce` | Reject non-whitelisted queries | Production |
+| `Warn` | Log warnings, allow all queries | Staging/Testing |
+| `Disabled` | No whitelist checking | Development |
+
+**Loading from JSON File:**
+
+```rust
+// Load from allowed_queries.json
+let config = QueryWhitelistConfig::from_json_file(
+    "allowed_queries.json",
+    WhitelistMode::Enforce
+)?;
+
+let gateway = Gateway::builder()
+    .with_query_whitelist(config)
+    .build()?;
+```
+
+**Example JSON file** (`allowed_queries.json`):
+
+```json
+{
+  "getUserById": "query getUserById($id: ID!) { user(id: $id) { id name } }",
+  "listProducts": "query { products { id name price } }",
+  "createOrder": "mutation createOrder($input: OrderInput!) { createOrder(input: $input) { id } }"
+}
+```
+
+**Client Integration:**
+
+Clients can reference queries by ID using extensions:
+
+```json
+{
+  "operationName": "getUserById",
+  "variables": {"id": "123"},
+  "extensions": {
+    "operationId": "getUserById"
+  }
+}
+```
+
+**How Validation Works:**
+
+1. **Operation ID**: If client provides `operationId` in extensions, validate by ID
+2. **Query Hash**: Calculate SHA-256 hash of query and validate by hash
+3. **Introspection**: Optionally allow `__schema` and `__type` queries
+
+**Benefits:**
+
+- ✅ **Security**: Prevents arbitrary/malicious queries
+- ✅ **Compliance**: Required for PCI-DSS, HIPAA, SOC 2
+- ✅ **Performance**: Known queries can be optimized
+- ✅ **Monitoring**: Track exactly which queries are used
+- ✅ **Mobile-Friendly**: Perfect for apps with fixed query sets
+
+**Works with APQ:**
+
+| Feature | Purpose | Security Level |
+|---------|---------|----------------|
+| **APQ** | Bandwidth optimization (caches any query) | Low |
+| **Whitelist** | Security (only allows pre-approved queries) | High |
+| **Both** | Bandwidth + Security | Maximum |
+
+Use both together for maximum security and performance!
+
+**Runtime Management:**
+
+```rust
+// Get whitelist reference
+let whitelist = gateway.mux().query_whitelist().unwrap();
+
+// Register new query at runtime
+whitelist.register_query(
+    "newQuery".to_string(),
+    "query { newField }".to_string()
+);
+
+// Remove a query
+whitelist.remove_query("oldQuery");
+
+// Get statistics
+let stats = whitelist.stats();
+println!("Total allowed queries: {}", stats.total_queries);
+```
 
 ### Circuit Breaker
 

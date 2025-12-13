@@ -11,6 +11,7 @@ use crate::middleware::{Context, Middleware};
 use crate::persisted_queries::{
     process_apq_request, PersistedQueryConfig, PersistedQueryError, SharedPersistedQueryStore,
 };
+use crate::query_whitelist::{QueryWhitelistConfig, SharedQueryWhitelist};
 use crate::schema::{DynamicSchema, GrpcResponseCache};
 use async_graphql::ServerError;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
@@ -43,9 +44,11 @@ pub struct ServeMux {
     /// Circuit breaker registry
     circuit_breaker: Option<SharedCircuitBreakerRegistry>,
     /// Response cache
-    response_cache: Option<SharedResponseCache>,
+        response_cache: Option<SharedResponseCache>,
     /// Response compression configuration
     compression_config: Option<CompressionConfig>,
+    /// Query whitelist for security
+    query_whitelist: Option<SharedQueryWhitelist>,
 }
 
 impl ServeMux {
@@ -62,6 +65,7 @@ impl ServeMux {
             circuit_breaker: None,
             response_cache: None,
             compression_config: None,
+            query_whitelist: None,
         }
     }
 
@@ -113,6 +117,16 @@ impl ServeMux {
     /// Get the compression config (if enabled)
     pub fn compression_config(&self) -> Option<&CompressionConfig> {
         self.compression_config.as_ref()
+    }
+
+    /// Enable query whitelist
+    pub fn enable_query_whitelist(&mut self, config: QueryWhitelistConfig) {
+        self.query_whitelist = Some(Arc::new(crate::query_whitelist::QueryWhitelist::new(config)));
+    }
+
+    /// Get the query whitelist (if enabled)
+    pub fn query_whitelist(&self) -> Option<&SharedQueryWhitelist> {
+        self.query_whitelist.as_ref()
     }
 
     /// Add middleware to the execution pipeline
@@ -190,6 +204,28 @@ impl ServeMux {
         } else {
             inner_request
         };
+
+        // Validate query against whitelist if enabled
+        if let Some(ref whitelist) = self.query_whitelist {
+            // Extract operation ID from extensions if present
+            let operation_id = processed_request.extensions.get("operationId")
+                .and_then(|v| serde_json::to_value(v).ok())
+                .and_then(|v| v.as_str().map(String::from));
+
+            if let Err(err) = whitelist.validate_query(
+                &processed_request.query, 
+                operation_id.as_deref()
+            ) {
+                tracing::warn!("Query whitelist validation failed: {}", err);
+                let mut server_err = ServerError::new(err.to_string(), None);
+                server_err.extensions = Some({
+                    let mut ext = async_graphql::ErrorExtensionValues::default();
+                    ext.set("code", "QUERY_NOT_WHITELISTED");
+                    ext
+                });
+                return async_graphql::Response::from_errors(vec![server_err]).into();
+            }
+        }
 
         // Check if this is a mutation (mutations are never cached and trigger invalidation)
         let is_mutation = crate::cache::is_mutation(&processed_request.query);
@@ -396,6 +432,7 @@ impl Clone for ServeMux {
             circuit_breaker: self.circuit_breaker.clone(),
             response_cache: self.response_cache.clone(),
             compression_config: self.compression_config.clone(),
+            query_whitelist: self.query_whitelist.clone(),
         }
     }
 }

@@ -110,6 +110,17 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
             .propagate("x-request-id")
             .propagate("x-tenant-id")
             .propagate_with_prefix("x-custom-"))
+        // Enable Query Whitelisting for production security
+        // Using Warn mode for demo - set to Enforce for production!
+        .with_query_whitelist(
+            grpc_graphql_gateway::QueryWhitelistConfig::from_json_file(
+                "examples/allowed_queries.json",
+                grpc_graphql_gateway::WhitelistMode::Warn  // Change to Enforce for production
+            ).unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to load query whitelist: {}. Using empty whitelist.", e);
+                grpc_graphql_gateway::QueryWhitelistConfig::warn()
+            })
+        )
         .serve(addr.to_string())
         .await?;
 
@@ -141,6 +152,10 @@ fn print_examples(addr: SocketAddr) {
     println!("  query {{ user(id:\"demo\") {{ id displayName trusted }} }}");
     println!("  # Upload (multipart): see README for the curl example");
     println!("  # Multi-upload (multipart): see README for the curl example");
+    println!();
+    println!("NOTE: Query whitelisting is enabled in WARN mode.");
+    println!("      Non-whitelisted queries will log warnings but still execute.");
+    println!("      Set WhitelistMode::Enforce in production for strict security!");
 }
 
 #[derive(Clone)]
