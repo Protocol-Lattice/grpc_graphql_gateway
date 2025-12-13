@@ -6,6 +6,16 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.2.8] - 2025-12-13
+
+**Query Whitelisting (Stored Operations)**
+
+- `QueryWhitelistConfig` - Configure allowed queries and enforcement mode
+- `WhitelistMode` - Enforce, Warn, or Disabled modes
+- Hash-based and ID-based query validation
+- Production security for PCI-DSS compliance
+- Compatible with APQ and GraphQL clients
+
 ### [0.2.7] - 2025-12-12
 
 **Multi-Descriptor Support (Schema Stitching)**
