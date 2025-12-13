@@ -1,8 +1,8 @@
-# grpc-graphql-gateway
+# grpc_graphql_gateway
 
 **A high-performance Rust gateway that bridges gRPC services to GraphQL with full Apollo Federation v2 support.**
 
-[![Crates.io](https://img.shields.io/crates/v/grpc-graphql-gateway.svg)](https://crates.io/crates/grpc-graphql-gateway)
+[![Crates.io](https://img.shields.io/crates/v/grpc_graphql_gateway.svg)](https://crates.io/crates/grpc_graphql_gateway)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Transform your gRPC microservices into a unified GraphQL API with zero GraphQL code. This gateway dynamically generates GraphQL schemas from protobuf descriptors and routes requests to your gRPC backends via Tonic, providing a seamless bridge between gRPC and GraphQL ecosystems.
@@ -52,7 +52,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 
 ```toml
 [dependencies]
-grpc-graphql-gateway = "0.2"
+grpc_graphql_gateway = "0.2"
 tokio = { version = "1", features = ["full"] }
 tonic = "0.12"
 ```
@@ -1184,7 +1184,7 @@ Generate a starter gateway:
 
 ```bash
 # Install the generator
-cargo install grpc-graphql-gateway --bin protoc-gen-graphql-template
+cargo install grpc_graphql_gateway --bin protoc-gen-graphql-template
 
 # Generate gateway code
 protoc \
@@ -1277,7 +1277,7 @@ cargo test test_federation_config
 ## 📦 Project Structure
 
 ```
-grpc-graphql-gateway-rs/
+grpc_graphql_gateway-rs/
 ├── src/
 │   ├── lib.rs              # Public API
 │   ├── gateway.rs          # Gateway implementation
@@ -1306,15 +1306,15 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-- Inspired by [grpc-graphql-gateway](https://github.com/ysugimoto/grpc-graphql-gateway) (Go)
+- Inspired by [grpc_graphql_gateway](https://github.com/ysugimoto/grpc_graphql_gateway) (Go)
 - Built with [async-graphql](https://github.com/async-graphql/async-graphql)
 - Powered by [tonic](https://github.com/hyperium/tonic)
 - Federation based on [Apollo Federation v2](https://www.apollographql.com/docs/federation/)
 
 ## 🔗 Links
 
-- [Documentation](https://docs.rs/grpc-graphql-gateway)
-- [Crates.io](https://crates.io/crates/grpc-graphql-gateway)
+- [Documentation](https://docs.rs/grpc_graphql_gateway)
+- [Crates.io](https://crates.io/crates/grpc_graphql_gateway)
 - [Repository](https://github.com/Protocol-Lattice/grpc_graphql_gateway)
 - [Examples](https://github.com/Protocol-Lattice/grpc_graphql_gateway/tree/main/examples)
 - [Federation Guide](FEDERATION.md)
