@@ -178,6 +178,8 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         )
         // Enable Query Analytics Dashboard
         .enable_analytics(AnalyticsConfig::development())
+        // Enable Request Collapsing for deduplicating identical gRPC calls
+        .with_request_collapsing(grpc_graphql_gateway::RequestCollapsingConfig::default())
         .serve(addr.to_string())
         .await?;
 

@@ -73,6 +73,7 @@ pub mod runtime;
 pub mod schema;
 pub mod shutdown;
 pub mod subscription;
+pub mod request_collapsing;
 pub mod tracing_otel;
 pub mod types;
 
@@ -132,4 +133,10 @@ pub use rest_connector::{
     ResponseTransformer, RestConnector, RestConnectorBuilder, RestConnectorConfig,
     RestConnectorRegistry, RestEndpoint, RestFieldType, RestGraphQLField, RestRequest,
     RestResponse, RestResponseField, RestResponseSchema, RetryConfig,
+};
+pub use request_collapsing::{
+    create_collapsing_metrics, create_request_collapsing_registry, CollapseResult,
+    CollapsingMetrics, CollapsingMetricsSnapshot, CollapsingStats, RequestBroadcaster,
+    RequestCollapsingConfig, RequestCollapsingRegistry, RequestKey, RequestReceiver,
+    SharedCollapsingMetrics, SharedRequestCollapsingRegistry,
 };
