@@ -33,11 +33,13 @@
 - [OpenTelemetry Tracing](./advanced/tracing.md)
 - [Introspection Control](./advanced/introspection.md)
 - [REST API Connectors](./advanced/rest-connectors.md)
+- [OpenAPI Integration](./advanced/openapi.md)
 
 # Performance & Resilience
 
 - [Response Caching](./performance/caching.md)
 - [Response Compression](./performance/compression.md)
+- [Request Collapsing](./performance/request-collapsing.md)
 - [Automatic Persisted Queries](./performance/apq.md)
 - [Circuit Breaker](./performance/circuit-breaker.md)
 - [Batch Queries](./performance/batch-queries.md)

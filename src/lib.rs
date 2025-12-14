@@ -74,6 +74,7 @@ pub mod schema;
 pub mod shutdown;
 pub mod subscription;
 pub mod request_collapsing;
+pub mod openapi;
 pub mod tracing_otel;
 pub mod types;
 
@@ -139,4 +140,8 @@ pub use request_collapsing::{
     CollapsingMetrics, CollapsingMetricsSnapshot, CollapsingStats, RequestBroadcaster,
     RequestCollapsingConfig, RequestCollapsingRegistry, RequestKey, RequestReceiver,
     SharedCollapsingMetrics, SharedRequestCollapsingRegistry,
+};
+pub use openapi::{
+    Components, MediaType, OpenApiInfo, OpenApiParser, OpenApiServer, OpenApiSpec,
+    Operation, OperationInfo, Parameter, PathItem, RequestBody, Response, SchemaObject,
 };

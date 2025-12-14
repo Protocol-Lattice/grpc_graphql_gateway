@@ -49,6 +49,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - 🔀 **Header Propagation** - Forward HTTP headers to gRPC backends for auth and tracing
 - 🧩 **Multi-Descriptor Support** - Combine multiple protobuf descriptor sets for schema stitching
 - 🌐 **REST API Connectors** - Hybrid gRPC/REST architectures with path templates, retry, and caching
+- 📜 **OpenAPI Integration** - Auto-generate REST connectors from OpenAPI/Swagger specs
 
 ## 🚀 Quick Start
 
@@ -473,6 +474,77 @@ let gateway = Gateway::builder()
 | Gradual Migration | Migrate from REST to gRPC incrementally |
 | Third-Party APIs | Integrate external REST APIs (Stripe, Twilio, etc.) |
 | Legacy Systems | Bridge legacy REST services with modern gRPC |
+
+### OpenAPI to REST Connector
+
+Automatically generate REST connectors from OpenAPI/Swagger specifications:
+
+```rust
+use grpc_graphql_gateway::{Gateway, OpenApiParser};
+
+// Parse OpenAPI spec and create REST connector
+let connector = OpenApiParser::from_file("petstore.yaml")?
+    .with_base_url("https://api.petstore.io/v2")  // Override base URL
+    .build()?;
+
+let gateway = Gateway::builder()
+    .add_rest_connector("petstore", connector)
+    .build()?;
+```
+
+**Loading Options:**
+
+```rust
+// From a file (YAML requires 'yaml' feature)
+let connector = OpenApiParser::from_file("openapi.json")?.build()?;
+
+// From a URL
+let connector = OpenApiParser::from_url("https://api.example.com/openapi.json")
+    .await?
+    .build()?;
+
+// From a string
+let connector = OpenApiParser::from_string(json_str, false)?.build()?;
+```
+
+**Filtering Operations:**
+
+```rust
+// Only include specific tags
+let connector = OpenApiParser::from_file("openapi.yaml")?
+    .with_tags(vec!["pets".to_string(), "store".to_string()])
+    .build()?;
+
+// Custom filter
+let connector = OpenApiParser::from_file("openapi.yaml")?
+    .filter_operations(|operation_id, path| {
+        !operation_id.contains("deprecated") && path.starts_with("/api/v2")
+    })
+    .build()?;
+
+// Add prefix to all operations
+let connector = OpenApiParser::from_file("openapi.yaml")?
+    .with_prefix("petstore_")  // listPets -> petstore_listPets
+    .build()?;
+```
+
+**Supported Formats:**
+
+| Format | Extension | Feature Required |
+|--------|-----------|------------------|
+| OpenAPI 3.0.x | `.json` | None |
+| OpenAPI 3.1.x | `.json` | None |
+| Swagger 2.0 | `.json` | None |
+| YAML (any version) | `.yaml`, `.yml` | `yaml` |
+
+**What Gets Generated:**
+
+- ✅ All path operations become GraphQL fields
+- ✅ Path parameters become field arguments
+- ✅ Query parameters become optional arguments
+- ✅ Request bodies are auto-templated
+- ✅ Response schemas become GraphQL types
+- ✅ Deprecated operations are skipped
 
 ### DoS Protection (Query Limits)
 
