@@ -89,7 +89,13 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         // GET /posts/{id} - fetch a single post
         .add_endpoint(grpc_graphql_gateway::RestEndpoint::new("getPost", "/posts/{id}")
             .method(grpc_graphql_gateway::HttpMethod::GET)
-            .description("Fetch a post by ID from JSONPlaceholder"))
+            .description("Fetch a post by ID from JSONPlaceholder")
+            .with_response_schema(grpc_graphql_gateway::RestResponseSchema::new("Post")
+                .field(grpc_graphql_gateway::RestResponseField::int("id"))
+                .field(grpc_graphql_gateway::RestResponseField::string("title"))
+                .field(grpc_graphql_gateway::RestResponseField::string("body"))
+                .field(grpc_graphql_gateway::RestResponseField::int("userId"))
+            ))
         // GET /posts - list all posts
         .add_endpoint(grpc_graphql_gateway::RestEndpoint::new("listPosts", "/posts")
             .method(grpc_graphql_gateway::HttpMethod::GET)
@@ -102,7 +108,13 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         .add_endpoint(grpc_graphql_gateway::RestEndpoint::new("createPost", "/posts")
             .method(grpc_graphql_gateway::HttpMethod::POST)
             .body_template(r#"{"title": "{title}", "body": "{body}", "userId": {userId}}"#)
-            .description("Create a new post"))
+            .description("Create a new post")
+            .with_response_schema(grpc_graphql_gateway::RestResponseSchema::new("Post")
+                .field(grpc_graphql_gateway::RestResponseField::int("id"))
+                .field(grpc_graphql_gateway::RestResponseField::string("title"))
+                .field(grpc_graphql_gateway::RestResponseField::string("body"))
+                .field(grpc_graphql_gateway::RestResponseField::int("userId"))
+            ))
         // Enable caching for GET requests
         .with_cache(100)
         .build()?;

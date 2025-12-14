@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `RestConnector` - HTTP client with retry logic, caching, and interceptor support
   - `RestConnectorBuilder` - Builder pattern for connector configuration
   - `RestEndpoint` - Define REST endpoints with path templates, query params, and body templates
+  - **Typed Responses** - Define GraphQL schemas for REST endpoints to enable field selection (`RestResponseSchema`)
+  - **GraphQL Schema Integration** - REST endpoints automatically exposed as query/mutation fields
   - `HttpMethod` - GET, POST, PUT, PATCH, DELETE support
   - `RestConnectorRegistry` - Manage multiple REST connectors for different services
   - `RetryConfig` - Configurable retry with exponential backoff

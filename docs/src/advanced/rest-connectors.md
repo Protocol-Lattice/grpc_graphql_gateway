@@ -157,6 +157,25 @@ Supported JSONPath:
 - `$.array[0]` - Array index
 - `$.array[0].field` - Combined
 
+## Typed Responses
+
+By default, REST endpoints return a `JSON` scalar blob. To enable **field selection** in GraphQL queries (e.g. `{ getUser { name email } }`), you can define a response schema:
+
+```rust
+use grpc_graphql_gateway::{RestResponseSchema, RestResponseField};
+
+RestEndpoint::new("getUser", "/users/{id}")
+    .with_response_schema(RestResponseSchema::new("User")
+        .field(RestResponseField::int("id"))
+        .field(RestResponseField::string("name"))
+        .field(RestResponseField::string("email"))
+        // Define a nested object field
+        .field(RestResponseField::object("address", "Address"))
+    )
+```
+
+This registers a `User` type in the schema and allows clients to select only the fields they need.
+
 ### Mutations vs Queries
 
 Endpoints are automatically classified:

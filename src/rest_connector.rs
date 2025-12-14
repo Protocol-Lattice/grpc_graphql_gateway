@@ -61,6 +61,158 @@ impl std::fmt::Display for HttpMethod {
     }
 }
 
+/// Defines the GraphQL scalar type for a REST response field
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum RestFieldType {
+    /// String type
+    String,
+    /// Integer type
+    Int,
+    /// Float type
+    Float,
+    /// Boolean type
+    Boolean,
+    /// Nested object (reference to another type)
+    Object(String),
+    /// List of a type
+    List(Box<RestFieldType>),
+}
+
+impl RestFieldType {
+    /// Convert to GraphQL TypeRef string
+    pub fn to_type_ref(&self) -> String {
+        match self {
+            RestFieldType::String => "String".to_string(),
+            RestFieldType::Int => "Int".to_string(),
+            RestFieldType::Float => "Float".to_string(),
+            RestFieldType::Boolean => "Boolean".to_string(),
+            RestFieldType::Object(name) => name.clone(),
+            RestFieldType::List(inner) => format!("[{}]", inner.to_type_ref()),
+        }
+    }
+}
+
+/// A field in a REST response schema
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestResponseField {
+    /// Field name
+    pub name: String,
+    /// Field type
+    pub field_type: RestFieldType,
+    /// Whether the field is nullable
+    pub nullable: bool,
+    /// Optional description
+    pub description: Option<String>,
+}
+
+impl RestResponseField {
+    /// Create a new required string field
+    pub fn string(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            field_type: RestFieldType::String,
+            nullable: false,
+            description: None,
+        }
+    }
+
+    /// Create a new required int field
+    pub fn int(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            field_type: RestFieldType::Int,
+            nullable: false,
+            description: None,
+        }
+    }
+
+    /// Create a new required float field
+    pub fn float(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            field_type: RestFieldType::Float,
+            nullable: false,
+            description: None,
+        }
+    }
+
+    /// Create a new required boolean field
+    pub fn boolean(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            field_type: RestFieldType::Boolean,
+            nullable: false,
+            description: None,
+        }
+    }
+
+    /// Create a new object field (reference to another type)
+    pub fn object(name: impl Into<String>, type_name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            field_type: RestFieldType::Object(type_name.into()),
+            nullable: false,
+            description: None,
+        }
+    }
+
+    /// Create a list field
+    pub fn list(name: impl Into<String>, item_type: RestFieldType) -> Self {
+        Self {
+            name: name.into(),
+            field_type: RestFieldType::List(Box::new(item_type)),
+            nullable: false,
+            description: None,
+        }
+    }
+
+    /// Make this field nullable
+    pub fn nullable(mut self) -> Self {
+        self.nullable = true;
+        self
+    }
+
+    /// Add description
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = Some(desc.into());
+        self
+    }
+}
+
+/// Schema definition for a REST response type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestResponseSchema {
+    /// Type name (e.g., "Post", "User")
+    pub type_name: String,
+    /// Fields in this type
+    pub fields: Vec<RestResponseField>,
+    /// Optional description
+    pub description: Option<String>,
+}
+
+impl RestResponseSchema {
+    /// Create a new response schema
+    pub fn new(type_name: impl Into<String>) -> Self {
+        Self {
+            type_name: type_name.into(),
+            fields: Vec::new(),
+            description: None,
+        }
+    }
+
+    /// Add a field
+    pub fn field(mut self, field: RestResponseField) -> Self {
+        self.fields.push(field);
+        self
+    }
+
+    /// Add description
+    pub fn description(mut self, desc: impl Into<String>) -> Self {
+        self.description = Some(desc.into());
+        self
+    }
+}
+
 /// Configuration for a REST endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RestEndpoint {
@@ -86,6 +238,8 @@ pub struct RestEndpoint {
     pub description: Option<String>,
     /// Expected return type (for schema generation)
     pub return_type: Option<String>,
+    /// Response schema for typed responses (enables field selection)
+    pub response_schema: Option<RestResponseSchema>,
 }
 
 impl RestEndpoint {
@@ -103,6 +257,7 @@ impl RestEndpoint {
             is_mutation: None,
             description: None,
             return_type: None,
+            response_schema: None,
         }
     }
 
@@ -163,6 +318,27 @@ impl RestEndpoint {
     /// Set the expected return type
     pub fn return_type(mut self, type_name: impl Into<String>) -> Self {
         self.return_type = Some(type_name.into());
+        self
+    }
+
+    /// Set the response schema for typed responses
+    /// 
+    /// This enables GraphQL field selection on REST responses.
+    /// 
+    /// # Example
+    /// 
+    /// ```rust,ignore
+    /// use grpc_graphql_gateway::{RestEndpoint, RestResponseSchema, RestResponseField};
+    /// 
+    /// let endpoint = RestEndpoint::new("getPost", "/posts/{id}")
+    ///     .with_response_schema(RestResponseSchema::new("Post")
+    ///         .field(RestResponseField::int("id"))
+    ///         .field(RestResponseField::string("title"))
+    ///         .field(RestResponseField::string("body"))
+    ///         .field(RestResponseField::int("userId")));
+    /// ```
+    pub fn with_response_schema(mut self, schema: RestResponseSchema) -> Self {
+        self.response_schema = Some(schema);
         self
     }
 
@@ -1008,6 +1184,7 @@ impl RestConnectorRegistry {
                     connector_name: connector_name.clone(),
                     endpoint_name: endpoint_name.clone(),
                     connector: connector.clone(),
+                    response_schema: endpoint.response_schema.clone(),
                 };
 
                 if endpoint.is_mutation() {
@@ -1037,6 +1214,8 @@ pub struct RestGraphQLField {
     pub endpoint_name: String,
     /// Reference to the connector
     pub connector: Arc<RestConnector>,
+    /// Optional typed response schema
+    pub response_schema: Option<RestResponseSchema>,
 }
 
 impl std::fmt::Debug for RestGraphQLField {

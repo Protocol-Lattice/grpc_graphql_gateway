@@ -125,5 +125,6 @@ pub use tracing_otel::{init_tracer, shutdown_tracer, GraphQLSpan, GrpcSpan, Trac
 pub use rest_connector::{
     ApiKeyInterceptor, BearerAuthInterceptor, DefaultTransformer, HttpMethod, RequestInterceptor,
     ResponseTransformer, RestConnector, RestConnectorBuilder, RestConnectorConfig,
-    RestConnectorRegistry, RestEndpoint, RestGraphQLField, RestRequest, RestResponse, RetryConfig,
+    RestConnectorRegistry, RestEndpoint, RestFieldType, RestGraphQLField, RestRequest,
+    RestResponse, RestResponseField, RestResponseSchema, RetryConfig,
 };

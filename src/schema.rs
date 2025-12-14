@@ -9,7 +9,7 @@ use crate::federation::{EntityResolver, FederationConfig, GrpcEntityResolver};
 use crate::graphql::{GraphqlField, GraphqlResponse, GraphqlSchema, GraphqlService, GraphqlType};
 use crate::grpc_client::{GrpcClient, GrpcClientPool};
 use crate::headers::HeaderPropagationConfig;
-use crate::rest_connector::RestConnectorRegistry;
+use crate::rest_connector::{RestConnectorRegistry, RestFieldType, RestResponseSchema};
 use async_graphql::dynamic::{
     Enum, EnumItem, Field, FieldFuture, FieldValue, InputObject, InputValue, Object,
     ResolverContext, Scalar, Schema as AsyncSchema, Subscription, SubscriptionField,
@@ -491,11 +491,18 @@ impl SchemaBuilder {
         }
 
         // Add REST connector fields to schema
+        let mut rest_schemas = Vec::new();
+
         if let Some(ref rest_registry) = self.rest_connectors {
             let (rest_queries, rest_mutations) = rest_registry.build_graphql_fields();
+            let query_count = rest_queries.len();
+            let mutation_count = rest_mutations.len();
 
             // Add REST query fields
             for rest_field in rest_queries {
+                if let Some(schema) = &rest_field.response_schema {
+                    rest_schemas.push(schema.clone());
+                }
                 let field = build_rest_field(&rest_field);
                 let mut query = query_root.take().unwrap_or_else(|| Object::new("Query"));
                 query = query.field(field);
@@ -504,6 +511,9 @@ impl SchemaBuilder {
 
             // Add REST mutation fields
             for rest_field in rest_mutations {
+                if let Some(schema) = &rest_field.response_schema {
+                    rest_schemas.push(schema.clone());
+                }
                 let field = build_rest_field(&rest_field);
                 let mut mutation = mutation_root
                     .take()
@@ -514,8 +524,8 @@ impl SchemaBuilder {
 
             tracing::info!(
                 "Added {} REST query fields and {} REST mutation fields to schema",
-                rest_registry.build_graphql_fields().0.len(),
-                rest_registry.build_graphql_fields().1.len()
+                query_count,
+                mutation_count
             );
         }
 
@@ -534,6 +544,17 @@ impl SchemaBuilder {
             let json_scalar = Scalar::new("JSON")
                 .description("Arbitrary JSON value returned from REST APIs");
             schema_builder = schema_builder.register(json_scalar);
+
+            // Register typed REST objects
+            // Store unique types by name to avoid duplicates
+            let mut registered_types = std::collections::HashSet::new();
+            for schema in rest_schemas {
+                if !registered_types.contains(&schema.type_name) {
+                    let obj = build_rest_response_type(&schema);
+                    schema_builder = schema_builder.register(obj);
+                    registered_types.insert(schema.type_name.clone());
+                }
+            }
         }
 
         if self.federation {
@@ -713,9 +734,16 @@ fn build_rest_field(rest_field: &crate::rest_connector::RestGraphQLField) -> Fie
     let endpoint_name = rest_field.endpoint_name.clone();
     let parameters = rest_field.parameters.clone();
 
+    let return_type = if let Some(schema) = &rest_field.response_schema {
+        schema.type_name.clone()
+    } else {
+        "JSON".to_string()
+    };
+    let has_schema = rest_field.response_schema.is_some();
+
     let mut field = Field::new(
         field_name.clone(),
-        TypeRef::named("JSON"),
+        TypeRef::named(return_type),
         move |ctx: ResolverContext<'_>| {
             let connector = connector.clone();
             let endpoint_name = endpoint_name.clone();
@@ -734,9 +762,15 @@ fn build_rest_field(rest_field: &crate::rest_connector::RestGraphQLField) -> Fie
                 // Execute the REST endpoint
                 match connector.execute(&endpoint_name, args).await {
                     Ok(result) => {
-                        // Convert JSON to GraphQL value
-                        let gql_value = json_to_gql_value(result);
-                        Ok(Some(FieldValue::value(gql_value)))
+                        if has_schema {
+                            // For typed Objects, we return the raw JSON as an "any" value.
+                            // The field resolvers we built in build_rest_response_type will extract data from this.
+                            Ok(Some(FieldValue::owned_any(result)))
+                        } else {
+                            // Convert JSON to generic GraphQL value for JSON scalar
+                            let gql_value = json_to_gql_value(result);
+                            Ok(Some(FieldValue::value(gql_value)))
+                        }
                     }
                     Err(e) => Err(async_graphql::Error::new(format!(
                         "REST endpoint {} failed: {}",
@@ -819,6 +853,102 @@ fn json_to_gql_value(value: serde_json::Value) -> GqlValue {
                 .collect();
             GqlValue::Object(map)
         }
+    }
+}
+
+/// Build a GraphQL object type from a REST response schema
+fn build_rest_response_type(schema: &RestResponseSchema) -> Object {
+    let mut object = Object::new(&schema.type_name);
+
+    if let Some(desc) = &schema.description {
+        object = object.description(desc);
+    }
+
+    for field_def in &schema.fields {
+        let field_name = field_def.name.clone();
+        let field_type = field_def.field_type.clone();
+
+        let type_ref = if field_def.nullable {
+            TypeRef::named(field_type.to_type_ref())
+        } else {
+            TypeRef::named_nn(field_type.to_type_ref())
+        };
+
+        let mut field = Field::new(field_name.clone(), type_ref, move |ctx| {
+            let field_name = field_name.clone();
+            // Clone for the closure
+            let field_type = field_type.clone();
+
+            FieldFuture::new(async move {
+                let parent_value = ctx.parent_value.try_downcast_ref::<serde_json::Value>()?;
+                
+                let value = match parent_value {
+                    serde_json::Value::Object(map) => {
+                        map.get(&field_name).cloned().unwrap_or(serde_json::Value::Null)
+                    }
+                    _ => serde_json::Value::Null,
+                };
+
+                // For object types, we pass the JSON value as is (it becomes parent_value for nested fields)
+                // For scalar types, we convert to GqlValue
+                match field_type {
+                    RestFieldType::Object(_) | RestFieldType::List(_) => {
+                        Ok(Some(FieldValue::owned_any(value)))
+                    },
+                    _ => {
+                        let gql_value = json_to_gql_typed(value, &field_type);
+                        Ok(Some(FieldValue::value(gql_value)))
+                    }
+                }
+            })
+        });
+
+        if let Some(desc) = &field_def.description {
+            field = field.description(desc);
+        }
+
+        object = object.field(field);
+    }
+
+    object
+}
+
+/// Convert JSON to a typed GraphQL value
+fn json_to_gql_typed(value: serde_json::Value, field_type: &RestFieldType) -> GqlValue {
+    match (value, field_type) {
+        (serde_json::Value::Null, _) => GqlValue::Null,
+        (serde_json::Value::String(s), RestFieldType::String) => GqlValue::String(s),
+        // Allow automatic conversion for numbers/booleans to string if needed
+        (v, RestFieldType::String) => GqlValue::String(v.to_string()),
+        
+        (serde_json::Value::Number(n), RestFieldType::Int) => {
+            if let Some(i) = n.as_i64() {
+                GqlValue::Number(i.into())
+            } else {
+                GqlValue::Null
+            }
+        },
+        (serde_json::Value::Number(n), RestFieldType::Float) => {
+             if let Some(f) = n.as_f64() {
+                 match async_graphql::Number::from_f64(f) {
+                    Some(num) => GqlValue::Number(num),
+                    None => GqlValue::Number(0i64.into()),
+                }
+             } else {
+                 GqlValue::Null
+             }
+        },
+        (serde_json::Value::Bool(b), RestFieldType::Boolean) => GqlValue::Boolean(b),
+        
+        // For lists, we map each item. Logic implies recursion handled by resolver for objects 
+        // but for scalar lists we need to convert here
+        (serde_json::Value::Array(arr), RestFieldType::List(inner)) => {
+            GqlValue::List(arr.into_iter().map(|v| json_to_gql_typed(v, inner)).collect())
+        },
+        
+        // Objects are handled by returning the raw JSON as parent value for sub-resolvers
+        // But if this is called directly, we treat as generic conversion
+        (v, _) => json_to_gql_value(v),
     }
 }
 
