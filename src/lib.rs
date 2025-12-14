@@ -96,7 +96,11 @@ pub use gateway::{Gateway, GatewayBuilder};
 pub use grpc_client::GrpcClient;
 pub use health::{ComponentHealth, HealthResponse, HealthState, HealthStatus};
 pub use metrics::{GatewayMetrics, GrpcTimer, RequestTimer};
-pub use middleware::{Context, Middleware, RateLimitMiddleware};
+pub use middleware::{
+    AuthClaims, AuthConfig, AuthMiddleware, AuthScheme, Context, CorsMiddleware,
+    EnhancedAuthMiddleware, EnhancedLoggingMiddleware, LogLevel, LoggingConfig,
+    LoggingMiddleware, Middleware, MiddlewareChain, RateLimitMiddleware, TokenValidator,
+};
 pub use persisted_queries::{
     create_apq_store, process_apq_request, PersistedQueryConfig, PersistedQueryError,
     PersistedQueryExtension, PersistedQueryStore, SharedPersistedQueryStore,

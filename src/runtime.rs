@@ -160,9 +160,27 @@ impl ServeMux {
         headers: HeaderMap,
         request: async_graphql::Request,
     ) -> Result<async_graphql::Response> {
+        // Create context with request ID and timing info
         let mut ctx = Context {
             headers: headers.clone(),
             extensions: std::collections::HashMap::new(),
+            request_start: std::time::Instant::now(),
+            request_id: headers
+                .get("x-request-id")
+                .and_then(|v| v.to_str().ok())
+                .map(String::from)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            client_ip: headers
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.split(',').next())
+                .map(|s| s.trim().to_string())
+                .or_else(|| {
+                    headers
+                        .get("x-real-ip")
+                        .and_then(|v| v.to_str().ok())
+                        .map(String::from)
+                }),
         };
 
         for middleware in &self.middlewares {

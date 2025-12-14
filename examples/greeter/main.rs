@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use futures::StreamExt;
-use grpc_graphql_gateway::{Gateway, GrpcClient, HeaderPropagationConfig, Middleware, RateLimitMiddleware};
+use grpc_graphql_gateway::{
+    Gateway, GrpcClient, HeaderPropagationConfig, RateLimitMiddleware,
+    EnhancedLoggingMiddleware, LoggingConfig, LogLevel,
+};
 use tokio::fs;
 use tokio::sync::RwLock;
 use tokio_stream::wrappers::IntervalStream;
@@ -82,8 +85,13 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         .add_grpc_client("greeter.Greeter", client)
         // Add a rate limiter: 10 req/s with burst of 5
         .add_middleware(RateLimitMiddleware::new(10, 5))
-        // Add a simple custom middleware inline
-        .add_middleware(SimpleLoggingMiddleware)
+        // Add enhanced structured logging middleware
+        .add_middleware(EnhancedLoggingMiddleware::new(
+            LoggingConfig::default()
+                .with_level(LogLevel::Info)
+                .with_headers(true)
+                .mask_header("x-secret-key")  // Custom sensitive header
+        ))
         // Enable APQ for bandwidth optimization
         .with_persisted_queries(grpc_graphql_gateway::PersistedQueryConfig {
             cache_size: 100,
@@ -371,16 +379,4 @@ fn safe_filename(input: &str) -> String {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect()
-}
-
-#[derive(Clone)]
-struct SimpleLoggingMiddleware;
-
-#[async_trait::async_trait]
-impl Middleware for SimpleLoggingMiddleware {
-    async fn call(&self, ctx: &mut grpc_graphql_gateway::Context) -> grpc_graphql_gateway::Result<()> {
-        let ua = ctx.headers.get("user-agent").map(|v| v.to_str().unwrap_or("-")).unwrap_or("-");
-        tracing::info!("Custom Middleware: Request from User-Agent: {}", ua);
-        Ok(())
-    }
 }

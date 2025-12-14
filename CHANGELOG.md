@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2025-12-14
+
+### Added
+- **Enhanced Authentication Middleware**: Complete rewrite of the authentication system with production-ready features.
+  - `EnhancedAuthMiddleware` - New middleware with JWT support, claims extraction, and context enrichment
+  - `AuthConfig` - Configurable authentication with required/optional modes and scheme selection
+  - `AuthScheme` - Support for Bearer, Basic, ApiKey, and custom authentication schemes
+  - `AuthClaims` - Standardized JWT claims structure with roles, expiration, and custom claims
+  - `TokenValidator` - Trait for custom token validation logic
+  - Claims extraction with `has_role()` and `has_any_role()` helpers
+  - Automatic token expiration checking
+
+- **Enhanced Logging Middleware**: Production-ready structured logging with security features.
+  - `EnhancedLoggingMiddleware` - New middleware with configurable log levels and structured output
+  - `LoggingConfig` - Configure log level, header logging, sensitive data masking, and slow request detection
+  - `LogLevel` - Support for Trace, Debug, Info, Warn, and Error levels
+  - Sensitive header masking (authorization, cookies, API keys automatically redacted)
+  - Preset configurations: `LoggingConfig::minimal()` and `LoggingConfig::verbose()`
+  - Slow request threshold detection
+
+- **Improved Context**: Enhanced request context with observability features.
+  - `request_id` - Automatic UUID generation or extraction from `x-request-id` header
+  - `client_ip` - Client IP extraction from `x-forwarded-for` or `x-real-ip` headers
+  - `request_start` - Request timing for performance monitoring
+  - `user_id()` / `user_roles()` - Convenience methods for accessing auth context
+  - `elapsed()` - Get request duration
+  - `get_typed()` - Type-safe extension data retrieval
+
+- **Middleware Chain**: New `MiddlewareChain` struct for combining multiple middleware.
+  - Builder pattern for middleware composition
+  - Arc-wrapped middleware support
+
+- **Middleware Trait Improvements**: Added `name()` method for debugging and logging.
+
+### Changed
+- **AuthMiddleware** (backwards compatible): Added `new()`, `allow_all()`, and `require_token()` constructors.
+- **LoggingMiddleware** (backwards compatible): Now uses request ID in log output.
+- **RateLimitMiddleware**: Added `per_minute()` constructor and improved logging.
+
+### Security
+- Sensitive headers are automatically masked in logs (`authorization`, `x-api-key`, `cookie`, etc.)
+- Token expiration checking prevents use of expired credentials
+- Request ID propagation enables full request tracing across services
+
 ## [0.2.8] - 2025-12-13
 
 ### Added

@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -74,6 +74,9 @@ tracing-opentelemetry = "0.22"
 # Automatic Persisted Queries (APQ)
 sha2 = "0.10"
 hex = "0.4"
+
+# UUID for request ID generation
+uuid = { version = "1.0", features = ["v4"] }
 
 [features]
 default = []
