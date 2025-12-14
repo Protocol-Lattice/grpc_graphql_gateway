@@ -80,9 +80,56 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         .connect()
         .await?;
 
+    // Configure a REST connector for JSONPlaceholder (demo external API)
+    // This demonstrates hybrid gRPC/REST architecture
+    let jsonplaceholder_api = grpc_graphql_gateway::RestConnector::builder()
+        .base_url("https://jsonplaceholder.typicode.com")
+        .timeout(Duration::from_secs(10))
+        .default_header("Accept", "application/json")
+        // GET /posts/{id} - fetch a single post
+        .add_endpoint(grpc_graphql_gateway::RestEndpoint::new("getPost", "/posts/{id}")
+            .method(grpc_graphql_gateway::HttpMethod::GET)
+            .description("Fetch a post by ID from JSONPlaceholder")
+            .with_response_schema(grpc_graphql_gateway::RestResponseSchema::new("Post")
+                .field(grpc_graphql_gateway::RestResponseField::int("id"))
+                .field(grpc_graphql_gateway::RestResponseField::string("title"))
+                .field(grpc_graphql_gateway::RestResponseField::string("body"))
+                .field(grpc_graphql_gateway::RestResponseField::int("userId"))
+            ))
+        // GET /posts - list all posts
+        .add_endpoint(grpc_graphql_gateway::RestEndpoint::new("listPosts", "/posts")
+            .method(grpc_graphql_gateway::HttpMethod::GET)
+            .description("List all posts"))
+        // GET /users/{id} - fetch a user
+        .add_endpoint(grpc_graphql_gateway::RestEndpoint::new("getExternalUser", "/users/{id}")
+            .method(grpc_graphql_gateway::HttpMethod::GET)
+            .description("Fetch a user from external API"))
+        // POST /posts - create a new post
+        .add_endpoint(grpc_graphql_gateway::RestEndpoint::new("createPost", "/posts")
+            .method(grpc_graphql_gateway::HttpMethod::POST)
+            .body_template(r#"{"title": "{title}", "body": "{body}", "userId": {userId}}"#)
+            .description("Create a new post")
+            .with_response_schema(grpc_graphql_gateway::RestResponseSchema::new("Post")
+                .field(grpc_graphql_gateway::RestResponseField::int("id"))
+                .field(grpc_graphql_gateway::RestResponseField::string("title"))
+                .field(grpc_graphql_gateway::RestResponseField::string("body"))
+                .field(grpc_graphql_gateway::RestResponseField::int("userId"))
+            ))
+        // Enable caching for GET requests
+        .with_cache(100)
+        .build()?;
+
+    info!("REST connector configured for JSONPlaceholder API");
+    info!("  - getPost: GET /posts/{{id}}");
+    info!("  - listPosts: GET /posts");
+    info!("  - getExternalUser: GET /users/{{id}}");
+    info!("  - createPost: POST /posts");
+
     Gateway::builder()
         .with_descriptor_set_bytes(DESCRIPTORS)
         .add_grpc_client("greeter.Greeter", client)
+        // Add REST connector for external API integration
+        .add_rest_connector("jsonplaceholder", jsonplaceholder_api)
         // Add a rate limiter: 10 req/s with burst of 5
         .add_middleware(RateLimitMiddleware::new(10, 5))
         // Add enhanced structured logging middleware
@@ -148,6 +195,8 @@ fn print_examples(addr: SocketAddr) {
     //   {"id":"1","type":"subscribe","payload":{"query":"subscription { streamHello(name:\"GraphQL\"){ message } }"}}
     //   # server replies with {"type":"connection_ack"} then pushes data payloads.
     println!("Try these operations once the servers are up:");
+    println!();
+    println!("=== gRPC Backend (via GraphQL) ===");
     println!(
         "  query {{ hello(name:\"GraphQL\") {{ message meta {{ correlationId from {{ id displayName trusted }} }} }} }}"
     );
@@ -158,12 +207,29 @@ fn print_examples(addr: SocketAddr) {
         "  subscription {{ streamHello(name:\"GraphQL\") {{ message meta {{ correlationId }} }} }}"
     );
     println!("  query {{ user(id:\"demo\") {{ id displayName trusted }} }}");
+    println!();
+    println!("=== REST Connector (JSONPlaceholder API) ===");
+    println!("The gateway includes a REST connector for https://jsonplaceholder.typicode.com");
+    println!("You can execute REST endpoints programmatically via the connector:");
+    println!();
+    println!("  // In your resolver or middleware:");
+    println!("  let connector = gateway.rest_connectors().get(\"jsonplaceholder\").unwrap();");
+    println!("  let result = connector.execute(\"getPost\", args).await?;");
+    println!();
+    println!("Test the REST connector directly with curl:");
+    println!("  curl https://jsonplaceholder.typicode.com/posts/1");
+    println!("  curl https://jsonplaceholder.typicode.com/users/1");
+    println!();
+    println!("=== File Uploads ===");
     println!("  # Upload (multipart): see README for the curl example");
     println!("  # Multi-upload (multipart): see README for the curl example");
     println!();
     println!("NOTE: Query whitelisting is enabled in WARN mode.");
     println!("      Non-whitelisted queries will log warnings but still execute.");
     println!("      Set WhitelistMode::Enforce in production for strict security!");
+    println!();
+    println!("NOTE: REST connector is configured for JSONPlaceholder API demo.");
+    println!("      Use add_rest_connector() to integrate your own REST APIs!");
 }
 
 #[derive(Clone)]

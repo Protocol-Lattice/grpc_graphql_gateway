@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-12-14
+
+### Added
+- **REST API Connectors**: New `rest_connector` module for hybrid gRPC/REST GraphQL gateways.
+  - `RestConnector` - HTTP client with retry logic, caching, and interceptor support
+  - `RestConnectorBuilder` - Builder pattern for connector configuration
+  - `RestEndpoint` - Define REST endpoints with path templates, query params, and body templates
+  - **Typed Responses** - Define GraphQL schemas for REST endpoints to enable field selection (`RestResponseSchema`)
+  - **GraphQL Schema Integration** - REST endpoints automatically exposed as query/mutation fields
+  - `HttpMethod` - GET, POST, PUT, PATCH, DELETE support
+  - `RestConnectorRegistry` - Manage multiple REST connectors for different services
+  - `RetryConfig` - Configurable retry with exponential backoff
+  - `BearerAuthInterceptor` / `ApiKeyInterceptor` - Built-in authentication interceptors
+  - `ResponseTransformer` trait - Custom response transformation
+  - `RequestInterceptor` trait - Custom request modification (auth, headers, logging)
+  - JSONPath response extraction (e.g., `$.data.users`)
+  - Response caching for GET requests
+  - `add_rest_connector()` - New `GatewayBuilder` method
+
+### Features
+- **Hybrid Architecture**: Mix gRPC and REST backends in one GraphQL API
+- **Path Templates**: URL path parameters with `{variable}` syntax
+- **Body Templates**: Request body templating for POST/PUT/PATCH
+- **Query Parameters**: Templated query string construction
+- **Response Extraction**: JSONPath to extract nested data from responses
+- **Retry Logic**: Exponential backoff with configurable retry statuses
+- **Authentication**: Bearer token and API key interceptors included
+- **Caching**: Optional LRU cache for GET request responses
+
+### Use Cases
+- Gradual migration from REST to gRPC
+- Integrating third-party REST APIs into GraphQL schema
+- Bridging legacy REST services with modern gRPC backends
+- Multi-protocol microservices architectures
+
 ## [0.2.9] - 2025-12-14
 
 ### Added
