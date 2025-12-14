@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2025-12-14
+
+### Added
+- **OpenAPI to REST Connector**: New `openapi` module for automatically generating REST connectors from OpenAPI/Swagger specifications.
+  - `OpenApiParser` - Parse OpenAPI 3.0/3.1 and Swagger 2.0 specs
+  - `OpenApiSpec` - Parsed specification structure
+  - `Operation`, `Parameter`, `Response` - Operation metadata types
+  - Support for JSON and YAML formats (YAML requires `yaml` feature)
+  - Automatic endpoint generation from paths and operations
+  - Schema resolution for request bodies and response types
+  - Operation filtering by tags or custom predicates
+  - Base URL override for different environments
+
+### Features
+- **From File**: `OpenApiParser::from_file("openapi.yaml")?`
+- **From URL**: `OpenApiParser::from_url("https://api.example.com/openapi.json").await?`
+- **From String**: `OpenApiParser::from_string(json_str, false)?`
+- **Filtering**: `.with_tags(vec!["pets"])` or `.filter_operations(|id, _| id.starts_with("get"))`
+- **Prefix**: `.with_prefix("api_")` to namespace all operations
+
+### Example Usage
+```rust
+use grpc_graphql_gateway::{Gateway, OpenApiParser};
+
+// Parse OpenAPI spec and create REST connector
+let connector = OpenApiParser::from_file("petstore.yaml")?
+    .with_base_url("https://api.petstore.io/v2")
+    .with_tags(vec!["pets".to_string()])
+    .build()?;
+
+let gateway = Gateway::builder()
+    .add_rest_connector("petstore", connector)
+    .build()?;
+```
+
 ## [0.3.3] - 2025-12-14
 
 ### Added

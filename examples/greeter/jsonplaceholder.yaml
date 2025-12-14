@@ -1,0 +1,270 @@
+openapi: "3.0.3"
+info:
+  title: JSONPlaceholder API
+  description: Free fake API for testing and prototyping
+  version: "1.0.0"
+  contact:
+    url: https://jsonplaceholder.typicode.com
+
+servers:
+  - url: https://jsonplaceholder.typicode.com
+    description: Production server
+
+paths:
+  /posts:
+    get:
+      operationId: listPosts
+      summary: Get all posts
+      description: Returns a list of all posts
+      tags:
+        - posts
+      responses:
+        "200":
+          description: A list of posts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Post"
+    post:
+      operationId: createPost
+      summary: Create a new post
+      description: Creates a new post (fake, not persisted)
+      tags:
+        - posts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewPost"
+      responses:
+        "201":
+          description: Created post
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Post"
+
+  /posts/{id}:
+    get:
+      operationId: getPost
+      summary: Get a post by ID
+      description: Returns a single post
+      tags:
+        - posts
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Post ID
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: A post
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Post"
+
+  /users:
+    get:
+      operationId: listUsers
+      summary: Get all users
+      description: Returns a list of all users
+      tags:
+        - users
+      responses:
+        "200":
+          description: A list of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+
+  /users/{id}:
+    get:
+      operationId: getUser
+      summary: Get a user by ID
+      description: Returns a single user
+      tags:
+        - users
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: User ID
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: A user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /comments:
+    get:
+      operationId: listComments
+      summary: Get all comments
+      description: Returns a list of all comments
+      tags:
+        - comments
+      parameters:
+        - name: postId
+          in: query
+          required: false
+          description: Filter by post ID
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: A list of comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Comment"
+
+  /todos:
+    get:
+      operationId: listTodos
+      summary: Get all todos
+      description: Returns a list of all todos
+      tags:
+        - todos
+      parameters:
+        - name: userId
+          in: query
+          required: false
+          description: Filter by user ID
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: A list of todos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Todo"
+
+components:
+  schemas:
+    Post:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Post ID
+        userId:
+          type: integer
+          description: Author's user ID
+        title:
+          type: string
+          description: Post title
+        body:
+          type: string
+          description: Post content
+      required:
+        - id
+        - userId
+        - title
+        - body
+
+    NewPost:
+      type: object
+      properties:
+        userId:
+          type: integer
+          description: Author's user ID
+        title:
+          type: string
+          description: Post title
+        body:
+          type: string
+          description: Post content
+      required:
+        - userId
+        - title
+        - body
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: User ID
+        name:
+          type: string
+          description: Full name
+        username:
+          type: string
+          description: Username
+        email:
+          type: string
+          description: Email address
+        phone:
+          type: string
+          description: Phone number
+        website:
+          type: string
+          description: Website URL
+      required:
+        - id
+        - name
+        - username
+        - email
+
+    Comment:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Comment ID
+        postId:
+          type: integer
+          description: Post ID this comment belongs to
+        name:
+          type: string
+          description: Comment title
+        email:
+          type: string
+          description: Commenter's email
+        body:
+          type: string
+          description: Comment content
+      required:
+        - id
+        - postId
+        - name
+        - email
+        - body
+
+    Todo:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Todo ID
+        userId:
+          type: integer
+          description: User ID
+        title:
+          type: string
+          description: Todo title
+        completed:
+          type: boolean
+          description: Whether the todo is completed
+      required:
+        - id
+        - userId
+        - title
+        - completed

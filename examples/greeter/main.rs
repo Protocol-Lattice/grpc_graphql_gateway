@@ -80,50 +80,23 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         .connect()
         .await?;
 
-    // Configure a REST connector for JSONPlaceholder (demo external API)
-    // This demonstrates hybrid gRPC/REST architecture
-    let jsonplaceholder_api = grpc_graphql_gateway::RestConnector::builder()
-        .base_url("https://jsonplaceholder.typicode.com")
-        .timeout(Duration::from_secs(10))
-        .default_header("Accept", "application/json")
-        // GET /posts/{id} - fetch a single post
-        .add_endpoint(grpc_graphql_gateway::RestEndpoint::new("getPost", "/posts/{id}")
-            .method(grpc_graphql_gateway::HttpMethod::GET)
-            .description("Fetch a post by ID from JSONPlaceholder")
-            .with_response_schema(grpc_graphql_gateway::RestResponseSchema::new("Post")
-                .field(grpc_graphql_gateway::RestResponseField::int("id"))
-                .field(grpc_graphql_gateway::RestResponseField::string("title"))
-                .field(grpc_graphql_gateway::RestResponseField::string("body"))
-                .field(grpc_graphql_gateway::RestResponseField::int("userId"))
-            ))
-        // GET /posts - list all posts
-        .add_endpoint(grpc_graphql_gateway::RestEndpoint::new("listPosts", "/posts")
-            .method(grpc_graphql_gateway::HttpMethod::GET)
-            .description("List all posts"))
-        // GET /users/{id} - fetch a user
-        .add_endpoint(grpc_graphql_gateway::RestEndpoint::new("getExternalUser", "/users/{id}")
-            .method(grpc_graphql_gateway::HttpMethod::GET)
-            .description("Fetch a user from external API"))
-        // POST /posts - create a new post
-        .add_endpoint(grpc_graphql_gateway::RestEndpoint::new("createPost", "/posts")
-            .method(grpc_graphql_gateway::HttpMethod::POST)
-            .body_template(r#"{"title": "{title}", "body": "{body}", "userId": {userId}}"#)
-            .description("Create a new post")
-            .with_response_schema(grpc_graphql_gateway::RestResponseSchema::new("Post")
-                .field(grpc_graphql_gateway::RestResponseField::int("id"))
-                .field(grpc_graphql_gateway::RestResponseField::string("title"))
-                .field(grpc_graphql_gateway::RestResponseField::string("body"))
-                .field(grpc_graphql_gateway::RestResponseField::int("userId"))
-            ))
-        // Enable caching for GET requests
-        .with_cache(100)
-        .build()?;
+    // Configure a REST connector from OpenAPI spec (JSONPlaceholder API)
+    // This demonstrates the OpenAPI integration feature
+    // We embed the YAML at compile time to avoid path issues
+    const OPENAPI_YAML: &str = include_str!("jsonplaceholder.yaml");
+    
+    let jsonplaceholder_api = grpc_graphql_gateway::OpenApiParser::from_string(OPENAPI_YAML, true)
+        .expect("Failed to parse OpenAPI YAML")
+        .with_prefix("jp_")  // Prefix all operations with jp_ to namespace them
+        .with_tags(vec!["posts".to_string(), "users".to_string()])  // Only posts and users
+        .build()
+        .expect("Failed to build REST connector from OpenAPI spec");
 
-    info!("REST connector configured for JSONPlaceholder API");
-    info!("  - getPost: GET /posts/{{id}}");
-    info!("  - listPosts: GET /posts");
-    info!("  - getExternalUser: GET /users/{{id}}");
-    info!("  - createPost: POST /posts");
+    info!("REST connector configured from OpenAPI spec (jsonplaceholder.yaml)");
+    info!("Available operations:");
+    for (name, endpoint) in jsonplaceholder_api.endpoints() {
+        info!("  - {}: {:?} {}", name, endpoint.method, endpoint.path);
+    }
 
     Gateway::builder()
         .with_descriptor_set_bytes(DESCRIPTORS)
