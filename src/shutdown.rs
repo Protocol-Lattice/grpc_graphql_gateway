@@ -416,7 +416,7 @@ mod tests {
         };
         let coordinator = ShutdownCoordinator::new(config);
 
-        let mut state_rx = coordinator.watch_state();
+        let state_rx = coordinator.watch_state();
         assert_eq!(*state_rx.borrow(), ShutdownState::Running);
 
         coordinator.shutdown().await;

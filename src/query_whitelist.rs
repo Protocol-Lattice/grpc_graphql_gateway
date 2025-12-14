@@ -126,6 +126,9 @@ impl QueryWhitelistConfig {
     }
 
     /// Load allowed queries from a YAML file
+    /// 
+    /// Note: Requires the `yaml` feature to be enabled in Cargo.toml and
+    /// the `serde_yaml` dependency to be added.
     #[cfg(feature = "yaml")]
     pub fn from_yaml_file<P: AsRef<Path>>(path: P, mode: WhitelistMode) -> Result<Self, QueryWhitelistError> {
         let content = std::fs::read_to_string(path.as_ref())

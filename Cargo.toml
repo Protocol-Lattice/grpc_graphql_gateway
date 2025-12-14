@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -37,6 +37,7 @@ futures = "0.3"
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = { version = "0.9", optional = true }
 prost-types = "0.13"
 
 # Error handling
@@ -85,6 +86,7 @@ urlencoding = "2.1"
 [features]
 default = []
 otlp = ["opentelemetry-otlp"]
+yaml = ["serde_yaml"]
 
 [build-dependencies]
 tonic-build = "0.12"
