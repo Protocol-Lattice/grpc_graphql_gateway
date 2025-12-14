@@ -40,6 +40,7 @@
 - [Automatic Persisted Queries](./performance/apq.md)
 - [Circuit Breaker](./performance/circuit-breaker.md)
 - [Batch Queries](./performance/batch-queries.md)
+- [DataLoader](./performance/dataloader.md)
 
 # Production
 
