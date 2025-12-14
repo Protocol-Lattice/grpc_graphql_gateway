@@ -109,6 +109,8 @@ pub struct GatewayBuilder {
     query_whitelist_config: Option<crate::query_whitelist::QueryWhitelistConfig>,
     /// REST connector registry
     rest_connectors: RestConnectorRegistry,
+    /// Query analytics configuration
+    analytics_config: Option<crate::analytics::AnalyticsConfig>,
 }
 
 impl GatewayBuilder {
@@ -132,6 +134,7 @@ impl GatewayBuilder {
             header_propagation_config: None,
             query_whitelist_config: None,
             rest_connectors: RestConnectorRegistry::new(),
+            analytics_config: None,
         }
     }
 
@@ -938,6 +941,58 @@ impl GatewayBuilder {
         &self.rest_connectors
     }
 
+    /// Enable query analytics with the built-in dashboard.
+    ///
+    /// Query analytics provides comprehensive insights into your GraphQL API usage:
+    /// - **Most Used Queries**: Track which queries are most popular
+    /// - **Slowest Queries**: Identify performance bottlenecks
+    /// - **Error Patterns**: Analyze common errors and their causes
+    /// - **Field Usage**: See which fields are requested most often
+    ///
+    /// # Endpoints
+    ///
+    /// When enabled, the following endpoints are added:
+    /// - `GET /analytics` - Interactive analytics dashboard
+    /// - `GET /analytics/api` - JSON API for analytics data
+    /// - `POST /analytics/reset` - Reset all analytics data
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, AnalyticsConfig};
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .enable_analytics(AnalyticsConfig::default())
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Privacy-Conscious Configuration
+    ///
+    /// For production environments where query text should not be stored:
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, AnalyticsConfig};
+    ///
+    /// # fn example() { let _ =
+    /// Gateway::builder()
+    ///     .enable_analytics(AnalyticsConfig::production())
+    /// # ; }
+    /// ```
+    ///
+    /// # Preset Configurations
+    ///
+    /// - `AnalyticsConfig::default()` - Balanced settings for most use cases
+    /// - `AnalyticsConfig::production()` - Privacy-focused, shorter retention
+    /// - `AnalyticsConfig::development()` - Verbose, longer retention for debugging
+    pub fn enable_analytics(mut self, config: crate::analytics::AnalyticsConfig) -> Self {
+        self.analytics_config = Some(config);
+        self
+    }
+
     /// Build the gateway
     pub fn build(self) -> Result<Gateway> {
         let mut schema_builder = self.schema_builder;
@@ -1007,6 +1062,11 @@ impl GatewayBuilder {
         // Configure Query Whitelist
         if let Some(whitelist_config) = self.query_whitelist_config {
             mux.enable_query_whitelist(whitelist_config);
+        }
+
+        // Configure Analytics
+        if let Some(analytics_config) = self.analytics_config {
+            mux.enable_analytics(analytics_config);
         }
 
         Ok(Gateway {

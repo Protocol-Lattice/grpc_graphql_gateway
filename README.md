@@ -34,6 +34,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - 🏥 **Health Checks** - `/health` and `/ready` endpoints for Kubernetes liveness/readiness probes
 - 📊 **Prometheus Metrics** - `/metrics` endpoint with request counts, latencies, and error rates
 - 🔭 **OpenTelemetry Tracing** - Distributed tracing with GraphQL and gRPC span tracking
+- 📈 **Query Analytics Dashboard** - Built-in dashboard for query insights, performance analysis, and error tracking
 - 🛡️ **DoS Protection** - Query depth and complexity limiting to prevent expensive queries
 - 🔒 **Introspection Control** - Disable schema introspection in production for security
 - 🔐 **Query Whitelisting** - Restrict to pre-approved queries for maximum security (PCI-DSS compliant)
@@ -659,6 +660,87 @@ if is_production {
 }
 
 let gateway = builder.build()?;
+```
+
+### Query Analytics Dashboard
+
+Track and analyze your GraphQL API performance with the built-in analytics dashboard:
+
+```rust
+use grpc_graphql_gateway::{Gateway, AnalyticsConfig};
+
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    .enable_analytics(AnalyticsConfig::default())
+    .add_grpc_client("service", client)
+    .build()?;
+```
+
+**Endpoints:**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/analytics` | GET | Interactive dashboard UI |
+| `/analytics/api` | GET | JSON API for analytics data |
+| `/analytics/reset` | POST | Reset all analytics data |
+
+**Dashboard Features:**
+
+- 📈 **Most Used Queries** - Track which queries are executed most frequently
+- 🐢 **Slowest Queries** - Identify performance bottlenecks with latency metrics
+- 🚨 **Error Patterns** - Analyze common errors and their affected queries
+- 🎯 **Field Usage Statistics** - See which fields are requested most often
+- 📊 **Operation Distribution** - Visualize query/mutation/subscription breakdown
+- 💾 **Cache Hit Rate** - Monitor response cache effectiveness (if caching enabled)
+- ⏱️ **Uptime Tracking** - Server uptime display
+
+**Configuration Presets:**
+
+```rust
+// Balanced settings (default)
+.enable_analytics(AnalyticsConfig::default())
+
+// Privacy-focused for production (no query text stored)
+.enable_analytics(AnalyticsConfig::production())
+
+// Verbose for development (longer retention, more data)
+.enable_analytics(AnalyticsConfig::development())
+```
+
+**Custom Configuration:**
+
+```rust
+use grpc_graphql_gateway::AnalyticsConfig;
+use std::time::Duration;
+
+let config = AnalyticsConfig::new()
+    .max_queries(500)                           // Track up to 500 unique queries
+    .slow_query_threshold(Duration::from_secs(1)) // Flag queries > 1s as slow
+    .disable_query_text();                       // Don't store query text for privacy
+
+let gateway = Gateway::builder()
+    .enable_analytics(config)
+    .build()?;
+```
+
+**JSON API Response:**
+
+```json
+{
+  "timestamp": 1702576800,
+  "total_requests": 15420,
+  "total_errors": 23,
+  "avg_latency_ms": 45.3,
+  "requests_per_minute": 125.5,
+  "error_rate": 0.15,
+  "cache_hit_rate": 72.3,
+  "uptime_seconds": 86400,
+  "top_queries": [...],
+  "slowest_queries": [...],
+  "error_patterns": [...],
+  "top_fields": [...],
+  "requests_by_type": {"query": 14000, "mutation": 1400, "subscription": 20}
+}
 ```
 
 ### Automatic Persisted Queries (APQ)

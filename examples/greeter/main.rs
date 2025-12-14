@@ -8,7 +8,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use grpc_graphql_gateway::{
     Gateway, GrpcClient, HeaderPropagationConfig, RateLimitMiddleware,
-    EnhancedLoggingMiddleware, LoggingConfig, LogLevel,
+    EnhancedLoggingMiddleware, LoggingConfig, LogLevel, AnalyticsConfig,
 };
 use tokio::fs;
 use tokio::sync::RwLock;
@@ -176,6 +176,8 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
                 grpc_graphql_gateway::QueryWhitelistConfig::warn()
             })
         )
+        // Enable Query Analytics Dashboard
+        .enable_analytics(AnalyticsConfig::development())
         .serve(addr.to_string())
         .await?;
 
@@ -230,6 +232,11 @@ fn print_examples(addr: SocketAddr) {
     println!();
     println!("NOTE: REST connector is configured for JSONPlaceholder API demo.");
     println!("      Use add_rest_connector() to integrate your own REST APIs!");
+    println!();
+    println!("=== Query Analytics Dashboard ===");
+    println!("  Dashboard UI: http://{}/analytics", addr);
+    println!("  JSON API:     http://{}/analytics/api", addr);
+    println!("  Reset:        curl -X POST http://{}/analytics/reset", addr);
 }
 
 #[derive(Clone)]

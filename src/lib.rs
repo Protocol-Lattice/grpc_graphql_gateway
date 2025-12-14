@@ -53,6 +53,7 @@ pub mod graphql {
     include!("generated/graphql.rs");
 }
 
+pub mod analytics;
 pub mod cache;
 pub mod circuit_breaker;
 pub mod compression;
@@ -75,6 +76,10 @@ pub mod subscription;
 pub mod tracing_otel;
 pub mod types;
 
+pub use analytics::{
+    create_analytics, AnalyticsConfig, AnalyticsGuard, AnalyticsSnapshot, ErrorStats,
+    FieldStats, QueryAnalytics, QueryStats, SharedQueryAnalytics,
+};
 pub use cache::{
     create_response_cache, is_mutation, CacheConfig, CacheLookupResult, CacheStats,
     CachedResponse, ResponseCache, SharedResponseCache,
