@@ -46,6 +46,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - 🗜️ **Response Compression** - Automatic gzip/brotli compression for reduced bandwidth
 - 🔀 **Header Propagation** - Forward HTTP headers to gRPC backends for auth and tracing
 - 🧩 **Multi-Descriptor Support** - Combine multiple protobuf descriptor sets for schema stitching
+- 🌐 **REST API Connectors** - Hybrid gRPC/REST architectures with path templates, retry, and caching
 
 ## 🚀 Quick Start
 
@@ -53,7 +54,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 
 ```toml
 [dependencies]
-grpc_graphql_gateway = "0.2"
+grpc_graphql_gateway = "0.3.0"
 tokio = { version = "1", features = ["full"] }
 tonic = "0.12"
 ```
@@ -416,6 +417,60 @@ let gateway = Gateway::builder()
 - Duplicate file descriptors are automatically skipped
 - Services, types, and extensions from all descriptor sets are merged
 - GraphQL extensions (like `graphql.schema`, `graphql.field`) must be present in at least one descriptor set
+
+### REST API Connectors
+
+Build hybrid architectures that combine gRPC and REST backends in a single GraphQL API:
+
+```rust
+use grpc_graphql_gateway::{Gateway, RestConnector, RestEndpoint, HttpMethod, BearerAuthInterceptor};
+use std::time::Duration;
+use std::sync::Arc;
+
+// Configure a REST connector for an external API
+let users_api = RestConnector::builder()
+    .base_url("https://api.example.com")
+    .timeout(Duration::from_secs(30))
+    .default_header("Accept", "application/json")
+    .interceptor(Arc::new(BearerAuthInterceptor::new("your-token")))
+    .add_endpoint(RestEndpoint::new("getUser", "/users/{id}")
+        .method(HttpMethod::GET)
+        .response_path("$.data.user")
+        .description("Fetch a user by ID"))
+    .add_endpoint(RestEndpoint::new("createUser", "/users")
+        .method(HttpMethod::POST)
+        .body_template(r#"{"name": "{name}", "email": "{email}"}"#))
+    .with_cache(1000)  // Cache GET responses
+    .build()?;
+
+let gateway = Gateway::builder()
+    .with_descriptor_set_bytes(DESCRIPTORS)
+    // Add gRPC clients
+    .add_grpc_client("UserService", grpc_client)
+    // Add REST connectors
+    .add_rest_connector("users_api", users_api)
+    .build()?;
+```
+
+**Features:**
+
+| Feature | Description |
+|---------|-------------|
+| Path Templates | Use `{variable}` placeholders in URLs |
+| Body Templates | Template request bodies for POST/PUT/PATCH |
+| Response Extraction | JSONPath expressions to extract nested data |
+| Retry Logic | Exponential backoff with configurable retry statuses |
+| Authentication | Built-in Bearer and API Key interceptors |
+| Caching | LRU cache for GET request responses |
+
+**Use Cases:**
+
+| Scenario | Description |
+|----------|-------------|
+| Hybrid Architecture | Mix gRPC and REST backends in one GraphQL API |
+| Gradual Migration | Migrate from REST to gRPC incrementally |
+| Third-Party APIs | Integrate external REST APIs (Stripe, Twilio, etc.) |
+| Legacy Systems | Bridge legacy REST services with modern gRPC |
 
 ### DoS Protection (Query Limits)
 

@@ -67,6 +67,7 @@ pub mod metrics;
 pub mod middleware;
 pub mod persisted_queries;
 pub mod query_whitelist;
+pub mod rest_connector;
 pub mod runtime;
 pub mod schema;
 pub mod shutdown;
@@ -121,4 +122,8 @@ pub use subscription::{
     SubscriptionPayload, SubscriptionRegistry, SubscriptionResolver, SubscriptionState,
 };
 pub use tracing_otel::{init_tracer, shutdown_tracer, GraphQLSpan, GrpcSpan, TracingConfig};
-
+pub use rest_connector::{
+    ApiKeyInterceptor, BearerAuthInterceptor, DefaultTransformer, HttpMethod, RequestInterceptor,
+    ResponseTransformer, RestConnector, RestConnectorBuilder, RestConnectorConfig,
+    RestConnectorRegistry, RestEndpoint, RestGraphQLField, RestRequest, RestResponse, RetryConfig,
+};

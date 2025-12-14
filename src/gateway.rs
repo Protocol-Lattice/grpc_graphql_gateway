@@ -5,6 +5,7 @@ use crate::error::{GraphQLError, Result};
 use crate::grpc_client::{GrpcClient, GrpcClientPool};
 use crate::headers::HeaderPropagationConfig;
 use crate::middleware::Middleware;
+use crate::rest_connector::{RestConnector, RestConnectorRegistry};
 use crate::runtime::ServeMux;
 use crate::schema::{DynamicSchema, SchemaBuilder};
 use crate::shutdown::{run_with_graceful_shutdown, ShutdownConfig};
@@ -106,6 +107,8 @@ pub struct GatewayBuilder {
     header_propagation_config: Option<HeaderPropagationConfig>,
     /// Query whitelist configuration
     query_whitelist_config: Option<crate::query_whitelist::QueryWhitelistConfig>,
+    /// REST connector registry
+    rest_connectors: RestConnectorRegistry,
 }
 
 impl GatewayBuilder {
@@ -128,6 +131,7 @@ impl GatewayBuilder {
             compression_config: None,
             header_propagation_config: None,
             query_whitelist_config: None,
+            rest_connectors: RestConnectorRegistry::new(),
         }
     }
 
@@ -838,6 +842,102 @@ impl GatewayBuilder {
         self
     }
 
+    /// Add a REST API connector for hybrid gRPC/REST architectures.
+    ///
+    /// REST connectors allow you to resolve GraphQL fields from REST APIs
+    /// alongside gRPC services, enabling gradual migration or integration
+    /// with existing REST backends.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, RestConnector, RestEndpoint, HttpMethod};
+    /// use std::time::Duration;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let rest_connector = RestConnector::builder()
+    ///     .base_url("https://api.example.com")
+    ///     .timeout(Duration::from_secs(30))
+    ///     .default_header("Accept", "application/json")
+    ///     .add_endpoint(RestEndpoint::new("getUser", "/users/{id}")
+    ///         .method(HttpMethod::GET)
+    ///         .description("Fetch a user by ID"))
+    ///     .add_endpoint(RestEndpoint::new("createUser", "/users")
+    ///         .method(HttpMethod::POST)
+    ///         .body_template(r#"{"name": "{name}", "email": "{email}"}"#))
+    ///     .build()?;
+    ///
+    /// let gateway = Gateway::builder()
+    ///     .add_rest_connector("users_api", rest_connector)
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Multiple Connectors
+    ///
+    /// You can add multiple REST connectors for different services:
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, RestConnector, RestEndpoint};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let users_api = RestConnector::builder()
+    ///     .base_url("https://users.example.com")
+    ///     .add_endpoint(RestEndpoint::new("getUser", "/users/{id}"))
+    ///     .build()?;
+    ///
+    /// let products_api = RestConnector::builder()
+    ///     .base_url("https://products.example.com")
+    ///     .add_endpoint(RestEndpoint::new("listProducts", "/products"))
+    ///     .build()?;
+    ///
+    /// let gateway = Gateway::builder()
+    ///     .add_rest_connector("users", users_api)
+    ///     .add_rest_connector("products", products_api)
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Authentication
+    ///
+    /// Use interceptors for authentication:
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{RestConnector, RestEndpoint, BearerAuthInterceptor};
+    /// use std::sync::Arc;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let connector = RestConnector::builder()
+    ///     .base_url("https://api.example.com")
+    ///     .interceptor(Arc::new(BearerAuthInterceptor::new("your-token")))
+    ///     .add_endpoint(RestEndpoint::new("getUser", "/users/{id}"))
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Use Cases
+    ///
+    /// | Scenario | Description |
+    /// |----------|-------------|
+    /// | Hybrid Architecture | Mix gRPC and REST backends in one GraphQL API |
+    /// | Gradual Migration | Migrate from REST to gRPC incrementally |
+    /// | Third-Party APIs | Integrate external REST APIs into your schema |
+    /// | Legacy Systems | Bridge legacy REST services with modern gRPC |
+    pub fn add_rest_connector(mut self, name: impl Into<String>, connector: RestConnector) -> Self {
+        self.rest_connectors.register(name, connector);
+        self
+    }
+
+    /// Get a reference to the REST connector registry.
+    pub fn rest_connectors(&self) -> &RestConnectorRegistry {
+        &self.rest_connectors
+    }
+
     /// Build the gateway
     pub fn build(self) -> Result<Gateway> {
         let mut schema_builder = self.schema_builder;
@@ -849,6 +949,16 @@ impl GatewayBuilder {
         }
         if let Some(header_config) = self.header_propagation_config.as_ref() {
             schema_builder = schema_builder.with_header_propagation(header_config.clone());
+        }
+
+        // Pass REST connectors to schema builder for GraphQL field generation
+        if !self.rest_connectors.is_empty() {
+            let mut registry = crate::rest_connector::RestConnectorRegistry::new();
+            for (name, connector) in self.rest_connectors.connectors() {
+                // Clone the connector into the registry (dereference Arc)
+                registry.register(name.clone(), (**connector).clone());
+            }
+            schema_builder = schema_builder.with_rest_connectors(registry);
         }
 
         let schema = schema_builder.build(&self.client_pool)?;

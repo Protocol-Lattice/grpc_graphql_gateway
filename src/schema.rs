@@ -9,9 +9,10 @@ use crate::federation::{EntityResolver, FederationConfig, GrpcEntityResolver};
 use crate::graphql::{GraphqlField, GraphqlResponse, GraphqlSchema, GraphqlService, GraphqlType};
 use crate::grpc_client::{GrpcClient, GrpcClientPool};
 use crate::headers::HeaderPropagationConfig;
+use crate::rest_connector::RestConnectorRegistry;
 use async_graphql::dynamic::{
     Enum, EnumItem, Field, FieldFuture, FieldValue, InputObject, InputValue, Object,
-    ResolverContext, Schema as AsyncSchema, Subscription, SubscriptionField,
+    ResolverContext, Scalar, Schema as AsyncSchema, Subscription, SubscriptionField,
     SubscriptionFieldFuture, TypeRef,
 };
 use async_graphql::futures_util::StreamExt;
@@ -112,6 +113,8 @@ pub struct SchemaBuilder {
     introspection_disabled: bool,
     /// Header propagation config
     header_propagation_config: Option<HeaderPropagationConfig>,
+    /// REST connector registry for hybrid architectures
+    rest_connectors: Option<RestConnectorRegistry>,
 }
 
 impl SchemaBuilder {
@@ -126,6 +129,7 @@ impl SchemaBuilder {
             query_complexity_limit: None,
             introspection_disabled: false,
             header_propagation_config: None,
+            rest_connectors: None,
         }
     }
 
@@ -319,6 +323,36 @@ impl SchemaBuilder {
         self
     }
 
+    /// Add REST connectors for hybrid gRPC/REST architectures.
+    ///
+    /// This enables GraphQL fields to be generated from REST endpoints,
+    /// allowing queries and mutations to call REST APIs.
+    ///
+    /// GET endpoints become Query fields, POST/PUT/PATCH/DELETE become Mutations.
+    /// Field names are prefixed with the connector name: `{connector}_{endpoint}`
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{SchemaBuilder, RestConnector, RestEndpoint, RestConnectorRegistry};
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut registry = RestConnectorRegistry::new();
+    /// registry.register("users", RestConnector::builder()
+    ///     .base_url("https://api.example.com")
+    ///     .add_endpoint(RestEndpoint::new("getUser", "/users/{id}"))
+    ///     .build()?);
+    ///
+    /// let builder = SchemaBuilder::new()
+    ///     .with_rest_connectors(registry);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_rest_connectors(mut self, registry: RestConnectorRegistry) -> Self {
+        self.rest_connectors = Some(registry);
+        self
+    }
+
     /// Build the GraphQL schema from the provided descriptor sets.
     ///
     /// If multiple descriptor sets were added, they are merged into a unified
@@ -456,6 +490,35 @@ impl SchemaBuilder {
             }
         }
 
+        // Add REST connector fields to schema
+        if let Some(ref rest_registry) = self.rest_connectors {
+            let (rest_queries, rest_mutations) = rest_registry.build_graphql_fields();
+
+            // Add REST query fields
+            for rest_field in rest_queries {
+                let field = build_rest_field(&rest_field);
+                let mut query = query_root.take().unwrap_or_else(|| Object::new("Query"));
+                query = query.field(field);
+                query_root = Some(query);
+            }
+
+            // Add REST mutation fields
+            for rest_field in rest_mutations {
+                let field = build_rest_field(&rest_field);
+                let mut mutation = mutation_root
+                    .take()
+                    .unwrap_or_else(|| Object::new("Mutation"));
+                mutation = mutation.field(field);
+                mutation_root = Some(mutation);
+            }
+
+            tracing::info!(
+                "Added {} REST query fields and {} REST mutation fields to schema",
+                rest_registry.build_graphql_fields().0.len(),
+                rest_registry.build_graphql_fields().1.len()
+            );
+        }
+
         let query_root = query_root.unwrap_or_else(placeholder_query_root);
 
         let mut schema_builder = AsyncSchema::build(
@@ -465,6 +528,13 @@ impl SchemaBuilder {
         );
 
         schema_builder = schema_builder.enable_uploading();
+
+        // Register JSON scalar for REST connector responses
+        if self.rest_connectors.is_some() {
+            let json_scalar = Scalar::new("JSON")
+                .description("Arbitrary JSON value returned from REST APIs");
+            schema_builder = schema_builder.register(json_scalar);
+        }
 
         if self.federation {
             schema_builder = schema_builder.enable_federation();
@@ -632,6 +702,123 @@ impl SchemaBuilder {
 impl Default for SchemaBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Build a GraphQL field from a REST endpoint definition
+fn build_rest_field(rest_field: &crate::rest_connector::RestGraphQLField) -> Field {
+    let field_name = rest_field.name.clone();
+    let description = rest_field.description.clone();
+    let connector = rest_field.connector.clone();
+    let endpoint_name = rest_field.endpoint_name.clone();
+    let parameters = rest_field.parameters.clone();
+
+    let mut field = Field::new(
+        field_name.clone(),
+        TypeRef::named("JSON"),
+        move |ctx: ResolverContext<'_>| {
+            let connector = connector.clone();
+            let endpoint_name = endpoint_name.clone();
+            let parameters = parameters.clone();
+
+            FieldFuture::new(async move {
+                // Extract arguments from the context
+                let mut args = std::collections::HashMap::new();
+                for param in &parameters {
+                    if let Ok(accessor) = ctx.args.try_get(param.as_str()) {
+                        let json_value = gql_value_to_json(accessor.as_value().clone());
+                        args.insert(param.clone(), json_value);
+                    }
+                }
+
+                // Execute the REST endpoint
+                match connector.execute(&endpoint_name, args).await {
+                    Ok(result) => {
+                        // Convert JSON to GraphQL value
+                        let gql_value = json_to_gql_value(result);
+                        Ok(Some(FieldValue::value(gql_value)))
+                    }
+                    Err(e) => Err(async_graphql::Error::new(format!(
+                        "REST endpoint {} failed: {}",
+                        endpoint_name, e
+                    ))),
+                }
+            })
+        },
+    );
+
+    // Add description
+    field = field.description(description);
+
+    // Add arguments for each parameter
+    for param in &rest_field.parameters {
+        field = field.argument(InputValue::new(param.clone(), TypeRef::named("String")));
+    }
+
+    field
+}
+
+/// Convert a GraphQL value to JSON
+fn gql_value_to_json(value: GqlValue) -> serde_json::Value {
+    match value {
+        GqlValue::Null => serde_json::Value::Null,
+        GqlValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                serde_json::Value::Number(i.into())
+            } else if let Some(f) = n.as_f64() {
+                serde_json::Number::from_f64(f)
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null)
+            } else {
+                serde_json::Value::Null
+            }
+        }
+        GqlValue::String(s) => serde_json::Value::String(s),
+        GqlValue::Boolean(b) => serde_json::Value::Bool(b),
+        GqlValue::Enum(e) => serde_json::Value::String(e.to_string()),
+        GqlValue::List(arr) => {
+            serde_json::Value::Array(arr.into_iter().map(gql_value_to_json).collect())
+        }
+        GqlValue::Object(obj) => {
+            let map: serde_json::Map<String, serde_json::Value> = obj
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), gql_value_to_json(v)))
+                .collect();
+            serde_json::Value::Object(map)
+        }
+        GqlValue::Binary(b) => serde_json::Value::String(BASE64.encode(&b)),
+    }
+}
+
+/// Convert JSON to GraphQL value
+fn json_to_gql_value(value: serde_json::Value) -> GqlValue {
+    match value {
+        serde_json::Value::Null => GqlValue::Null,
+        serde_json::Value::Bool(b) => GqlValue::Boolean(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                GqlValue::Number(i.into())
+            } else if let Some(f) = n.as_f64() {
+                // from_f64 returns Option, unwrap with fallback to 0
+                match async_graphql::Number::from_f64(f) {
+                    Some(num) => GqlValue::Number(num),
+                    None => GqlValue::Number(0i64.into()),
+                }
+            } else {
+                GqlValue::Null
+            }
+        }
+        serde_json::Value::String(s) => GqlValue::String(s),
+        serde_json::Value::Array(arr) => {
+            GqlValue::List(arr.into_iter().map(json_to_gql_value).collect())
+        }
+        serde_json::Value::Object(obj) => {
+            let map: async_graphql::indexmap::IndexMap<Name, GqlValue> = obj
+                .into_iter()
+                .map(|(k, v)| (Name::new(k), json_to_gql_value(v)))
+                .collect();
+            GqlValue::Object(map)
+        }
     }
 }
 

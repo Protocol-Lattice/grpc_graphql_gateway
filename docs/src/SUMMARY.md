@@ -32,6 +32,7 @@
 - [Prometheus Metrics](./advanced/metrics.md)
 - [OpenTelemetry Tracing](./advanced/tracing.md)
 - [Introspection Control](./advanced/introspection.md)
+- [REST API Connectors](./advanced/rest-connectors.md)
 
 # Performance & Resilience
 
