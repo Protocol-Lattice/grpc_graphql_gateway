@@ -6,6 +6,17 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.2.9] - 2025-12-14
+
+**Enhanced Middleware & Auth System**
+
+- `EnhancedAuthMiddleware` - JWT support with claims extraction and context enrichment
+- `AuthConfig` - Required/optional modes with Bearer, Basic, ApiKey schemes
+- `EnhancedLoggingMiddleware` - Structured logging with sensitive data masking
+- `LoggingConfig` - Configurable log levels and slow request detection
+- Improved context with `request_id`, `client_ip`, and auth helpers
+- `MiddlewareChain` - Combine multiple middleware with builder pattern
+
 ### [0.2.8] - 2025-12-13
 
 **Query Whitelisting (Stored Operations)**
