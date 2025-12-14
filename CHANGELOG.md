@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2025-12-14
+
+### Added
+- **Request Collapsing**: New `request_collapsing` module for deduplicating identical gRPC calls.
+  - `RequestCollapsingConfig` - Configure coalesce window, max waiters, and cache size
+  - `RequestCollapsingRegistry` - Thread-safe registry for tracking in-flight requests
+  - `RequestKey` - SHA-256 based key generation for request identification
+  - `CollapseResult` - Leader/Follower/Passthrough result for request handling
+  - `RequestBroadcaster` - Broadcast results to waiting followers
+  - `RequestReceiver` - Wait for leader's result
+  - `CollapsingMetrics` - Track collapse ratio and request statistics
+  - `with_request_collapsing()` - New `GatewayBuilder` method to enable collapsing
+
+### Performance Benefits
+- **Reduced gRPC Calls**: Identical requests share a single backend call
+- **Concurrent Deduplication**: In-flight requests are automatically deduplicated
+- **Configurable Window**: Tune the coalesce window for your workload
+
+### How It Works
+When a GraphQL query contains multiple fields calling the same gRPC method:
+```graphql
+query {
+  user1: getUser(id: "1") { name }
+  user2: getUser(id: "2") { name }
+  user3: getUser(id: "1") { name }  # Duplicate of user1
+}
+```
+- Without collapsing: 3 gRPC calls
+- With collapsing: 2 gRPC calls (user1 and user3 share response)
+
+### Configuration Presets
+- `RequestCollapsingConfig::default()` - Balanced settings (50ms window, 100 max waiters)
+- `RequestCollapsingConfig::high_throughput()` - Longer window (100ms), more waiters
+- `RequestCollapsingConfig::low_latency()` - Shorter window (10ms) for speed
+- `RequestCollapsingConfig::disabled()` - Disable collapsing entirely
+
+### Metrics
+- `total_requests` - Total requests processed
+- `leader_requests` - Requests that executed the gRPC call
+- `collapsed_requests` - Requests that waited for a leader
+- `collapse_ratio` - Percentage of requests that were collapsed
+
 ## [0.3.2] - 2025-12-14
 
 ### Added

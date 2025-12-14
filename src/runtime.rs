@@ -13,6 +13,7 @@ use crate::persisted_queries::{
     process_apq_request, PersistedQueryConfig, PersistedQueryError, SharedPersistedQueryStore,
 };
 use crate::query_whitelist::{QueryWhitelistConfig, SharedQueryWhitelist};
+use crate::request_collapsing::{RequestCollapsingConfig, SharedRequestCollapsingRegistry};
 use crate::schema::{DynamicSchema, GrpcResponseCache};
 use async_graphql::ServerError;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
@@ -53,6 +54,8 @@ pub struct ServeMux {
     query_whitelist: Option<SharedQueryWhitelist>,
     /// Query analytics engine
     analytics: Option<SharedQueryAnalytics>,
+    /// Request collapsing registry for deduplication
+    request_collapsing: Option<SharedRequestCollapsingRegistry>,
 }
 
 impl ServeMux {
@@ -71,6 +74,7 @@ impl ServeMux {
             compression_config: None,
             query_whitelist: None,
             analytics: None,
+            request_collapsing: None,
         }
     }
 
@@ -142,6 +146,16 @@ impl ServeMux {
     /// Get the analytics engine (if enabled)
     pub fn analytics(&self) -> Option<&SharedQueryAnalytics> {
         self.analytics.as_ref()
+    }
+
+    /// Enable request collapsing for deduplicating identical gRPC calls
+    pub fn enable_request_collapsing(&mut self, config: RequestCollapsingConfig) {
+        self.request_collapsing = Some(crate::request_collapsing::create_request_collapsing_registry(config));
+    }
+
+    /// Get the request collapsing registry (if enabled)
+    pub fn request_collapsing(&self) -> Option<&SharedRequestCollapsingRegistry> {
+        self.request_collapsing.as_ref()
     }
 
     /// Add middleware to the execution pipeline
@@ -550,6 +564,7 @@ impl Clone for ServeMux {
             compression_config: self.compression_config.clone(),
             query_whitelist: self.query_whitelist.clone(),
             analytics: self.analytics.clone(),
+            request_collapsing: self.request_collapsing.clone(),
         }
     }
 }

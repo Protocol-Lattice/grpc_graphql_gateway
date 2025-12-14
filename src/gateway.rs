@@ -5,6 +5,7 @@ use crate::error::{GraphQLError, Result};
 use crate::grpc_client::{GrpcClient, GrpcClientPool};
 use crate::headers::HeaderPropagationConfig;
 use crate::middleware::Middleware;
+use crate::request_collapsing::RequestCollapsingConfig;
 use crate::rest_connector::{RestConnector, RestConnectorRegistry};
 use crate::runtime::ServeMux;
 use crate::schema::{DynamicSchema, SchemaBuilder};
@@ -111,6 +112,8 @@ pub struct GatewayBuilder {
     rest_connectors: RestConnectorRegistry,
     /// Query analytics configuration
     analytics_config: Option<crate::analytics::AnalyticsConfig>,
+    /// Request collapsing configuration
+    request_collapsing_config: Option<RequestCollapsingConfig>,
 }
 
 impl GatewayBuilder {
@@ -135,6 +138,7 @@ impl GatewayBuilder {
             query_whitelist_config: None,
             rest_connectors: RestConnectorRegistry::new(),
             analytics_config: None,
+            request_collapsing_config: None,
         }
     }
 
@@ -993,6 +997,82 @@ impl GatewayBuilder {
         self
     }
 
+    /// Enable request collapsing to deduplicate identical gRPC requests.
+    ///
+    /// Request collapsing detects when multiple GraphQL fields in the same query
+    /// would trigger identical gRPC calls and collapses them into a single call,
+    /// sharing the response across all requesting fields.
+    ///
+    /// # How It Works
+    ///
+    /// When a GraphQL query contains multiple fields calling the same gRPC method
+    /// with the same arguments:
+    ///
+    /// ```graphql
+    /// query {
+    ///   user1: getUser(id: "1") { name }
+    ///   user2: getUser(id: "2") { name }
+    ///   user3: getUser(id: "1") { name }  # Duplicate of user1
+    /// }
+    /// ```
+    ///
+    /// - **Without collapsing**: 3 gRPC calls
+    /// - **With collapsing**: 2 gRPC calls (user1 and user3 share the same response)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, RequestCollapsingConfig};
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .with_request_collapsing(RequestCollapsingConfig::default())
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Preset Configurations
+    ///
+    /// - `RequestCollapsingConfig::default()` - Balanced settings for most use cases
+    /// - `RequestCollapsingConfig::high_throughput()` - Longer coalesce window, more waiters
+    /// - `RequestCollapsingConfig::low_latency()` - Shorter coalesce window for speed
+    /// - `RequestCollapsingConfig::disabled()` - Disable collapsing entirely
+    ///
+    /// # Configuration Options
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::RequestCollapsingConfig;
+    /// use std::time::Duration;
+    ///
+    /// # fn example() {
+    /// let config = RequestCollapsingConfig::new()
+    ///     .coalesce_window(Duration::from_millis(100))  // Wait up to 100ms for in-flight
+    ///     .max_waiters(200)                             // Max 200 followers per leader
+    ///     .max_cache_size(20000);                       // Track up to 20k in-flight requests
+    /// # }
+    /// ```
+    ///
+    /// # When to Use
+    ///
+    /// Request collapsing is most effective when:
+    /// - Queries frequently request the same data with aliases
+    /// - High-traffic scenarios where concurrent requests are common
+    /// - DataLoader is not applicable (e.g., non-entity resolvers)
+    ///
+    /// # Relationship with Response Caching
+    ///
+    /// - **Response Cache**: Caches complete responses for TTL duration
+    /// - **Request Collapsing**: Deduplicates in-flight requests during execution
+    ///
+    /// Both features work together: collapsing handles concurrent requests,
+    /// while caching handles sequential repeated requests.
+    pub fn with_request_collapsing(mut self, config: RequestCollapsingConfig) -> Self {
+        self.request_collapsing_config = Some(config);
+        self
+    }
+
     /// Build the gateway
     pub fn build(self) -> Result<Gateway> {
         let mut schema_builder = self.schema_builder;
@@ -1067,6 +1147,11 @@ impl GatewayBuilder {
         // Configure Analytics
         if let Some(analytics_config) = self.analytics_config {
             mux.enable_analytics(analytics_config);
+        }
+
+        // Configure Request Collapsing
+        if let Some(collapsing_config) = self.request_collapsing_config {
+            mux.enable_request_collapsing(collapsing_config);
         }
 
         Ok(Gateway {
