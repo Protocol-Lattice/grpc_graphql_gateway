@@ -40,7 +40,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Circuit breaker state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,11 +246,7 @@ impl CircuitBreaker {
     fn open(&self) {
         let mut state = self.state.write().unwrap();
         *state = CircuitState::Open;
-        self.opened_at.store(
-            Instant::now().elapsed().as_millis() as u64,
-            Ordering::SeqCst,
-        );
-        // Store actual timestamp
+        // Store timestamp for recovery timeout tracking
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -603,7 +599,7 @@ mod tests {
         };
         let registry = CircuitBreakerRegistry::new(config);
 
-        let cb1 = registry.get_or_create("healthy");
+        let _cb1 = registry.get_or_create("healthy");
         let cb2 = registry.get_or_create("unhealthy");
 
         cb2.record_failure(); // Opens circuit
