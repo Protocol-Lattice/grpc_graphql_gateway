@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2025-12-14
+
+### Added
+- **Query Analytics Dashboard**: New `analytics` module for comprehensive query performance insights.
+  - `AnalyticsConfig` - Configure tracking limits, privacy settings, and retention period
+  - `QueryAnalytics` - Thread-safe analytics engine for collecting query metrics
+  - `AnalyticsSnapshot` - Point-in-time view of all analytics data
+  - `QueryStats` - Per-query statistics including execution count, latency, and error rate
+  - `FieldStats` - Track field-level usage across all queries
+  - `ErrorStats` - Error pattern analysis with affected query tracking
+  - `enable_analytics()` - New `GatewayBuilder` method to enable analytics
+  - `AnalyticsGuard` - RAII guard for automatic query timing
+
+### Dashboard Features
+- **Beautiful Dark Theme**: Modern, responsive dashboard with real-time updates
+- **Most Used Queries**: Track which queries are executed most frequently
+- **Slowest Queries**: Identify performance bottlenecks with latency metrics
+- **Error Patterns**: Analyze common errors and their affected queries
+- **Field Usage Statistics**: See which fields are requested most often
+- **Operation Distribution**: Visualize query/mutation/subscription breakdown
+- **Cache Hit Rate**: Monitor response cache effectiveness
+- **Uptime Tracking**: Server uptime display
+
+### Endpoints
+- `GET /analytics` - Interactive analytics dashboard
+- `GET /analytics/api` - JSON API for programmatic access
+- `POST /analytics/reset` - Reset all analytics data
+
+### Configuration Options
+- `AnalyticsConfig::default()` - Balanced settings for most use cases
+- `AnalyticsConfig::production()` - Privacy-focused (no query text), shorter retention
+- `AnalyticsConfig::development()` - Verbose tracking for debugging
+
+### Privacy
+- Optional query text tracking (disable for production privacy compliance)
+- Configurable retention periods for automatic data pruning
+- LRU eviction when limits are reached
+
+## [0.3.1] - 2025-12-14
+
+### Fixed
+- Minor bug fixes and performance improvements
+
+### Changed
+- Updated dependencies
+
 ## [0.3.0] - 2025-12-14
 
 ### Added

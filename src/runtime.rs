@@ -1,5 +1,6 @@
 //! Runtime support for GraphQL gateway - HTTP and WebSocket integration.
 
+use crate::analytics::{AnalyticsConfig, SharedQueryAnalytics};
 use crate::cache::{CacheConfig, CacheLookupResult, SharedResponseCache};
 use crate::circuit_breaker::{CircuitBreakerConfig, SharedCircuitBreakerRegistry};
 use crate::compression::{create_compression_layer, CompressionConfig};
@@ -18,12 +19,13 @@ use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use axum::{
     extract::State,
     http::HeaderMap,
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Json},
     routing::{get, get_service, post},
     Extension, Router,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// ServeMux - main gateway handler
 ///
@@ -49,6 +51,8 @@ pub struct ServeMux {
     compression_config: Option<CompressionConfig>,
     /// Query whitelist for security
     query_whitelist: Option<SharedQueryWhitelist>,
+    /// Query analytics engine
+    analytics: Option<SharedQueryAnalytics>,
 }
 
 impl ServeMux {
@@ -66,6 +70,7 @@ impl ServeMux {
             response_cache: None,
             compression_config: None,
             query_whitelist: None,
+            analytics: None,
         }
     }
 
@@ -127,6 +132,16 @@ impl ServeMux {
     /// Get the query whitelist (if enabled)
     pub fn query_whitelist(&self) -> Option<&SharedQueryWhitelist> {
         self.query_whitelist.as_ref()
+    }
+
+    /// Enable query analytics
+    pub fn enable_analytics(&mut self, config: AnalyticsConfig) {
+        self.analytics = Some(crate::analytics::create_analytics(config));
+    }
+
+    /// Get the analytics engine (if enabled)
+    pub fn analytics(&self) -> Option<&SharedQueryAnalytics> {
+        self.analytics.as_ref()
     }
 
     /// Add middleware to the execution pipeline
@@ -247,6 +262,12 @@ impl ServeMux {
 
         // Check if this is a mutation (mutations are never cached and trigger invalidation)
         let is_mutation = crate::cache::is_mutation(&processed_request.query);
+        let operation_type = if is_mutation { "mutation" } else { "query" };
+
+        // Store analytics info before processing
+        let analytics_query = processed_request.query.clone();
+        let analytics_op_name = processed_request.operation_name.clone();
+        let request_start = Instant::now();
 
         // Try cache lookup for non-mutations
         if !is_mutation {
@@ -260,16 +281,43 @@ impl ServeMux {
                 match cache.get(&cache_key) {
                     CacheLookupResult::Hit(cached) => {
                         tracing::debug!("Response cache hit");
+                        // Track cache hit in analytics
+                        if let Some(ref analytics) = self.analytics {
+                            analytics.record_cache_access(true);
+                            analytics.record_query(
+                                &analytics_query,
+                                analytics_op_name.as_deref(),
+                                operation_type,
+                                request_start.elapsed(),
+                                false,
+                                None,
+                            );
+                        }
                         return self.cached_to_response(cached.data);
                     }
                     CacheLookupResult::Stale(cached) => {
                         // Return stale immediately, could trigger background revalidation
                         // For simplicity, we just return stale data
                         tracing::debug!("Response cache stale hit");
+                        // Track stale hit as a hit
+                        if let Some(ref analytics) = self.analytics {
+                            analytics.record_cache_access(true);
+                            analytics.record_query(
+                                &analytics_query,
+                                analytics_op_name.as_deref(),
+                                operation_type,
+                                request_start.elapsed(),
+                                false,
+                                None,
+                            );
+                        }
                         return self.cached_to_response(cached.data);
                     }
                     CacheLookupResult::Miss => {
-                        // Continue to execute
+                        // Track cache miss
+                        if let Some(ref analytics) = self.analytics {
+                            analytics.record_cache_access(false);
+                        }
                     }
                 }
             }
@@ -289,6 +337,33 @@ impl ServeMux {
         // Execute the query
         match self.execute_with_middlewares(headers, processed_request).await {
             Ok(resp) => {
+                let duration = request_start.elapsed();
+                let had_error = !resp.errors.is_empty();
+                
+                // Track in analytics
+                if let Some(ref analytics) = self.analytics {
+                    let error_details = if had_error {
+                        resp.errors.first().map(|e| {
+                            let code = e.extensions.as_ref()
+                                .and_then(|ext| ext.get("code"))
+                                .map(|c| c.to_string())
+                                .unwrap_or_else(|| "GRAPHQL_ERROR".to_string());
+                            (code, e.message.clone())
+                        })
+                    } else {
+                        None
+                    };
+                    
+                    analytics.record_query(
+                        &analytics_query,
+                        analytics_op_name.as_deref(),
+                        operation_type,
+                        duration,
+                        had_error,
+                        error_details.as_ref().map(|(c, m)| (c.as_str(), m.as_str())),
+                    );
+                }
+
                 // Handle mutation cache invalidation
                 if is_mutation {
                     if let Some(ref cache) = self.response_cache {
@@ -316,7 +391,21 @@ impl ServeMux {
                 resp.into()
             }
             Err(err) => {
+                let duration = request_start.elapsed();
                 let gql_err: GraphQLError = err.into();
+                
+                // Track error in analytics
+                if let Some(ref analytics) = self.analytics {
+                    analytics.record_query(
+                        &analytics_query,
+                        analytics_op_name.as_deref(),
+                        operation_type,
+                        duration,
+                        true,
+                        Some(("INTERNAL_ERROR", &gql_err.message)),
+                    );
+                }
+                
                 if let Some(handler) = &self.error_handler {
                     handler(vec![gql_err.clone()]);
                 }
@@ -396,6 +485,7 @@ impl ServeMux {
     pub fn into_router(self) -> Router {
         let health_checks_enabled = self.health_checks_enabled;
         let metrics_enabled = self.metrics_enabled;
+        let analytics_enabled = self.analytics.is_some();
         let client_pool = self.client_pool.clone();
         let compression_config = self.compression_config.clone();
         
@@ -409,7 +499,7 @@ impl ServeMux {
             )
             .route_service("/graphql/ws", get_service(subscription))
             .layer(Extension(state.schema.executor()))
-            .with_state(state);
+            .with_state(state.clone());
 
         // Add compression layer if enabled
         if let Some(ref config) = compression_config {
@@ -433,6 +523,14 @@ impl ServeMux {
             router = router.route("/metrics", get(metrics_handler));
         }
 
+        // Add analytics routes if enabled
+        if analytics_enabled {
+            router = router
+                .route("/analytics", get(analytics_dashboard_handler))
+                .route("/analytics/api", get(analytics_api_handler).with_state(state.clone()))
+                .route("/analytics/reset", post(analytics_reset_handler).with_state(state));
+        }
+
         router
     }
 }
@@ -451,6 +549,7 @@ impl Clone for ServeMux {
             response_cache: self.response_cache.clone(),
             compression_config: self.compression_config.clone(),
             query_whitelist: self.query_whitelist.clone(),
+            analytics: self.analytics.clone(),
         }
     }
 }
@@ -539,6 +638,35 @@ async fn metrics_handler() -> impl IntoResponse {
         [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
         body,
     )
+}
+
+/// Handler for analytics dashboard HTML
+async fn analytics_dashboard_handler() -> impl IntoResponse {
+    Html(crate::analytics::analytics_dashboard_html())
+}
+
+/// Handler for analytics API endpoint (JSON)
+async fn analytics_api_handler(
+    State(mux): State<Arc<ServeMux>>,
+) -> impl IntoResponse {
+    if let Some(ref analytics) = mux.analytics {
+        let snapshot = analytics.get_snapshot();
+        Json(serde_json::to_value(snapshot).unwrap_or_else(|_| serde_json::json!({"error": "Failed to serialize analytics"})))
+    } else {
+        Json(serde_json::json!({"error": "Analytics not enabled"}))
+    }
+}
+
+/// Handler for analytics reset endpoint
+async fn analytics_reset_handler(
+    State(mux): State<Arc<ServeMux>>,
+) -> impl IntoResponse {
+    if let Some(ref analytics) = mux.analytics {
+        analytics.reset();
+        Json(serde_json::json!({"status": "ok", "message": "Analytics reset successfully"}))
+    } else {
+        Json(serde_json::json!({"error": "Analytics not enabled"}))
+    }
 }
 
 #[cfg(test)]
