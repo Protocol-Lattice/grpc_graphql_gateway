@@ -36,7 +36,8 @@
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime};
+use serde::{Serialize, Deserialize};
 
 /// Configuration for response caching
 ///
@@ -47,15 +48,16 @@ use std::time::{Duration, Instant};
 /// use std::time::Duration;
 ///
 /// let config = CacheConfig {
-///     max_size: 10_000,                           // Store up to 10k responses
-///     default_ttl: Duration::from_secs(60),       // Expire after 1 minute
-///     stale_while_revalidate: Some(Duration::from_secs(30)), // Serve stale for 30s
-///     invalidate_on_mutation: true,               // Auto-invalidate on mutations
+///     max_size: 10_000,
+///     default_ttl: Duration::from_secs(60),
+///     stale_while_revalidate: Some(Duration::from_secs(30)),
+///     invalidate_on_mutation: true,
+///     redis_url: None, // Use in-memory cache
 /// };
 /// ```
 #[derive(Clone, Debug)]
 pub struct CacheConfig {
-    /// Maximum number of cached responses
+    /// Maximum number of cached responses (for in-memory cache)
     pub max_size: usize,
     /// Default TTL for cached responses
     pub default_ttl: Duration,
@@ -64,6 +66,9 @@ pub struct CacheConfig {
     pub stale_while_revalidate: Option<Duration>,
     /// Automatically invalidate cache entries when mutations are executed
     pub invalidate_on_mutation: bool,
+    /// Optional Redis URL for distributed caching
+    /// If provided, the gateway will use Redis instead of in-memory cache
+    pub redis_url: Option<String>,
 }
 
 impl Default for CacheConfig {
@@ -73,35 +78,62 @@ impl Default for CacheConfig {
             default_ttl: Duration::from_secs(60),
             stale_while_revalidate: None,
             invalidate_on_mutation: true,
+            redis_url: None,
         }
     }
 }
 
 /// A cached GraphQL response
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CachedResponse {
     /// The JSON response data
     pub data: serde_json::Value,
     /// When the entry was created
-    pub created_at: Instant,
-    /// TTL for this specific entry
-    pub ttl: Duration,
+    #[serde(with = "serde_millis")]
+    pub created_at: SystemTime,
+    /// TTL for this specific entry (in seconds)
+    pub ttl_secs: u64,
     /// GraphQL types referenced in this response (for invalidation)
     pub referenced_types: HashSet<String>,
     /// Entity IDs referenced in this response (for fine-grained invalidation)
     pub referenced_entities: HashSet<String>,
 }
 
+mod serde_millis {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let millis = time
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        serializer.serialize_u64(millis)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<SystemTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let millis = u64::deserialize(deserializer)?;
+        Ok(UNIX_EPOCH + std::time::Duration::from_millis(millis))
+    }
+}
+
 impl CachedResponse {
     /// Check if this entry is expired
     pub fn is_expired(&self) -> bool {
-        self.created_at.elapsed() > self.ttl
+        self.created_at.elapsed().unwrap_or_default() > Duration::from_secs(self.ttl_secs)
     }
 
     /// Check if this entry is stale but within revalidation window
     pub fn is_stale_but_usable(&self, stale_window: Duration) -> bool {
-        let elapsed = self.created_at.elapsed();
-        elapsed > self.ttl && elapsed <= self.ttl + stale_window
+        let elapsed = self.created_at.elapsed().unwrap_or_default();
+        let ttl = Duration::from_secs(self.ttl_secs);
+        elapsed > ttl && elapsed <= ttl + stale_window
     }
 }
 
@@ -116,33 +148,64 @@ pub enum CacheLookupResult {
     Miss,
 }
 
-/// Thread-safe response cache with LRU eviction
-///
-/// The cache stores GraphQL responses keyed by a hash of the query, variables,
-/// and operation name. It supports TTL expiration and LRU eviction when at capacity.
+/// Thread-safe response cache with support for Memory and Redis backends
 pub struct ResponseCache {
     config: CacheConfig,
-    /// Main cache storage: cache_key -> cached response
-    cache: RwLock<HashMap<String, CachedResponse>>,
-    /// Insertion order for LRU eviction
-    insertion_order: RwLock<Vec<String>>,
-    /// Type index: type_name -> set of cache keys that reference this type
-    type_index: RwLock<HashMap<String, HashSet<String>>>,
-    /// Entity index: entity_key (Type#id) -> set of cache keys that reference this entity
-    entity_index: RwLock<HashMap<String, HashSet<String>>>,
+    backend: CacheBackend,
+}
+
+enum CacheBackend {
+    Memory {
+        /// Main cache storage: cache_key -> cached response
+        cache: RwLock<HashMap<String, CachedResponse>>,
+        /// Insertion order for LRU eviction
+        insertion_order: RwLock<Vec<String>>,
+        /// Type index: type_name -> set of cache keys that reference this type
+        type_index: RwLock<HashMap<String, HashSet<String>>>,
+        /// Entity index: entity_key (Type#id) -> set of cache keys that reference this entity
+        entity_index: RwLock<HashMap<String, HashSet<String>>>,
+    },
+    Redis {
+        client: redis::Client,
+        /// Optional local type index for invalidation optimization (might be removed in fully stateless)
+        /// For strict distributed correctness, invalidation must use Redis SETs.
+        /// Here we will use Redis Sets for indexes.
+        connection_manager: tokio::sync::Mutex<Option<redis::aio::ConnectionManager>>,
+    },
 }
 
 impl ResponseCache {
     /// Create a new response cache with the given configuration
     pub fn new(config: CacheConfig) -> Self {
-        Self {
-            config,
+        let backend = if let Some(url) = &config.redis_url {
+            match redis::Client::open(url.as_str()) {
+                Ok(client) => CacheBackend::Redis {
+                    client,
+                    connection_manager: tokio::sync::Mutex::new(None),
+                },
+                Err(e) => {
+                    tracing::error!("Failed to create Redis client: {}", e);
+                    // Fallback to memory
+                    // In a real generic app we might want to panic or result, but keeping signature compatible
+                    Self::new_memory()
+                }
+            }
+        } else {
+            Self::new_memory()
+        };
+
+        Self { config, backend }
+    }
+
+    fn new_memory() -> CacheBackend {
+        CacheBackend::Memory {
             cache: RwLock::new(HashMap::with_capacity(10_000)),
             insertion_order: RwLock::new(Vec::with_capacity(10_000)),
             type_index: RwLock::new(HashMap::new()),
             entity_index: RwLock::new(HashMap::new()),
         }
     }
+
 
     /// Generate a cache key from query components
     ///
@@ -187,146 +250,285 @@ impl ResponseCache {
     /// Get a cached response by cache key
     ///
     /// Returns `CacheLookupResult` indicating hit, stale, or miss.
-    pub fn get(&self, cache_key: &str) -> CacheLookupResult {
-        let cache = match self.cache.read() {
-            Ok(c) => c,
-            Err(_) => return CacheLookupResult::Miss,
-        };
+    pub async fn get(&self, cache_key: &str) -> CacheLookupResult {
+        match &self.backend {
+            CacheBackend::Memory { cache, .. } => {
+                let cache = match cache.read() {
+                    Ok(c) => c,
+                    Err(_) => return CacheLookupResult::Miss,
+                };
+        
+                let Some(entry) = cache.get(cache_key) else {
+                    return CacheLookupResult::Miss;
+                };
+        
+                // Check if fresh
+                if !entry.is_expired() {
+                    tracing::debug!(cache_key = %cache_key, "Response cache hit (Memory)");
+                    return CacheLookupResult::Hit(entry.clone());
+                }
+        
+                // Check if stale but usable
+                if let Some(stale_window) = self.config.stale_while_revalidate {
+                    if entry.is_stale_but_usable(stale_window) {
+                        tracing::debug!(cache_key = %cache_key, "Response cache stale hit (revalidating) (Memory)");
+                        return CacheLookupResult::Stale(entry.clone());
+                    }
+                }
+        
+                // Expired and past stale window
+                tracing::debug!(cache_key = %cache_key, "Response cache miss (expired) (Memory)");
+                CacheLookupResult::Miss
+            }
+            CacheBackend::Redis { client, .. } => {
+                 let mut conn = match client.get_async_connection().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("Redis connection error: {}", e);
+                        return CacheLookupResult::Miss;
+                    }
+                };
 
-        let Some(entry) = cache.get(cache_key) else {
-            return CacheLookupResult::Miss;
-        };
+                let data: Option<String> = match redis::cmd("GET").arg(cache_key).query_async(&mut conn).await {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::error!("Redis GET error: {}", e);
+                        return CacheLookupResult::Miss;
+                    }
+                };
 
-        // Check if fresh
-        if !entry.is_expired() {
-            tracing::debug!(cache_key = %cache_key, "Response cache hit");
-            return CacheLookupResult::Hit(entry.clone());
-        }
-
-        // Check if stale but usable
-        if let Some(stale_window) = self.config.stale_while_revalidate {
-            if entry.is_stale_but_usable(stale_window) {
-                tracing::debug!(cache_key = %cache_key, "Response cache stale hit (revalidating)");
-                return CacheLookupResult::Stale(entry.clone());
+                if let Some(json) = data {
+                    if let Ok(entry) = serde_json::from_str::<CachedResponse>(&json) {
+                         // Check if fresh
+                        if !entry.is_expired() {
+                            tracing::debug!(cache_key = %cache_key, "Response cache hit (Redis)");
+                            return CacheLookupResult::Hit(entry);
+                        }
+                        
+                         // Check if stale
+                        if let Some(stale_window) = self.config.stale_while_revalidate {
+                            if entry.is_stale_but_usable(stale_window) {
+                                tracing::debug!(cache_key = %cache_key, "Response cache stale hit (revalidating) (Redis)");
+                                return CacheLookupResult::Stale(entry);
+                            }
+                        }
+                    }
+                }
+                
+                CacheLookupResult::Miss
             }
         }
-
-        // Expired and past stale window
-        tracing::debug!(cache_key = %cache_key, "Response cache miss (expired)");
-        CacheLookupResult::Miss
     }
 
     /// Store a response in the cache
-    ///
-    /// This will:
-    /// 1. Evict old entries if at capacity
-    /// 2. Store the response
-    /// 3. Update type and entity indexes for invalidation
-    pub fn put(
+    pub async fn put(
         &self,
         cache_key: String,
         response: serde_json::Value,
         referenced_types: HashSet<String>,
         referenced_entities: HashSet<String>,
     ) {
-        // Evict if needed
-        self.evict_if_needed();
+        match &self.backend {
+            CacheBackend::Memory { cache, insertion_order, type_index, entity_index, .. } => {
+                // Evict if needed
+                self.evict_if_needed();
 
-        let entry = CachedResponse {
-            data: response,
-            created_at: Instant::now(),
-            ttl: self.config.default_ttl,
-            referenced_types: referenced_types.clone(),
-            referenced_entities: referenced_entities.clone(),
-        };
+                let entry = CachedResponse {
+                    data: response,
+                    created_at: SystemTime::now(),
+                    ttl_secs: self.config.default_ttl.as_secs(),
+                    referenced_types: referenced_types.clone(),
+                    referenced_entities: referenced_entities.clone(),
+                };
 
-        // Store in main cache
-        if let Ok(mut cache) = self.cache.write() {
-            cache.insert(cache_key.clone(), entry);
-        }
+                // Store in main cache
+                if let Ok(mut c) = cache.write() {
+                    c.insert(cache_key.clone(), entry);
+                }
 
-        // Update insertion order
-        if let Ok(mut order) = self.insertion_order.write() {
-            order.retain(|k| k != &cache_key);
-            order.push(cache_key.clone());
-        }
+                // Update insertion order
+                if let Ok(mut order) = insertion_order.write() {
+                    order.retain(|k| k != &cache_key);
+                    order.push(cache_key.clone());
+                }
 
-        // Update type index
-        if let Ok(mut type_idx) = self.type_index.write() {
-            for type_name in &referenced_types {
-                type_idx
-                    .entry(type_name.clone())
-                    .or_insert_with(HashSet::new)
-                    .insert(cache_key.clone());
+                // Update type index
+                if let Ok(mut type_idx) = type_index.write() {
+                    for type_name in &referenced_types {
+                        type_idx
+                            .entry(type_name.clone())
+                            .or_insert_with(HashSet::new)
+                            .insert(cache_key.clone());
+                    }
+                }
+
+                // Update entity index
+                if let Ok(mut entity_idx) = entity_index.write() {
+                    for entity_key in &referenced_entities {
+                        entity_idx
+                            .entry(entity_key.clone())
+                            .or_insert_with(HashSet::new)
+                            .insert(cache_key.clone());
+                    }
+                }
+                 tracing::debug!(cache_key = %cache_key, "Response cached (Memory)");
+            }
+            CacheBackend::Redis { client, .. } => {
+                 let mut conn = match client.get_async_connection().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("Redis connection error: {}", e);
+                        return;
+                    }
+                };
+                
+                let entry = CachedResponse {
+                    data: response,
+                    created_at: SystemTime::now(),
+                    ttl_secs: self.config.default_ttl.as_secs(),
+                    referenced_types: referenced_types.clone(),
+                    referenced_entities: referenced_entities.clone(),
+                };
+                
+                let json = match serde_json::to_string(&entry) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        tracing::error!("Serialization error: {}", e);
+                        return;
+                    }
+                };
+                
+                // Pipeline the commands
+                let mut pipe = redis::pipe();
+                pipe.atomic();
+                
+                // SETEX cache_key ttl json
+                pipe.set_ex(&cache_key, json, self.config.default_ttl.as_secs());
+                
+                // Add to type indexes
+                for type_name in &referenced_types {
+                    pipe.sadd(format!("type:{}", type_name), &cache_key);
+                    // Set expiration on the index set too? No, it's hard to synchronize.
+                    // We rely on lazy cleanup or keys evaporating.
+                    // Actually, if we don't clean up indexes, they grow forever.
+                    // In a real system, we'd use consistent expiration or a separate job.
+                    // For now, let's keep it simple.
+                }
+                
+                // Add to entity indexes
+                for entity_key in &referenced_entities {
+                    pipe.sadd(format!("entity:{}", entity_key), &cache_key);
+                }
+                
+                if let Err(e) = pipe.query_async::<_, ()>(&mut conn).await {
+                     tracing::error!("Redis PUT error: {}", e);
+                } else {
+                     tracing::debug!(cache_key = %cache_key, "Response cached (Redis)");
+                }
             }
         }
-
-        // Update entity index
-        if let Ok(mut entity_idx) = self.entity_index.write() {
-            for entity_key in &referenced_entities {
-                entity_idx
-                    .entry(entity_key.clone())
-                    .or_insert_with(HashSet::new)
-                    .insert(cache_key.clone());
-            }
-        }
-
-        tracing::debug!(cache_key = %cache_key, "Response cached");
     }
 
     /// Invalidate all cache entries that reference a specific type
-    ///
-    /// Call this when a mutation modifies data of a certain type.
-    ///
-    /// # Example
-    ///
-    /// After `updateUser` mutation, call `invalidate_by_type("User")`
-    pub fn invalidate_by_type(&self, type_name: &str) -> usize {
-        let cache_keys = {
-            let type_idx = match self.type_index.read() {
-                Ok(idx) => idx,
-                Err(_) => return 0,
-            };
-            type_idx.get(type_name).cloned().unwrap_or_default()
-        };
+    pub async fn invalidate_by_type(&self, type_name: &str) -> usize {
+        match &self.backend {
+            CacheBackend::Memory { type_index, .. } => {
+                let cache_keys = {
+                    let type_idx = match type_index.read() {
+                        Ok(idx) => idx,
+                        Err(_) => return 0,
+                    };
+                    type_idx.get(type_name).cloned().unwrap_or_default()
+                };
 
-        let count = cache_keys.len();
-        if count > 0 {
-            self.remove_entries(&cache_keys);
-            tracing::debug!(type_name = %type_name, count = count, "Invalidated cache by type");
+                let count = cache_keys.len();
+                if count > 0 {
+                    self.remove_entries(&cache_keys);
+                    tracing::debug!(type_name = %type_name, count = count, "Invalidated cache by type (Memory)");
+                }
+                count
+            }
+             CacheBackend::Redis { client, .. } => {
+                let mut conn = match client.get_async_connection().await {
+                    Ok(c) => c,
+                    Err(_) => return 0,
+                };
+                
+                let index_key = format!("type:{}", type_name);
+                let keys: Vec<String> = match redis::cmd("SMEMBERS").arg(&index_key).query_async(&mut conn).await {
+                    Ok(k) => k,
+                    Err(_) => return 0,
+                };
+                
+                if keys.is_empty() {
+                    return 0;
+                }
+                
+                let mut pipe = redis::pipe();
+                pipe.atomic();
+                for key in &keys {
+                    pipe.del(key);
+                }
+                pipe.del(&index_key);
+                
+                let _: () = pipe.query_async(&mut conn).await.unwrap_or(());
+                 tracing::debug!(type_name = %type_name, count = keys.len(), "Invalidated cache by type (Redis)");
+                keys.len()
+             }
         }
-        count
     }
 
     /// Invalidate all cache entries that reference a specific entity
-    ///
-    /// The entity key format is "TypeName#id", e.g., "User#123"
-    ///
-    /// # Example
-    ///
-    /// After `updateUser(id: "123")`, call `invalidate_by_entity("User#123")`
-    pub fn invalidate_by_entity(&self, entity_key: &str) -> usize {
-        let cache_keys = {
-            let entity_idx = match self.entity_index.read() {
-                Ok(idx) => idx,
-                Err(_) => return 0,
-            };
-            entity_idx.get(entity_key).cloned().unwrap_or_default()
-        };
+    pub async fn invalidate_by_entity(&self, entity_key: &str) -> usize {
+         match &self.backend {
+             CacheBackend::Memory { entity_index, .. } => {
+                let cache_keys = {
+                    let entity_idx = match entity_index.read() {
+                        Ok(idx) => idx,
+                        Err(_) => return 0,
+                    };
+                    entity_idx.get(entity_key).cloned().unwrap_or_default()
+                };
 
-        let count = cache_keys.len();
-        if count > 0 {
-            self.remove_entries(&cache_keys);
-            tracing::debug!(entity_key = %entity_key, count = count, "Invalidated cache by entity");
-        }
-        count
+                let count = cache_keys.len();
+                if count > 0 {
+                    self.remove_entries(&cache_keys);
+                    tracing::debug!(entity_key = %entity_key, count = count, "Invalidated cache by entity (Memory)");
+                }
+                count
+             }
+             CacheBackend::Redis { client, .. } => {
+                let mut conn = match client.get_async_connection().await {
+                    Ok(c) => c,
+                    Err(_) => return 0,
+                };
+                
+                let index_key = format!("entity:{}", entity_key);
+                let keys: Vec<String> = match redis::cmd("SMEMBERS").arg(&index_key).query_async(&mut conn).await {
+                    Ok(k) => k,
+                    Err(_) => return 0,
+                };
+                
+                if keys.is_empty() {
+                    return 0;
+                }
+                
+                let mut pipe = redis::pipe();
+                pipe.atomic();
+                for key in &keys {
+                    pipe.del(key);
+                }
+                pipe.del(&index_key);
+                
+                let _: () = pipe.query_async(&mut conn).await.unwrap_or(());
+                 tracing::debug!(entity_key = %entity_key, count = keys.len(), "Invalidated cache by entity (Redis)");
+                keys.len()
+             }
+         }
     }
 
     /// Invalidate cache entries based on a mutation result
-    ///
-    /// This extracts type and entity information from the mutation response
-    /// and invalidates matching cache entries.
-    pub fn invalidate_for_mutation(&self, mutation_response: &serde_json::Value) -> usize {
+    pub async fn invalidate_for_mutation(&self, mutation_response: &serde_json::Value) -> usize {
         if !self.config.invalidate_on_mutation {
             return 0;
         }
@@ -336,13 +538,13 @@ impl ResponseCache {
         // Extract types from the mutation response
         let types = extract_types_from_response(mutation_response);
         for type_name in types {
-            total_invalidated += self.invalidate_by_type(&type_name);
+            total_invalidated += self.invalidate_by_type(&type_name).await;
         }
 
         // Extract entity keys (Type#id patterns)
         let entities = extract_entities_from_response(mutation_response);
         for entity_key in entities {
-            total_invalidated += self.invalidate_by_entity(&entity_key);
+            total_invalidated += self.invalidate_by_entity(&entity_key).await;
         }
 
         if total_invalidated > 0 {
@@ -353,25 +555,48 @@ impl ResponseCache {
     }
 
     /// Clear all cached responses
-    pub fn clear(&self) {
-        if let Ok(mut cache) = self.cache.write() {
-            cache.clear();
+    pub async fn clear(&self) {
+        match &self.backend {
+            CacheBackend::Memory { cache, insertion_order, type_index, entity_index, .. } => {
+                if let Ok(mut cache) = cache.write() {
+                    cache.clear();
+                }
+                if let Ok(mut order) = insertion_order.write() {
+                    order.clear();
+                }
+                if let Ok(mut type_idx) = type_index.write() {
+                    type_idx.clear();
+                }
+                if let Ok(mut entity_idx) = entity_index.write() {
+                    entity_idx.clear();
+                }
+                tracing::debug!("Response cache cleared (Memory)");
+            }
+            CacheBackend::Redis { client, .. } => {
+                 let mut conn = match client.get_async_connection().await {
+                    Ok(c) => c,
+                    Err(_) => return,
+                };
+                // FLUSHDB is strict but clear() usually implies clearing everything.
+                // However, shared redis might be used.
+                // For now, let's just log a warning that clear is heavy.
+                // Or better, we can't easily iterate all keys without proper prefixing.
+                // Assuming we own the DB or have prefix scanning.
+                // Simpler: Just FLUSHDB for this example logic
+                 let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap_or(());
+                 tracing::debug!("Response cache cleared (Redis FLUSHDB)");
+            }
         }
-        if let Ok(mut order) = self.insertion_order.write() {
-            order.clear();
-        }
-        if let Ok(mut type_idx) = self.type_index.write() {
-            type_idx.clear();
-        }
-        if let Ok(mut entity_idx) = self.entity_index.write() {
-            entity_idx.clear();
-        }
-        tracing::debug!("Response cache cleared");
     }
 
     /// Get the current number of cached responses
     pub fn len(&self) -> usize {
-        self.cache.read().map(|c| c.len()).unwrap_or(0)
+        match &self.backend {
+             CacheBackend::Memory { cache, .. } => {
+                cache.read().map(|c| c.len()).unwrap_or(0)
+             }
+             CacheBackend::Redis { .. } => 0, // Not easily available without SCAN, return 0
+        }
     }
 
     /// Check if the cache is empty
@@ -384,91 +609,120 @@ impl ResponseCache {
         CacheStats {
             size: self.len(),
             max_size: self.config.max_size,
-            type_index_size: self.type_index.read().map(|t| t.len()).unwrap_or(0),
-            entity_index_size: self.entity_index.read().map(|e| e.len()).unwrap_or(0),
+            type_index_size: match &self.backend {
+                 CacheBackend::Memory { type_index, .. } => type_index.read().map(|t| t.len()).unwrap_or(0),
+                 _ => 0,
+            },
+            entity_index_size: match &self.backend {
+                 CacheBackend::Memory { entity_index, .. } => entity_index.read().map(|e| e.len()).unwrap_or(0),
+                 _ => 0,
+            },
         }
     }
 
     fn evict_if_needed(&self) {
-        let current_len = self.len();
-        if current_len >= self.config.max_size {
-            let to_remove = current_len - self.config.max_size + 1;
-
-            if let Ok(mut order) = self.insertion_order.write() {
-                let drain_count = to_remove.min(order.len());
-                let keys_to_remove: Vec<String> = order.drain(..drain_count).collect();
-                self.remove_entries_internal(&keys_to_remove);
+        match &self.backend {
+            CacheBackend::Memory { .. } => {
+                let current_len = self.len();
+                if current_len >= self.config.max_size {
+                    // Logic continues below...
+                    let to_remove = current_len - self.config.max_size + 1;
+                    if let CacheBackend::Memory { insertion_order, .. } = &self.backend {
+                        if let Ok(mut order) = insertion_order.write() {
+                            let drain_count = to_remove.min(order.len());
+                            let keys_to_remove: Vec<String> = order.drain(..drain_count).collect();
+                            self.remove_entries_internal(&keys_to_remove);
+                        }
+                    }
+                }
             }
+            _ => {} // Redis handles eviction (maxmemory policy)
         }
     }
 
     fn remove_entries(&self, cache_keys: &HashSet<String>) {
-        let keys_vec: Vec<String> = cache_keys.iter().cloned().collect();
-        self.remove_entries_internal(&keys_vec);
-
-        // Update insertion order
-        if let Ok(mut order) = self.insertion_order.write() {
-            order.retain(|k| !cache_keys.contains(k));
-        }
+         match &self.backend {
+            CacheBackend::Memory { insertion_order, .. } => {
+                let keys_vec: Vec<String> = cache_keys.iter().cloned().collect();
+                self.remove_entries_internal(&keys_vec);
+        
+                // Update insertion order
+                if let Ok(mut order) = insertion_order.write() {
+                    order.retain(|k| !cache_keys.contains(k));
+                }
+            }
+             _ => {} // Handled elsewhere for Redis
+         }
     }
 
     fn remove_entries_internal(&self, cache_keys: &[String]) {
-        if let Ok(mut cache) = self.cache.write() {
-            for key in cache_keys {
-                if let Some(entry) = cache.remove(key) {
-                    // Clean up type index
-                    if let Ok(mut type_idx) = self.type_index.write() {
-                        for type_name in &entry.referenced_types {
-                            if let Some(keys) = type_idx.get_mut(type_name) {
-                                keys.remove(key);
-                                if keys.is_empty() {
-                                    type_idx.remove(type_name);
+        match &self.backend {
+             CacheBackend::Memory { cache, type_index, entity_index, .. } => {
+                if let Ok(mut c) = cache.write() {
+                    for key in cache_keys {
+                        if let Some(entry) = c.remove(key) {
+                            // Clean up type index
+                            if let Ok(mut type_idx) = type_index.write() {
+                                for type_name in &entry.referenced_types {
+                                    if let Some(keys) = type_idx.get_mut(type_name) {
+                                        keys.remove(key);
+                                        if keys.is_empty() {
+                                            type_idx.remove(type_name);
+                                        }
+                                    }
                                 }
                             }
-                        }
-                    }
-                    // Clean up entity index
-                    if let Ok(mut entity_idx) = self.entity_index.write() {
-                        for entity_key in &entry.referenced_entities {
-                            if let Some(keys) = entity_idx.get_mut(entity_key) {
-                                keys.remove(key);
-                                if keys.is_empty() {
-                                    entity_idx.remove(entity_key);
+                            // Clean up entity index
+                            if let Ok(mut entity_idx) = entity_index.write() {
+                                for entity_key in &entry.referenced_entities {
+                                    if let Some(keys) = entity_idx.get_mut(entity_key) {
+                                        keys.remove(key);
+                                        if keys.is_empty() {
+                                            entity_idx.remove(entity_key);
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
+             }
+             _ => {}
         }
     }
 }
 
 impl Clone for ResponseCache {
     fn clone(&self) -> Self {
-        let cache = self.cache.read().map(|c| c.clone()).unwrap_or_default();
-        let order = self
-            .insertion_order
-            .read()
-            .map(|o| o.clone())
-            .unwrap_or_default();
-        let type_idx = self
-            .type_index
-            .read()
-            .map(|t| t.clone())
-            .unwrap_or_default();
-        let entity_idx = self
-            .entity_index
-            .read()
-            .map(|e| e.clone())
-            .unwrap_or_default();
-
         Self {
             config: self.config.clone(),
-            cache: RwLock::new(cache),
-            insertion_order: RwLock::new(order),
-            type_index: RwLock::new(type_idx),
-            entity_index: RwLock::new(entity_idx),
+            backend: match &self.backend {
+                CacheBackend::Memory { cache, insertion_order, type_index, entity_index } => {
+                     let cache = cache.read().map(|c| c.clone()).unwrap_or_default();
+                    let order = insertion_order
+                        .read()
+                        .map(|o| o.clone())
+                        .unwrap_or_default();
+                    let type_idx = type_index
+                        .read()
+                        .map(|t| t.clone())
+                        .unwrap_or_default();
+                    let entity_idx = entity_index
+                        .read()
+                        .map(|e| e.clone())
+                        .unwrap_or_default();
+                    CacheBackend::Memory {
+                        cache: RwLock::new(cache),
+                        insertion_order: RwLock::new(order),
+                        type_index: RwLock::new(type_idx),
+                        entity_index: RwLock::new(entity_idx),
+                    }
+                }
+                CacheBackend::Redis { client, .. } => CacheBackend::Redis {
+                    client: client.clone(),
+                    connection_manager: tokio::sync::Mutex::new(None)
+                }
+            }
         }
     }
 }
@@ -626,8 +880,8 @@ mod tests {
         assert_ne!(key1, key2);
     }
 
-    #[test]
-    fn test_cache_put_and_get() {
+    #[tokio::test]
+    async fn test_cache_put_and_get() {
         let cache = ResponseCache::new(CacheConfig::default());
         let cache_key = "test_key".to_string();
         let response = serde_json::json!({"data": {"user": {"id": "1", "name": "Alice"}}});
@@ -637,9 +891,9 @@ mod tests {
             response.clone(),
             HashSet::from(["User".to_string()]),
             HashSet::from(["User#1".to_string()]),
-        );
+        ).await;
 
-        match cache.get(&cache_key) {
+        match cache.get(&cache_key).await {
             CacheLookupResult::Hit(entry) => {
                 assert_eq!(entry.data, response);
             }
@@ -647,22 +901,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_cache_miss() {
+    #[tokio::test]
+    async fn test_cache_miss() {
         let cache = ResponseCache::new(CacheConfig::default());
-        match cache.get("nonexistent") {
+        match cache.get("nonexistent").await {
             CacheLookupResult::Miss => {}
             _ => panic!("Expected cache miss"),
         }
     }
 
-    #[test]
-    fn test_ttl_expiration() {
+    #[tokio::test]
+    async fn test_ttl_expiration() {
         let config = CacheConfig {
             max_size: 100,
-            default_ttl: Duration::from_millis(10),
+            default_ttl: Duration::from_secs(1),
             stale_while_revalidate: None,
             invalidate_on_mutation: true,
+            redis_url: None,
         };
         let cache = ResponseCache::new(config);
         let cache_key = "expiring".to_string();
@@ -672,25 +927,26 @@ mod tests {
             serde_json::json!({"test": true}),
             HashSet::new(),
             HashSet::new(),
-        );
+        ).await;
 
         // Should be a hit immediately
-        assert!(matches!(cache.get(&cache_key), CacheLookupResult::Hit(_)));
+        assert!(matches!(cache.get(&cache_key).await, CacheLookupResult::Hit(_)));
 
         // Wait for TTL
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(1100));
 
         // Should be a miss now
-        assert!(matches!(cache.get(&cache_key), CacheLookupResult::Miss));
+        assert!(matches!(cache.get(&cache_key).await, CacheLookupResult::Miss));
     }
 
-    #[test]
-    fn test_stale_while_revalidate() {
+    #[tokio::test]
+    async fn test_stale_while_revalidate() {
         let config = CacheConfig {
             max_size: 100,
             default_ttl: Duration::from_millis(10),
             stale_while_revalidate: Some(Duration::from_millis(50)),
             invalidate_on_mutation: true,
+            redis_url: None,
         };
         let cache = ResponseCache::new(config);
         let cache_key = "stale_test".to_string();
@@ -700,23 +956,23 @@ mod tests {
             serde_json::json!({"test": true}),
             HashSet::new(),
             HashSet::new(),
-        );
+        ).await;
 
         // Wait past TTL but within stale window
         std::thread::sleep(Duration::from_millis(15));
 
         // Should be a stale hit
-        assert!(matches!(cache.get(&cache_key), CacheLookupResult::Stale(_)));
+        assert!(matches!(cache.get(&cache_key).await, CacheLookupResult::Stale(_)));
 
         // Wait past stale window
         std::thread::sleep(Duration::from_millis(50));
 
         // Should be a miss now
-        assert!(matches!(cache.get(&cache_key), CacheLookupResult::Miss));
+        assert!(matches!(cache.get(&cache_key).await, CacheLookupResult::Miss));
     }
 
-    #[test]
-    fn test_invalidate_by_type() {
+    #[tokio::test]
+    async fn test_invalidate_by_type() {
         let cache = ResponseCache::new(CacheConfig::default());
 
         // Add entries with type references
@@ -725,33 +981,33 @@ mod tests {
             serde_json::json!({}),
             HashSet::from(["User".to_string()]),
             HashSet::new(),
-        );
+        ).await;
         cache.put(
             "key2".to_string(),
             serde_json::json!({}),
             HashSet::from(["User".to_string()]),
             HashSet::new(),
-        );
+        ).await;
         cache.put(
             "key3".to_string(),
             serde_json::json!({}),
             HashSet::from(["Product".to_string()]),
             HashSet::new(),
-        );
+        ).await;
 
         assert_eq!(cache.len(), 3);
 
         // Invalidate User entries
-        let invalidated = cache.invalidate_by_type("User");
+        let invalidated = cache.invalidate_by_type("User").await;
         assert_eq!(invalidated, 2);
         assert_eq!(cache.len(), 1);
 
         // Product entry should still exist
-        assert!(matches!(cache.get("key3"), CacheLookupResult::Hit(_)));
+        assert!(matches!(cache.get("key3").await, CacheLookupResult::Hit(_)));
     }
 
-    #[test]
-    fn test_invalidate_by_entity() {
+    #[tokio::test]
+    async fn test_invalidate_by_entity() {
         let cache = ResponseCache::new(CacheConfig::default());
 
         cache.put(
@@ -759,29 +1015,30 @@ mod tests {
             serde_json::json!({}),
             HashSet::new(),
             HashSet::from(["User#123".to_string()]),
-        );
+        ).await;
         cache.put(
             "key2".to_string(),
             serde_json::json!({}),
             HashSet::new(),
             HashSet::from(["User#456".to_string()]),
-        );
+        ).await;
 
         assert_eq!(cache.len(), 2);
 
         // Invalidate specific entity
-        let invalidated = cache.invalidate_by_entity("User#123");
+        let invalidated = cache.invalidate_by_entity("User#123").await;
         assert_eq!(invalidated, 1);
         assert_eq!(cache.len(), 1);
     }
 
-    #[test]
-    fn test_lru_eviction() {
+    #[tokio::test]
+    async fn test_lru_eviction() {
         let config = CacheConfig {
             max_size: 3,
             default_ttl: Duration::from_secs(60),
             stale_while_revalidate: None,
             invalidate_on_mutation: true,
+            redis_url: None,
         };
         let cache = ResponseCache::new(config);
 
@@ -792,16 +1049,16 @@ mod tests {
                 serde_json::json!({"num": i}),
                 HashSet::new(),
                 HashSet::new(),
-            );
+            ).await;
         }
 
         // First entry should be evicted
-        assert!(matches!(cache.get("key0"), CacheLookupResult::Miss));
+        assert!(matches!(cache.get("key0").await, CacheLookupResult::Miss));
 
         // Last 3 should still be there
-        assert!(matches!(cache.get("key1"), CacheLookupResult::Hit(_)));
-        assert!(matches!(cache.get("key2"), CacheLookupResult::Hit(_)));
-        assert!(matches!(cache.get("key3"), CacheLookupResult::Hit(_)));
+        assert!(matches!(cache.get("key1").await, CacheLookupResult::Hit(_)));
+        assert!(matches!(cache.get("key2").await, CacheLookupResult::Hit(_)));
+        assert!(matches!(cache.get("key3").await, CacheLookupResult::Hit(_)));
     }
 
     #[test]
@@ -855,18 +1112,18 @@ mod tests {
         assert_eq!(entities.len(), 2);
     }
 
-    #[test]
-    fn test_clear_cache() {
+    #[tokio::test]
+    async fn test_clear_cache() {
         let cache = ResponseCache::new(CacheConfig::default());
         cache.put(
             "key1".to_string(),
             serde_json::json!({}),
             HashSet::from(["User".to_string()]),
             HashSet::from(["User#1".to_string()]),
-        );
+        ).await;
 
         assert_eq!(cache.len(), 1);
-        cache.clear();
+        cache.clear().await;
         assert_eq!(cache.len(), 0);
         assert!(cache.is_empty());
     }

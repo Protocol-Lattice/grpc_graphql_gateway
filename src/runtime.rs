@@ -292,7 +292,7 @@ impl ServeMux {
                     processed_request.operation_name.as_deref(),
                 );
 
-                match cache.get(&cache_key) {
+                match cache.get(&cache_key).await {
                     CacheLookupResult::Hit(cached) => {
                         tracing::debug!("Response cache hit");
                         // Track cache hit in analytics
@@ -382,7 +382,7 @@ impl ServeMux {
                 if is_mutation {
                     if let Some(ref cache) = self.response_cache {
                         if let Ok(resp_json) = serde_json::to_value(&resp) {
-                            cache.invalidate_for_mutation(&resp_json);
+                            cache.invalidate_for_mutation(&resp_json).await;
                         }
                     }
                 } else if let Some((query, vars, op_name)) = cache_query_info {
@@ -398,7 +398,7 @@ impl ServeMux {
                             // Extract types and entities for invalidation tracking
                             let types = extract_types_from_response(&resp_json);
                             let entities = extract_entities_from_response(&resp_json);
-                            cache.put(cache_key, resp_json, types, entities);
+                            cache.put(cache_key, resp_json, types, entities).await;
                         }
                     }
                 }

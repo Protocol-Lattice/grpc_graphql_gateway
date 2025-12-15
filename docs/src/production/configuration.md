@@ -83,6 +83,7 @@ CacheConfig {
     default_ttl: Duration::from_secs(60),
     stale_while_revalidate: Some(Duration::from_secs(30)),
     invalidate_on_mutation: true,
+    redis_url: Some("redis://127.0.0.1:6379".to_string()),
 }
 ```
 
