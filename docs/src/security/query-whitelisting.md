@@ -362,6 +362,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## See Also
 
-- [Introspection Control](introspection.md) - Disabling schema introspection
+- [Introspection Control](../advanced/introspection.md) - Disabling schema introspection
 - [Automatic Persisted Queries](../performance/apq.md) - Bandwidth optimization
-- [DoS Protection](../advanced/dos-protection.md) - Query depth and complexity limits
+- [DoS Protection](./dos-protection.md) - Query depth and complexity limits
