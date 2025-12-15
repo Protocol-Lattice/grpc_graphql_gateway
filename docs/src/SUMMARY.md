@@ -23,6 +23,7 @@
 - [Extending Entities](./federation/extending-entities.md)
 - [Federation Directives](./federation/directives.md)
 - [Running with Apollo Router](./federation/apollo-router.md)
+- [GraphOS & Schema Registry](./federation/graphos.md)
 
 # Advanced Features
 

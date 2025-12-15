@@ -171,21 +171,9 @@ services:
 
 ## Continuous Composition
 
-For production, use Apollo GraphOS or a CI/CD pipeline:
+For production environments, we recommend using Apollo GraphOS for managed federation and continuous delivery.
 
-```bash
-#!/bin/bash
-# compose_supergraph.sh
-
-# Fetch schemas from running subgraphs
-rover supergraph compose --config supergraph.yaml --output supergraph.graphql
-
-# Validate the composition
-rover supergraph check --config supergraph.yaml
-
-# Publish to Apollo GraphOS (optional)
-rover supergraph publish my-graph@production --config supergraph.yaml
-```
+See the [GraphOS & Schema Registry](./graphos.md) guide for detailed instructions on publishing subgraphs and setting up CI/CD pipelines.
 
 ## Troubleshooting
 
