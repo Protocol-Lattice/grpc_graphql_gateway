@@ -25,10 +25,16 @@
 - [Running with Apollo Router](./federation/apollo-router.md)
 - [GraphOS & Schema Registry](./federation/graphos.md)
 
+# Security
+
+- [Authentication](./security/authentication.md)
+- [Authorization](./security/authorization.md)
+- [DoS Protection](./security/dos-protection.md)
+- [Query Whitelisting](./security/query-whitelisting.md)
+
 # Advanced Features
 
 - [Middleware](./advanced/middleware.md)
-- [DoS Protection](./advanced/dos-protection.md)
 - [Health Checks](./advanced/health-checks.md)
 - [Prometheus Metrics](./advanced/metrics.md)
 - [OpenTelemetry Tracing](./advanced/tracing.md)
@@ -48,7 +54,6 @@
 
 # Production
 
-- [Query Whitelisting](./production/query-whitelisting.md)
 - [Graceful Shutdown](./production/graceful-shutdown.md)
 - [Header Propagation](./production/header-propagation.md)
 - [Configuration Reference](./production/configuration.md)

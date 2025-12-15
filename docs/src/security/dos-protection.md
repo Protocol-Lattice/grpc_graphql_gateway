@@ -132,6 +132,6 @@ let gateway = Gateway::builder()
 
 ## Related Features
 
-- [Rate Limiting](./middleware.md) - Limit requests per time window
-- [Introspection Control](./introspection.md) - Disable schema discovery
+- [Rate Limiting](../advanced/middleware.md) - Limit requests per time window
+- [Introspection Control](../advanced/introspection.md) - Disable schema discovery
 - [Circuit Breaker](../performance/circuit-breaker.md) - Protect backend services
