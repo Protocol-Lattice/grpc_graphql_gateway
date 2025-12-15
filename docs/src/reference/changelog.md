@@ -6,6 +6,56 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.3.4] - 2025-12-14
+
+**OpenAPI to REST Connector**
+
+- `OpenApiParser` - Parse OpenAPI 3.0/3.1 and Swagger 2.0 specs
+- Support for JSON and YAML formats
+- Automatic endpoint generation from paths and operations
+- Operation filtering by tags or custom predicates
+- Base URL override for different environments
+
+### [0.3.3] - 2025-12-14
+
+**Request Collapsing**
+
+- `RequestCollapsingConfig` - Configure coalesce window, max waiters, and cache size
+- `RequestCollapsingRegistry` - Track in-flight requests for deduplication
+- Reduces gRPC calls by sharing responses for identical concurrent requests
+- Presets: `default()`, `high_throughput()`, `low_latency()`, `disabled()`
+- Metrics tracking: collapse ratio, leader/follower counts
+
+### [0.3.2] - 2025-12-14
+
+**Query Analytics Dashboard**
+
+- Beautiful dark-themed analytics dashboard at `/analytics`
+- Most used queries, slowest queries, error patterns tracking
+- Field usage statistics and operation distribution
+- Cache hit rate monitoring and uptime tracking
+- Privacy-focused production mode (no query text storage)
+- JSON API at `/analytics/api`
+
+### [0.3.1] - 2025-12-14
+
+**Bug Fixes**
+
+- Minor bug fixes and performance improvements
+- Updated dependencies
+
+### [0.3.0] - 2025-12-14
+
+**REST API Connectors**
+
+- `RestConnector` - HTTP client with retry logic, caching, and interceptor support
+- `RestEndpoint` - Define REST endpoints with path templates and body templates
+- Typed responses with `RestResponseSchema` for GraphQL field selection
+- `add_rest_connector()` - New `GatewayBuilder` method
+- Built-in interceptors: `BearerAuthInterceptor`, `ApiKeyInterceptor`
+- JSONPath response extraction (e.g., `$.data.users`)
+- Ideal for hybrid gRPC/REST architectures and gradual migrations
+
 ### [0.2.9] - 2025-12-14
 
 **Enhanced Middleware & Auth System**
