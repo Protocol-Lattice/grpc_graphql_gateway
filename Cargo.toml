@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -82,6 +82,10 @@ uuid = { version = "1.0", features = ["v4"] }
 # REST API Connector
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 urlencoding = "2.1"
+
+
+# Redis for distributed caching
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
 
 [features]
 default = []

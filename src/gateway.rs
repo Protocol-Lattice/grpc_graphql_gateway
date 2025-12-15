@@ -576,6 +576,7 @@ impl GatewayBuilder {
     /// - **Stale-While-Revalidate**: Serve stale content while refreshing in background
     /// - **Mutation Invalidation**: Automatically invalidate cache when mutations run
     /// - **Type/Entity Tracking**: Fine-grained invalidation by type or entity ID
+    /// - **Redis Support**: Distributed caching by setting `redis_url` in `CacheConfig`
     ///
     /// # Example
     ///
@@ -590,6 +591,7 @@ impl GatewayBuilder {
     ///         default_ttl: Duration::from_secs(60),          // 1 minute TTL
     ///         stale_while_revalidate: Some(Duration::from_secs(30)), // Serve stale for 30s
     ///         invalidate_on_mutation: true,                  // Auto-invalidate on mutations
+    ///         redis_url: Some("redis://127.0.0.1:6379".to_string()), // Use Redis
     ///     })
     ///     // ... other configuration
     /// #   ;
