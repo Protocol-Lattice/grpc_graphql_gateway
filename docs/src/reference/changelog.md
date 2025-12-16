@@ -6,6 +6,18 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.3.5] - 2025-12-16
+
+**Redis Distributed Cache Backend**
+
+- `CacheConfig.redis_url` - Configure Redis connection for distributed caching
+- Dual backend support: in-memory (single instance) or Redis (distributed)
+- Distributed cache invalidation across all gateway instances
+- Redis SETs for type and entity indexes (`type:{TypeName}`, `entity:{EntityKey}`)
+- TTL synchronization with Redis `SETEX`
+- Automatic fallback to in-memory cache on connection failure
+- Ideal for Kubernetes deployments and horizontal scaling
+
 ### [0.3.4] - 2025-12-14
 
 **OpenAPI to REST Connector**

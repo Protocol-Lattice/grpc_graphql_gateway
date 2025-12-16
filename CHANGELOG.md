@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2025-12-16
+
+### Added
+- **Redis Distributed Cache Backend**: New optional Redis backend for response caching, enabling horizontal scaling.
+  - `CacheConfig.redis_url` - Configure Redis connection URL for distributed caching
+  - `CacheBackend::Redis` - Redis-based cache storage with automatic connection management
+  - Redis SET/GET operations for cache entries with TTL expiration
+  - Redis SETs for type and entity indexes supporting distributed invalidation
+  - Atomic pipeline operations for efficient cache updates
+  - Automatic fallback to in-memory cache if Redis connection fails
+
+### Features
+- **Dual Backend Support**: Choose between in-memory (single instance) or Redis (distributed) caching
+- **Distributed Invalidation**: Type-based and entity-based cache invalidation works across all gateway instances
+- **Redis Index Sets**: `type:{TypeName}` and `entity:{EntityKey}` sets for efficient distributed invalidation
+- **TTL Synchronization**: Cache entries use Redis `SETEX` with configurable TTL
+- **Connection Resilience**: Graceful error handling with fallback behavior
+
+### Configuration
+```rust
+use grpc_graphql_gateway::CacheConfig;
+use std::time::Duration;
+
+// In-memory cache (default)
+let config = CacheConfig::default();
+
+// Redis-backed distributed cache
+let config = CacheConfig {
+    max_size: 10_000,
+    default_ttl: Duration::from_secs(60),
+    stale_while_revalidate: Some(Duration::from_secs(30)),
+    invalidate_on_mutation: true,
+    redis_url: Some("redis://localhost:6379".to_string()),
+};
+```
+
+### Use Cases
+- Horizontal scaling with multiple gateway instances sharing cached responses
+- Kubernetes deployments where pod instances need shared cache state
+- High-availability setups requiring cache consistency across replicas
+- Microservices architectures with centralized cache management
+
+### Dependencies
+- Added `redis` crate (0.24) with `tokio-comp` and `connection-manager` features
+
 ## [0.3.4] - 2025-12-14
 
 ### Added
