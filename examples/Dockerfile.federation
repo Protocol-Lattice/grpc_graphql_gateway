@@ -1,0 +1,72 @@
+# Federation-specific Dockerfile
+# Optimized for deploying individual subgraphs
+
+# ============================================
+# Stage 1: Builder
+# ============================================
+FROM rust:1.75-slim as builder
+
+WORKDIR /usr/src/app
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy project files
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY src ./src
+COPY examples ./examples
+COPY proto ./proto
+
+# Build federation binary
+RUN cargo build --release --bin federation
+
+# ============================================
+# Stage 2: Runtime
+# ============================================
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 gateway && \
+    mkdir -p /app/descriptors && \
+    mkdir -p /app/config && \
+    chown -R gateway:gateway /app
+
+WORKDIR /app
+
+# Copy binary
+COPY --from=builder /usr/src/app/target/release/federation /usr/local/bin/federation
+
+# Copy federation-specific files
+COPY --chown=gateway:gateway examples/federation/*.graphql /app/config/ 2>/dev/null || true
+COPY --chown=gateway:gateway examples/federation/*.yaml /app/config/ 2>/dev/null || true
+
+USER gateway
+
+# Expose ports for subgraphs
+# 8891: User subgraph
+# 8892: Product subgraph
+# 8893: Review subgraph
+# 50051-50053: gRPC ports
+# 9090: Metrics
+EXPOSE 8891 8892 8893 50051 50052 50053 9090
+
+# Health check - checks all subgraphs
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8891/health && \
+        curl -f http://localhost:8892/health && \
+        curl -f http://localhost:8893/health || exit 1
+
+# Run federation example
+CMD ["federation"]

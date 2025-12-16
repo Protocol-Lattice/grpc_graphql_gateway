@@ -1,0 +1,6 @@
+supergraph:
+  listen: 0.0.0.0:4000
+cors:
+  allow_any_origin: true
+include_subgraph_errors:
+  all: true

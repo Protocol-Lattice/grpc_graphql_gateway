@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Build artifacts
+target/
+*.o
+*.so
+*.a
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Testing
+tests/
+benches/
+
+# Helm
+helm/
+
+# Docker
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+
+# Misc
+.DS_Store
+tmp/
+*.log

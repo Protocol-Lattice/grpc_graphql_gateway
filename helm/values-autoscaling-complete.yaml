@@ -1,0 +1,100 @@
+# Complete Autoscaling Example
+# This demonstrates using both HPA and VPA with LoadBalancer
+
+# Enable LoadBalancer for external access
+loadBalancer:
+  enabled: true
+  # AWS Network Load Balancer
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+  externalTrafficPolicy: Local  # Preserve source IP
+  httpPort: 80
+  grpcPort: 50051
+  loadBalancerSourceRanges:
+    - "0.0.0.0/0"  # Allow from anywhere (restrict in production!)
+
+# Horizontal Pod Autoscaler (HPA)
+# Scales based on metrics
+autoscaling:
+  enabled: true
+  minReplicas: 5
+  maxReplicas: 50
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Vertical Pod Autoscaler (VPA)
+# Recommends and updates resource requests/limits
+verticalPodAutoscaler:
+  enabled: true
+  # Use "Off" mode to get recommendations without automatic updates
+  # This prevents VPA from conflicting with HPA
+  updateMode: "Off"  # Off, Initial, Recreate, Auto
+  minAllowed:
+    cpu: 250m
+    memory: 256Mi
+  maxAllowed:
+    cpu: 4000m
+    memory: 4Gi
+  controlledResources:
+    - cpu
+    - memory
+
+# Initial resource allocation
+# VPA will recommend adjustments based on actual usage
+resources:
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+  requests:
+    cpu: 1000m
+    memory: 1Gi
+
+# High availability configuration
+replicaCount: 5  # Ignored when HPA is enabled
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 3  # Always keep at least 3 pods running
+
+# Spread pods across availability zones
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values:
+                - us-east-1a
+                - us-east-1b
+                - us-east-1c
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+                - grpc-graphql-gateway
+        topologyKey: kubernetes.io/hostname
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - grpc-graphql-gateway
+          topologyKey: topology.kubernetes.io/zone
+
+# Service configuration for internal communication
+service:
+  type: ClusterIP
+  sessionAffinity: ClientIP
+
+# Ingress disabled (using LoadBalancer instead)
+ingress:
+  enabled: false
