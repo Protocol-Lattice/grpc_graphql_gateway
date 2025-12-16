@@ -159,6 +159,10 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         .enable_analytics(AnalyticsConfig::development())
         // Enable Request Collapsing for deduplicating identical gRPC calls
         .with_request_collapsing(grpc_graphql_gateway::RequestCollapsingConfig::default())
+        // Enable Health Checks for Kubernetes/production
+        .enable_health_checks()
+        // Enable Prometheus Metrics
+        .enable_metrics()
         .serve(addr.to_string())
         .await?;
 

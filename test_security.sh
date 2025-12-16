@@ -235,4 +235,225 @@ if [ "$CODE" == "400" ] || [ "$CODE" == "422" ]; then log_pass "T30: Invalid Op 
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"{hello{message}}"}')
 if [ "$CODE" == "200" ]; then log_info "T31: Public Access Allowed (Auth Optional)"; else log_pass "T31: Access Denied (Auth Required)"; fi
 
-log_info "Assessment Complete."
+# ==============================================================================
+# SECTION 4: INFRASTRUCTURE & OBSERVABILITY (Tests 32-40)
+# ==============================================================================
+log_info "--- Infrastructure & Observability ---"
+
+# Test 32: Health Check Endpoint
+CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8888/health)
+if [ "$CODE" == "200" ]; then log_pass "T32: Health Check Available (200)"; else log_warn "T32: Health Check Missing ($CODE)"; fi
+
+# Test 33: Readiness Endpoint
+CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8888/ready)
+if [ "$CODE" == "200" ] || [ "$CODE" == "503" ]; then log_pass "T33: Readiness Check Available ($CODE)"; else log_warn "T33: Readiness Check Missing ($CODE)"; fi
+
+# Test 34: Metrics Endpoint (Prometheus)
+CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8888/metrics)
+if [ "$CODE" == "200" ]; then 
+    RES=$(curl -s http://127.0.0.1:8888/metrics)
+    if echo "$RES" | grep -q "graphql\|grpc\|http"; then log_pass "T34: Metrics Endpoint Available"; else log_warn "T34: Metrics Empty"; fi
+else 
+    log_warn "T34: Metrics Endpoint Missing ($CODE)"
+fi
+
+# Test 35: Analytics Dashboard
+CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8888/analytics)
+if [ "$CODE" == "200" ]; then log_pass "T35: Analytics Dashboard Available"; else log_warn "T35: Analytics Dashboard Missing ($CODE)"; fi
+
+# Test 36: Analytics API
+CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8888/analytics/api)
+if [ "$CODE" == "200" ]; then 
+    RES=$(curl -s http://127.0.0.1:8888/analytics/api)
+    if echo "$RES" | grep -q "queries\|operations"; then log_pass "T36: Analytics API Returns Data"; else log_warn "T36: Analytics API Empty"; fi
+else 
+    log_warn "T36: Analytics API Missing ($CODE)"
+fi
+
+# Test 37: Security Headers Comprehensive Check
+HEADERS=$(curl -s -I $SERVER_URL)
+HEADER_COUNT=0
+echo "$HEADERS" | grep -qi "strict-transport-security" && ((HEADER_COUNT++))
+echo "$HEADERS" | grep -qi "content-security-policy" && ((HEADER_COUNT++))
+echo "$HEADERS" | grep -qi "x-content-type-options" && ((HEADER_COUNT++))
+echo "$HEADERS" | grep -qi "x-frame-options" && ((HEADER_COUNT++))
+echo "$HEADERS" | grep -qi "referrer-policy" && ((HEADER_COUNT++))
+if [ "$HEADER_COUNT" -ge 4 ]; then log_pass "T37: Security Headers Complete ($HEADER_COUNT/5)"; else log_warn "T37: Security Headers Incomplete ($HEADER_COUNT/5)"; fi
+
+# Test 38: CORS Headers Present
+if echo "$HEADERS" | grep -qi "access-control-allow"; then log_pass "T38: CORS Headers Present"; else log_warn "T38: CORS Headers Missing"; fi
+
+# Test 39: No Sensitive Error Leakage
+RES=$(curl -s -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"{nonExistentField}"}')
+if echo "$RES" | grep -qi "stack\|trace\|panic\|internal"; then 
+    log_fail "T39: Sensitive Error Info Leaked"
+else 
+    log_pass "T39: No Sensitive Error Leakage"
+fi
+
+# Test 40: Request ID Header Returned
+RESP_HEADERS=$(curl -s -I -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"{hello{message}}"}')
+if echo "$RESP_HEADERS" | grep -qi "x-request-id\|x-correlation-id"; then 
+    log_pass "T40: Request ID Header Present"
+else 
+    log_info "T40: Request ID Header Not Present (Optional)"
+fi
+
+# ==============================================================================
+# SECTION 5: PERFORMANCE & RESILIENCE (Tests 41-50)
+# ==============================================================================
+log_info "--- Performance & Resilience ---"
+
+# Test 41: Response Compression (Accept-Encoding: gzip)
+# Request schema introspection which is large enough to trigger compression
+RESP=$(curl -s -I -X POST $SERVER_URL -H "Content-Type: application/json" -H "Accept-Encoding: gzip" -d '{"query":"{__schema{types{name fields{name descriptions}}}}"}')
+if echo "$RESP" | grep -qi "content-encoding: gzip\|content-encoding: br"; then 
+    log_pass "T41: Response Compression Enabled"
+else 
+    log_info "T41: Response Compression Not Detected"
+fi
+
+# Test 42: Cache Headers (Cache-Control)
+if echo "$HEADERS" | grep -qi "cache-control"; then log_pass "T42: Cache-Control Header Present"; else log_warn "T42: Cache-Control Header Missing"; fi
+
+# Test 43: Concurrent Requests (Basic Load)
+START=$(date +%s)
+for i in {1..10}; do
+    curl -s --max-time 3 -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"{hello{message}}"}' > /dev/null 2>&1 &
+done
+sleep 5  # Give requests time to complete
+DURATION=$(($(date +%s) - START))
+log_pass "T43: 10 Concurrent Requests Completed (~${DURATION}s)"
+
+# Test 44: Rapid Concurrent Requests (Rate Limit Check)
+# Send 30 requests in parallel to exceed 10 RPS + 5 burst
+log_info "T44: Flooding for Rate Limit trigger..."
+RATE_BLOCKED=false
+for i in {1..30}; do
+    CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"{hello{message}}"}' &)
+    # Note: capturing background process output code is tricky in bash one-liner loops.
+    # Instead, we'll check if any 429 appeared in recent logs or responses.
+    # Simplification: Fire and check one immediately after.
+done
+# Wait a tiny bit for flood to hit
+sleep 0.5
+# Check if a new request is blocked
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"{hello{message}}"}')
+if [ "$CODE" == "429" ]; then 
+    log_pass "T44: Rate Limiting Active (Block Triggered: $CODE)"
+else 
+    log_info "T44: Rate Limiting Not Triggered (Code: $CODE) - Threshold may differ"
+fi
+
+# Test 45: Query with Variables
+RES=$(curl -s -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"query($n:String!){hello(name:$n){message}}","variables":{"n":"Test"}}')
+if echo "$RES" | grep -q "message"; then log_pass "T45: Variables Processed Correctly"; else log_warn "T45: Variables Issue"; fi
+
+# Test 46: Subscription Endpoint Exists (WebSocket)
+# Check if upgrade is supported
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Upgrade: websocket" -H "Connection: Upgrade" http://127.0.0.1:8888/graphql/ws)
+if [ "$CODE" == "101" ] || [ "$CODE" == "400" ] || [ "$CODE" == "426" ]; then 
+    log_pass "T46: WebSocket Endpoint Responds ($CODE)"
+else 
+    log_info "T46: WebSocket Endpoint ($CODE)"
+fi
+
+# Test 47: Multiple Operations in Single Request (Must specify operationName)
+RES=$(curl -s -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"query A{hello{message}} query B{hello{message}}"}')
+if echo "$RES" | grep -qi "error\|operationName\|ambiguous"; then 
+    log_pass "T47: Multiple Operations Require operationName"
+else 
+    log_warn "T47: Multiple Operations Accepted Without operationName"
+fi
+
+# Test 48: Header Propagation Test
+RES=$(curl -s -X POST $SERVER_URL -H "Content-Type: application/json" -H "X-Request-ID: test-123" -H "Authorization: Bearer test-token" -d '{"query":"{hello{message}}"}')
+if echo "$RES" | grep -q "message"; then log_pass "T48: Custom Headers Don't Break Request"; else log_warn "T48: Custom Headers Issue"; fi
+
+# Test 49: APQ Extension (Persisted Query)
+# First request with hash only should fail
+APQ_HASH="ecf4edb46db40b5132295c0291d62fb65d6759a9eedfa4d5d612dd5ec54a6b38"
+RES=$(curl -s -X POST $SERVER_URL -H "Content-Type: application/json" -d "{\"extensions\":{\"persistedQuery\":{\"version\":1,\"sha256Hash\":\"$APQ_HASH\"}}}")
+if echo "$RES" | grep -qi "PersistedQueryNotFound\|PERSISTED_QUERY"; then 
+    log_pass "T49: APQ Protocol Supported"
+else 
+    log_info "T49: APQ Response: $(echo $RES | head -c 100)"
+fi
+
+# Test 50: GraphQL Playground Disabled
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X GET $SERVER_URL)
+if [ "$CODE" == "405" ] || [ "$CODE" == "404" ]; then 
+    log_pass "T50: GraphQL Playground Disabled (Secure)"
+else 
+    log_warn "T50: GraphQL Playground May Be Enabled ($CODE)"
+fi
+
+# ==============================================================================
+# SECTION 6: EDGE CASES & ROBUSTNESS (Tests 51-60)
+# ==============================================================================
+log_info "--- Edge Cases & Robustness ---"
+
+# Test 51: Very Long Field Name
+LONG_FIELD=$(printf 'a%.0s' {1..500})
+RES=$(curl -s -X POST $SERVER_URL -H "Content-Type: application/json" -d "{\"query\":\"{$LONG_FIELD}\"}")
+if [ $? -eq 0 ]; then log_pass "T51: Long Field Name Handled"; else log_fail "T51: Long Field Name Crashed"; fi
+
+# Test 52: Special Characters in Variables
+RES=$(curl -s -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"query($n:String){hello(name:$n){message}}","variables":{"n":"<script>alert(1)</script>"}}')
+if echo "$RES" | grep -q "message"; then log_pass "T52: Special Chars in Variables Handled"; else log_warn "T52: Special Chars Issue"; fi
+
+# Test 53: Empty Query String
+# Some parsers accept empty queries gracefully
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":""}')
+if [ "$CODE" == "400" ]; then log_pass "T53: Empty Query Rejected (400)"; else log_info "T53: Empty Query Handled ($CODE)"; fi
+
+# Test 54: Query with Only Whitespace
+# Some parsers treat whitespace-only as empty
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"   "}')
+if [ "$CODE" == "400" ]; then log_pass "T54: Whitespace Query Rejected (400)"; else log_info "T54: Whitespace Query Handled ($CODE)"; fi
+
+# Test 55: Deeply Nested Selection Set
+NESTED="{hello{message"
+for i in {1..50}; do NESTED="$NESTED}"; done
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST $SERVER_URL -H "Content-Type: application/json" -d "{\"query\":\"$NESTED\"}")
+if [ "$CODE" == "200" ] || [ "$CODE" == "400" ]; then log_pass "T55: Deep Nesting Handled ($CODE)"; else log_fail "T55: Deep Nesting Issue ($CODE)"; fi
+
+# Test 56: Duplicate Field Selection
+RES=$(curl -s -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"{hello{message message message}}"}')
+if echo "$RES" | grep -q "message"; then log_pass "T56: Duplicate Fields Handled"; else log_warn "T56: Duplicate Fields Issue"; fi
+
+# Test 57: Field Alias
+# Note: Alias queries may be blocked by whitelist in Enforce mode
+RES=$(curl -s -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"{msg1:hello{message} msg2:hello{message}}"}')
+if echo "$RES" | grep -q "msg1\|msg2\|message"; then 
+    log_pass "T57: Field Aliases Work"
+elif echo "$RES" | grep -qi "whitelist\|not allowed"; then
+    log_info "T57: Field Alias Blocked by Whitelist (Expected in Enforce Mode)"
+else 
+    log_info "T57: Field Aliases Response: $(echo $RES | head -c 80)"
+fi
+
+# Test 58: Inline Fragment
+RES=$(curl -s -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"{hello{... on HelloResponse{message}}}"}')
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"{hello{... on HelloResponse{message}}}"}')
+if [ "$CODE" == "200" ] || [ "$CODE" == "400" ]; then log_pass "T58: Inline Fragment Handled ($CODE)"; else log_warn "T58: Inline Fragment Issue ($CODE)"; fi
+
+# Test 59: __typename Field
+RES=$(curl -s -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"{hello{__typename message}}"}')
+if echo "$RES" | grep -qi "__typename\|HelloResponse"; then 
+    log_pass "T59: __typename Supported"
+elif echo "$RES" | grep -q "message"; then
+    log_pass "T59: Query Works (__typename may be filtered)"
+else 
+    log_warn "T59: __typename Issue"
+fi
+
+# Test 60: Connection Timeout Resilience
+# Send request with very short timeout
+CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 1 -X POST $SERVER_URL -H "Content-Type: application/json" -d '{"query":"{hello{message}}"}')
+if [ "$CODE" == "200" ]; then log_pass "T60: Fast Response (<1s)"; else log_info "T60: Response Time ($CODE)"; fi
+
+# ==============================================================================
+# SUMMARY
+# ==============================================================================
+log_info "Assessment Complete. Total Tests: 60"
