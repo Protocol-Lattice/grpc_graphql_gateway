@@ -136,7 +136,7 @@ impl SchemaBuilder {
     /// Provide the primary descriptor set from bytes.
     ///
     /// This clears any existing descriptors and sets this as the primary descriptor.
-    /// Use [`add_descriptor_set_bytes`] to add additional descriptor sets.
+    /// Use [`Self::add_descriptor_set_bytes`] to add additional descriptor sets.
     ///
     /// # Example
     ///
@@ -179,7 +179,7 @@ impl SchemaBuilder {
     /// Provide the primary descriptor set from a file.
     ///
     /// This clears any existing descriptors and sets this as the primary descriptor.
-    /// Use [`add_descriptor_set_file`] to add additional descriptor sets.
+    /// Use [`Self::add_descriptor_set_file`] to add additional descriptor sets.
     pub fn with_descriptor_set_file(mut self, path: impl AsRef<Path>) -> Result<Self> {
         let data = std::fs::read(path).map_err(Error::Io)?;
         self.descriptor_sets.clear();

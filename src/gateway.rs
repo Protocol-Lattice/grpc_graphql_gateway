@@ -173,7 +173,7 @@ impl GatewayBuilder {
     /// Provide the primary protobuf descriptor set (bytes).
     ///
     /// This clears any existing descriptors and sets this as the primary.
-    /// Use [`add_descriptor_set_bytes`] to add additional descriptor sets for schema stitching.
+    /// Use [`Self::add_descriptor_set_bytes`] to add additional descriptor sets for schema stitching.
     ///
     /// # Example
     ///
@@ -249,7 +249,7 @@ impl GatewayBuilder {
     /// Provide the primary protobuf descriptor set file.
     ///
     /// This clears any existing descriptors and sets this as the primary.
-    /// Use [`add_descriptor_set_file`] to add additional descriptor sets.
+    /// Use [`Self::add_descriptor_set_file`] to add additional descriptor sets.
     pub fn with_descriptor_set_file(mut self, path: impl AsRef<Path>) -> Result<Self> {
         self.schema_builder = self.schema_builder.with_descriptor_set_file(path)?;
         Ok(self)
