@@ -57,7 +57,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 
 ### 🦀 Fastest Rust GraphQL Implementation
 
-Your gateway is **the fastest Rust GraphQL implementation** measured:
+The gateway is **the fastest Rust GraphQL implementation** measured:
 
 ```
 Performance Rankings (Rust only):
