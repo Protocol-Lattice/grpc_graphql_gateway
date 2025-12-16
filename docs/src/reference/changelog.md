@@ -6,6 +6,20 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.3.8] - 2025-12-16
+
+**Helm & Kubernetes Deployment**
+
+- Production-ready Helm chart (`helm/grpc-graphql-gateway/`)
+- Docker multi-stage builds for optimized images
+- HPA (Horizontal Pod Autoscaler) support (5-50 pods)
+- VPA (Vertical Pod Autoscaler) resource recommendations
+- Federation deployment script (`deploy-federation.sh`)
+- Docker Compose for local federation testing
+- AWS/GCP LoadBalancer annotations support
+- Comprehensive deployment guides (`DEPLOYMENT.md`, `ARCHITECTURE.md`)
+- Fixed rustdoc intra-doc links for docs.rs compatibility
+
 ### [0.3.7] - 2025-12-16
 
 **Production Security Hardening**

@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2025-12-16
+
+### Added
+- **Helm Chart Deployment**: Production-ready Kubernetes deployment via Helm charts.
+  - `helm/grpc-graphql-gateway/` - Complete Helm chart with templates for deployment, service, HPA, VPA, and LoadBalancer
+  - `deploy-federation.sh` - One-click deployment script for federated architecture (3 subgraphs)
+  - `validate-chart.sh` - Chart validation and packaging script
+  - Pre-configured values files for autoscaling and federation scenarios
+  - Support for AWS, GCP, and generic LoadBalancer configurations
+
+- **Docker Containerization**: Multi-stage Dockerfile for optimized production images.
+  - `Dockerfile` - Standard gateway image with minimal footprint
+  - `Dockerfile.federation` - Federation-ready image for subgraph deployments
+  - `docker-compose.federation.yml` - Complete federation example with 3 subgraphs
+  - `build-docker.sh` - Build script with version tagging
+
+- **Kubernetes Autoscaling**: Native Kubernetes autoscaling support.
+  - **HPA (Horizontal Pod Autoscaler)**: Scale pods based on CPU/memory utilization (5-50 pods configurable)
+  - **VPA (Vertical Pod Autoscaler)**: Resource recommendation and automatic adjustment
+  - Multi-AZ distribution for high availability
+  - External LoadBalancer with cloud provider annotations
+
+- **Deployment Documentation**: Comprehensive guides for production deployment.
+  - `DEPLOYMENT.md` - Quick start guide for Docker and Kubernetes
+  - `ARCHITECTURE.md` - System architecture documentation
+  - `docs/src/production/helm-deployment.md` - Detailed Helm deployment guide
+  - `docs/src/production/autoscaling.md` - Autoscaling configuration guide
+
+### Fixed
+- **Rustdoc Intra-Doc Links**: Fixed broken documentation links for `add_descriptor_set_bytes` and `add_descriptor_set_file` methods in `gateway.rs` and `schema.rs`, resolving docs.rs build failures.
+
+### Deployment Quick Start
+```bash
+# Docker
+docker build -t grpc-graphql-gateway:latest .
+docker run -p 8080:8080 grpc-graphql-gateway:latest
+
+# Kubernetes (Helm)
+helm install my-gateway ./helm/grpc-graphql-gateway \
+  --namespace grpc-gateway \
+  --create-namespace
+
+# Federation
+./helm/deploy-federation.sh
+```
+
 ## [0.3.7] - 2025-12-16
 
 ### Security - Production Hardening
