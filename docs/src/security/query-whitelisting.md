@@ -129,6 +129,37 @@ Queries are validated by their SHA-256 hash. This is automatic and requires no c
 query { user(id: "123") { name } }
 ```
 
+#### Query Normalization (v0.3.7+)
+
+The gateway normalizes queries before hashing, so semantically equivalent queries produce the same hash. This means the following queries all match the same whitelist entry:
+
+```graphql
+# Original
+query { hello(name: "World") { message } }
+
+# With extra whitespace
+query   {   hello( name: "World" )   { message } }
+
+# With comments stripped
+query { # This is ignored
+  hello(name: "World") { message }
+}
+
+# Multi-line format
+query {
+  hello(name: "World") {
+    message
+  }
+}
+```
+
+**Normalization rules:**
+- Comments (`#` line comments and `"""` block comments) are removed
+- Whitespace is collapsed (multiple spaces → single space)
+- Whitespace around punctuation (`{`, `}`, `(`, `)`, `:`, etc.) is removed
+- String literals are preserved exactly
+- Newlines are treated as whitespace
+
 ### 2. Operation ID Validation
 
 Clients can explicitly reference queries by ID using GraphQL extensions:

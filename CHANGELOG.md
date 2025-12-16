@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2025-12-16
+
+### Security - Production Hardening
+
+#### Comprehensive Security Headers
+- **HSTS (Strict-Transport-Security)**: Added `max-age=31536000; includeSubDomains` header to enforce HTTPS
+- **Content-Security-Policy**: Added restrictive CSP (`default-src 'self'`) to prevent XSS attacks
+- **X-XSS-Protection**: Added `1; mode=block` for legacy browser protection
+- **Referrer-Policy**: Added `strict-origin-when-cross-origin` to limit referrer information leakage
+- **Cache-Control**: Added `no-store, no-cache, must-revalidate` to prevent caching of sensitive responses
+- **CORS Preflight**: Proper OPTIONS method handling with configurable CORS headers
+
+#### Query Whitelist Enforcement
+- **Production Mode**: Changed default to `WhitelistMode::Enforce` (rejects non-whitelisted queries)
+- **Introspection Disabled**: Set `allow_introspection: false` for production security
+- **Improved Normalization**: Enhanced `normalize_query()` to correctly handle:
+  - Comment stripping (`# comment` and `"""..."""`)
+  - Whitespace collapsing around punctuation
+  - String literal preservation
+  - Consistent hash generation for semantically equivalent queries
+
+### Changed
+- **Redis Crate Upgrade**: Updated `redis` dependency from `0.24` to `0.27`
+  - Replaced deprecated `get_async_connection()` with `get_multiplexed_async_connection()`
+  - Removed unused `connection_manager` field from `CacheBackend::Redis`
+  - Fixed trait bounds for `Pipeline::query_async()` with explicit type annotation
+
+### Fixed
+- Fixed query whitelist normalization to correctly match queries with different formatting
+- Fixed T3 security test false positive caused by grepping startup banner text
+- Fixed Redis cache pipeline operations for `redis` 0.27 API compatibility
+
+### Added
+- 31-test comprehensive security assessment script (`test_security.sh`)
+- Transport security tests (HSTS, XSS, CSP, CORS)
+- Input validation tests (fuzzing, payload limits, depth limits)
+- GraphQL protocol tests (introspection, batching, operations)
+
+### Security Test Results (v0.3.7)
+```
+[PASS] T1-T3:   Core Headers & Normalization
+[PASS] T8:      Introspection Disabled
+[PASS] T9-T10:  DoS Protection (Large Payload, Deep Query)
+[PASS] T11:     Suggestions Disabled
+[PASS] T12:     HSTS Enabled
+[PASS] T15-T16: HTTP Methods (TRACE blocked, OPTIONS CORS)
+[PASS] T17-T22: Input Validation
+[PASS] T23-T30: GraphQL Protocol Security
+```
+
 ## [0.3.6] - 2025-12-16
 
 ### Security

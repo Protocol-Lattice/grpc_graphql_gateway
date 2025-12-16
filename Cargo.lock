@@ -888,7 +888,7 @@ dependencies = [
 
 [[package]]
 name = "grpc_graphql_gateway"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "anyhow",
  "async-graphql",

@@ -29,6 +29,7 @@
 
 - [Authentication](./security/authentication.md)
 - [Authorization](./security/authorization.md)
+- [Security Headers](./security/security-headers.md)
 - [DoS Protection](./security/dos-protection.md)
 - [Query Whitelisting](./security/query-whitelisting.md)
 

@@ -6,6 +6,27 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.3.7] - 2025-12-16
+
+**Production Security Hardening**
+
+- Comprehensive security headers: HSTS, CSP, X-XSS-Protection, Referrer-Policy
+- CORS preflight handling with proper OPTIONS response (204)
+- Cache-Control headers to prevent sensitive data caching
+- Query whitelist default to `Enforce` mode with introspection disabled
+- Improved query normalization for robust hash matching
+- Redis crate upgraded from 0.24 to 0.27
+- 31-test security assessment script (`test_security.sh`)
+
+### [0.3.6] - 2025-12-16
+
+**Security Fixes**
+
+- Replaced `std::sync::RwLock` with `parking_lot::RwLock` to prevent DoS via lock poisoning
+- IP spoofing protection in middleware
+- SSRF protection in REST connectors
+- Security headers (X-Content-Type-Options, X-Frame-Options)
+
 ### [0.3.5] - 2025-12-16
 
 **Redis Distributed Cache Backend**
