@@ -132,3 +132,7 @@ path = "examples/federation/main.rs"
 [[bin]]
 name = "protoc-gen-graphql-template"
 path = "src/bin/protoc-gen-graphql-template.rs"
+
+[[bin]]
+name = "benchmark"
+path = "src/bin/benchmark.rs"

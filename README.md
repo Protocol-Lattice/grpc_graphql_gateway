@@ -1605,6 +1605,25 @@ grpc_graphql_gateway-rs/
 └── tests/                 # Integration tests
 ```
 
+## ⚡ Benchmarks
+
+Verify the performance of the gateway on your own hardware using our **k6** benchmark suite:
+
+```bash
+# Verify benchmarks works
+./benchmarks/run.sh
+```
+
+**Typical Results (Apple M1/M2):**
+
+| Scenario | Throughput | Latency (P95) |
+|----------|------------|---------------|
+| **Cached Queries** | ~5,000+ RPS | < 5ms |
+| **Dynamic Queries** | ~2,000+ RPS | < 15ms |
+| **Mixed Traffic** | ~3,500 RPS | < 10ms |
+
+See [`benchmarks/README.md`](benchmarks/README.md) for detailed instructions on running load tests and stress tests.
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
