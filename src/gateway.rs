@@ -592,6 +592,7 @@ impl GatewayBuilder {
     ///         stale_while_revalidate: Some(Duration::from_secs(30)), // Serve stale for 30s
     ///         invalidate_on_mutation: true,                  // Auto-invalidate on mutations
     ///         redis_url: Some("redis://127.0.0.1:6379".to_string()), // Use Redis
+    ///         vary_headers: vec!["Authorization".to_string()], // Include auth in cache key
     ///     })
     ///     // ... other configuration
     /// #   ;
@@ -611,6 +612,7 @@ impl GatewayBuilder {
     /// - Normalized query string
     /// - Sorted variables JSON
     /// - Operation name (if provided)
+    /// - Vary headers (e.g. Authorization)
     pub fn with_response_cache(
         mut self,
         config: crate::cache::CacheConfig,

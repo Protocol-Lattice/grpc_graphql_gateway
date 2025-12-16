@@ -8,7 +8,7 @@
 //!
 //! ## How It Works
 //!
-//! 1. **Cache Key**: Generated from normalized query + variables + operation name
+//! 1. **Cache Key**: Generated from normalized query + variables + operation name + vary headers
 //! 2. **Cache Hit**: Return cached response immediately
 //! 3. **Cache Miss**: Execute query, cache response, return response
 //! 4. **Invalidation**: Mutations automatically invalidate related cache entries
@@ -26,6 +26,7 @@
 //!         default_ttl: Duration::from_secs(60),
 //!         stale_while_revalidate: Some(Duration::from_secs(30)),
 //!         invalidate_on_mutation: true,
+//!         ..Default::default()
 //!     })
 //!     // ... other configuration
 //! #   ;
@@ -53,6 +54,7 @@ use serde::{Serialize, Deserialize};
 ///     stale_while_revalidate: Some(Duration::from_secs(30)),
 ///     invalidate_on_mutation: true,
 ///     redis_url: None, // Use in-memory cache
+///     vary_headers: vec!["Authorization".to_string()],
 /// };
 /// ```
 #[derive(Clone, Debug)]
@@ -69,6 +71,9 @@ pub struct CacheConfig {
     /// Optional Redis URL for distributed caching
     /// If provided, the gateway will use Redis instead of in-memory cache
     pub redis_url: Option<String>,
+    /// Headers that should be included in the cache key (e.g. "Authorization", "X-User-Id")
+    /// Defaults to ["Authorization"]
+    pub vary_headers: Vec<String>,
 }
 
 impl Default for CacheConfig {
@@ -79,6 +84,7 @@ impl Default for CacheConfig {
             stale_while_revalidate: None,
             invalidate_on_mutation: true,
             redis_url: None,
+            vary_headers: vec!["Authorization".to_string()],
         }
     }
 }
@@ -150,7 +156,7 @@ pub enum CacheLookupResult {
 
 /// Thread-safe response cache with support for Memory and Redis backends
 pub struct ResponseCache {
-    config: CacheConfig,
+    pub config: CacheConfig,
     backend: CacheBackend,
 }
 
@@ -217,6 +223,7 @@ impl ResponseCache {
         query: &str,
         variables: Option<&serde_json::Value>,
         operation_name: Option<&str>,
+        extra_key_components: &[String],
     ) -> String {
         let mut hasher = Sha256::new();
 
@@ -241,6 +248,11 @@ impl ResponseCache {
         // Add operation name if present
         if let Some(op_name) = operation_name {
             hasher.update(op_name.as_bytes());
+        }
+
+        // Add extra key components (e.g. vary headers)
+        for component in extra_key_components {
+            hasher.update(component.as_bytes());
         }
 
         let result = hasher.finalize();
@@ -854,17 +866,17 @@ mod tests {
     #[test]
     fn test_cache_key_generation() {
         let query = "{ users { id name } }";
-        let key1 = ResponseCache::generate_cache_key(query, None, None);
+        let key1 = ResponseCache::generate_cache_key(query, None, None, &[]);
 
         // Same query should produce same key
-        assert_eq!(key1, ResponseCache::generate_cache_key(query, None, None));
+        assert_eq!(key1, ResponseCache::generate_cache_key(query, None, None, &[]));
 
         // Different query should produce different key
-        let key2 = ResponseCache::generate_cache_key("{ products { id } }", None, None);
+        let key2 = ResponseCache::generate_cache_key("{ products { id } }", None, None, &[]);
         assert_ne!(key1, key2);
 
         // Whitespace normalized
-        let key3 = ResponseCache::generate_cache_key("{ users { id   name } }", None, None);
+        let key3 = ResponseCache::generate_cache_key("{ users { id   name } }", None, None, &[]);
         assert_eq!(key1, key3);
     }
 
@@ -874,10 +886,33 @@ mod tests {
         let vars1 = serde_json::json!({"id": "123"});
         let vars2 = serde_json::json!({"id": "456"});
 
-        let key1 = ResponseCache::generate_cache_key(query, Some(&vars1), None);
-        let key2 = ResponseCache::generate_cache_key(query, Some(&vars2), None);
+        let key1 = ResponseCache::generate_cache_key(query, Some(&vars1), None, &[]);
+        let key2 = ResponseCache::generate_cache_key(query, Some(&vars2), None, &[]);
 
         assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_cache_key_with_vary_headers() {
+        let query = "{ users { id name } }";
+        
+        // Simulating headers: "HeaderName:HeaderValue"
+        let headers1 = vec!["Authorization:Bearer TokenA".to_string()];
+        let headers2 = vec!["Authorization:Bearer TokenB".to_string()];
+        
+        let key1 = ResponseCache::generate_cache_key(query, None, None, &headers1);
+        let key2 = ResponseCache::generate_cache_key(query, None, None, &headers2);
+        let key3 = ResponseCache::generate_cache_key(query, None, None, &[]);
+
+        // Different auth tokens should produce different keys
+        assert_ne!(key1, key2);
+        
+        // Auth token vs no auth token should produce different keys
+        assert_ne!(key1, key3);
+        
+        // Same auth token should produce same key
+        let key1_again = ResponseCache::generate_cache_key(query, None, None, &headers1);
+        assert_eq!(key1, key1_again);
     }
 
     #[tokio::test]
@@ -918,6 +953,7 @@ mod tests {
             stale_while_revalidate: None,
             invalidate_on_mutation: true,
             redis_url: None,
+            vary_headers: vec![],
         };
         let cache = ResponseCache::new(config);
         let cache_key = "expiring".to_string();
@@ -947,6 +983,7 @@ mod tests {
             stale_while_revalidate: Some(Duration::from_millis(50)),
             invalidate_on_mutation: true,
             redis_url: None,
+            vary_headers: vec![],
         };
         let cache = ResponseCache::new(config);
         let cache_key = "stale_test".to_string();
@@ -1039,6 +1076,7 @@ mod tests {
             stale_while_revalidate: None,
             invalidate_on_mutation: true,
             redis_url: None,
+            vary_headers: vec![],
         };
         let cache = ResponseCache::new(config);
 

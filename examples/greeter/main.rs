@@ -130,6 +130,7 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
             stale_while_revalidate: Some(Duration::from_secs(30)), // Serve stale for 30s
             invalidate_on_mutation: true,                      // Auto-invalidate on mutations
             redis_url: Some("redis://127.0.0.1:6379".to_string()), // Use Redis for distributed caching
+            vary_headers: vec!["Authorization".to_string()],   // Include auth in cache key
         })
         // Enable Response Compression for bandwidth savings
         .with_compression(grpc_graphql_gateway::CompressionConfig::default())

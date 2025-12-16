@@ -283,6 +283,18 @@ impl ServeMux {
         let analytics_op_name = processed_request.operation_name.clone();
         let request_start = Instant::now();
 
+        // Extract vary headers for cache key generation
+        let vary_header_values = if let Some(ref cache) = self.response_cache {
+            cache.config.vary_headers.iter()
+                .map(|h| {
+                     let val = headers.get(h).and_then(|v| v.to_str().ok()).unwrap_or("");
+                     format!("{}:{}", h, val)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
         // Try cache lookup for non-mutations
         if !is_mutation {
             if let Some(ref cache) = self.response_cache {
@@ -290,6 +302,7 @@ impl ServeMux {
                     &processed_request.query,
                     Some(&serde_json::to_value(&processed_request.variables).unwrap_or_default()),
                     processed_request.operation_name.as_deref(),
+                    &vary_header_values,
                 );
 
                 match cache.get(&cache_key).await {
@@ -392,6 +405,7 @@ impl ServeMux {
                             &query,
                             Some(&vars),
                             op_name.as_deref(),
+                            &vary_header_values,
                         );
 
                         if let Ok(resp_json) = serde_json::to_value(&resp) {
