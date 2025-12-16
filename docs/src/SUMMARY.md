@@ -55,6 +55,8 @@
 
 # Production
 
+- [Helm Deployment](./production/helm-deployment.md)
+- [Autoscaling & Load Balancing](./production/autoscaling.md)
 - [Security Checklist](./production/security-checklist.md)
 - [Graceful Shutdown](./production/graceful-shutdown.md)
 - [Header Propagation](./production/header-propagation.md)

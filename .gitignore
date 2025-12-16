@@ -1,2 +1,28 @@
 /target
 *.log
+
+# Helm packaged charts
+*.tgz
+helm/grpc-graphql-gateway-*.tgz
+helm/index.yaml
+helm/rendered-templates/
+
+# Docker build artifacts
+.dockerignore.bak
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig

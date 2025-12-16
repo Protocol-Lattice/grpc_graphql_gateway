@@ -1,0 +1,307 @@
+# Default values for grpc-graphql-gateway
+# This is a YAML-formatted file.
+
+replicaCount: 3
+
+image:
+  repository: ghcr.io/protocol-lattice/grpc-graphql-gateway
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9090"
+  prometheus.io/path: "/metrics"
+
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+
+service:
+  type: ClusterIP
+  httpPort: 8080
+  grpcPort: 50051
+  metricsPort: 9090
+  annotations: {}
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+
+# LoadBalancer configuration for external access
+loadBalancer:
+  enabled: false
+  # Static IP for LoadBalancer (cloud provider specific)
+  loadBalancerIP: ""
+  # Source IP ranges that can access the LoadBalancer
+  loadBalancerSourceRanges: []
+    # - "10.0.0.0/8"
+    # - "172.16.0.0/12"
+  # Session affinity
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+  # External traffic policy (Local or Cluster)
+  # Local preserves source IP but may cause uneven load distribution
+  # Cluster enables cross-node load balancing but loses source IP
+  externalTrafficPolicy: Cluster
+  # Port configuration
+  httpPort: 80
+  grpcPort: 50051
+  metricsPort: 9090
+  # NodePort (only used with LoadBalancer type)
+  nodePort: null
+  # Cloud provider specific annotations
+  annotations: {}
+    # AWS
+    # service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    # service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    # service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+    # GCP
+    # cloud.google.com/load-balancer-type: "Internal"
+    # Azure
+    # service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    # Load balancing strategy
+    nginx.ingress.kubernetes.io/load-balance: "round_robin"
+    # nginx.ingress.kubernetes.io/load-balance: "least_conn"
+    # nginx.ingress.kubernetes.io/load-balance: "ip_hash"
+    # Connection limits
+    nginx.ingress.kubernetes.io/limit-connections: "100"
+    nginx.ingress.kubernetes.io/limit-rps: "1000"
+    # Timeouts
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "30"
+    # CORS
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+  hosts:
+    - host: api.example.com
+      paths:
+        - path: /graphql
+          pathType: Prefix
+  tls:
+    - secretName: gateway-tls
+      hosts:
+        - api.example.com
+
+# Horizontal Pod Autoscaler (HPA)
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  # Advanced metrics (requires metrics-server and custom metrics API)
+  customMetrics: []
+    # - type: Pods
+    #   pods:
+    #     metric:
+    #       name: http_requests_per_second
+    #     target:
+    #       type: AverageValue
+    #       averageValue: "1000"
+
+# Vertical Pod Autoscaler (VPA)
+# Note: VPA and HPA should not be enabled simultaneously for CPU/Memory
+# Use VPA in "Off" or "Initial" mode with HPA, or use VPA alone
+verticalPodAutoscaler:
+  enabled: false
+  # UpdateMode: Off, Initial, Recreate, Auto
+  # Off: Only provides recommendations
+  # Initial: Assigns resources on pod creation only
+  # Recreate: Assigns on creation and updates running pods
+  # Auto: Automatically applies recommendations (requires pod restart)
+  updateMode: "Auto"
+  # Minimum allowed resources
+  minAllowed:
+    cpu: 100m
+    memory: 128Mi
+  # Maximum allowed resources
+  maxAllowed:
+    cpu: 2000m
+    memory: 2Gi
+  # Resources to control
+  controlledResources:
+    - cpu
+    - memory
+  # Container-specific mode (defaults to updateMode if not set)
+  containerMode: "Auto"
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+# Liveness probe
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Readiness probe
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 2
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Pod affinity/anti-affinity
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - grpc-graphql-gateway
+          topologyKey: kubernetes.io/hostname
+
+nodeSelector: {}
+tolerations: []
+
+# Environment variables
+env:
+  - name: RUST_LOG
+    value: "info"
+  - name: PORT
+    value: "8080"
+  - name: METRICS_PORT
+    value: "9090"
+  - name: DESCRIPTOR_PATH
+    value: "/app/descriptors/descriptor.bin"
+
+envFrom: []
+
+# Gateway configuration
+config:
+  enabled: true
+  gateway.yaml: |
+    server:
+      port: 8080
+      graceful_shutdown_timeout: 30
+    
+    caching:
+      enabled: true
+      ttl: 300
+      max_size: 10000
+    
+    security:
+      rate_limiting:
+        enabled: true
+        requests_per_second: 100
+      
+      cors:
+        allowed_origins:
+          - "https://example.com"
+        allowed_methods:
+          - GET
+          - POST
+          - OPTIONS
+        allow_credentials: true
+    
+    observability:
+      metrics:
+        enabled: true
+        port: 9090
+
+# Persistent volume for descriptors
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadOnlyMany
+  size: 1Gi
+  mountPath: /app/descriptors
+  existingClaim: ""
+
+# Descriptor secret
+descriptorSecret:
+  enabled: false
+  name: gateway-descriptors
+
+# Service Monitor for Prometheus Operator
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+# Network Policy
+networkPolicy:
+  enabled: false
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            name: ingress-nginx
+      ports:
+      - protocol: TCP
+        port: 8080
+  egress:
+    - to:
+      - namespaceSelector: {}
+      ports:
+      - protocol: TCP
+        port: 53
+      - protocol: UDP
+        port: 53
+
+# Extra volumes
+extraVolumes: []
+extraVolumeMounts: []
+
+# Init containers
+initContainers: []
+
+# Sidecar containers
+sidecars: []

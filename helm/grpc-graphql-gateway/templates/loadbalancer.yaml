@@ -1,0 +1,49 @@
+{{- if .Values.loadBalancer.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "grpc-graphql-gateway.fullname" . }}-lb
+  labels:
+    {{- include "grpc-graphql-gateway.labels" . | nindent 4 }}
+  {{- with .Values.loadBalancer.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: LoadBalancer
+  {{- if .Values.loadBalancer.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.loadBalancer.loadBalancerIP }}
+  {{- end }}
+  {{- if .Values.loadBalancer.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.loadBalancer.loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
+  {{- if .Values.loadBalancer.sessionAffinity }}
+  sessionAffinity: {{ .Values.loadBalancer.sessionAffinity }}
+  {{- if .Values.loadBalancer.sessionAffinityConfig }}
+  sessionAffinityConfig:
+    {{- toYaml .Values.loadBalancer.sessionAffinityConfig | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.loadBalancer.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ .Values.loadBalancer.externalTrafficPolicy }}
+  {{- end }}
+  ports:
+  - name: http
+    port: {{ .Values.loadBalancer.httpPort | default .Values.service.httpPort }}
+    targetPort: http
+    protocol: TCP
+    {{- if .Values.loadBalancer.nodePort }}
+    nodePort: {{ .Values.loadBalancer.nodePort }}
+    {{- end }}
+  - name: grpc
+    port: {{ .Values.loadBalancer.grpcPort | default .Values.service.grpcPort }}
+    targetPort: grpc
+    protocol: TCP
+  - name: metrics
+    port: {{ .Values.loadBalancer.metricsPort | default .Values.service.metricsPort }}
+    targetPort: metrics
+    protocol: TCP
+  selector:
+    {{- include "grpc-graphql-gateway.selectorLabels" . | nindent 4 }}
+{{- end }}

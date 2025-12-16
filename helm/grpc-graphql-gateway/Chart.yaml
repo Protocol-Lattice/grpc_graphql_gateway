@@ -1,0 +1,20 @@
+apiVersion: v2
+name: grpc-graphql-gateway
+description: A high-performance gRPC to GraphQL gateway with Apollo Federation support
+type: application
+version: 0.2.9
+appVersion: "0.2.9"
+keywords:
+  - grpc
+  - graphql
+  - gateway
+  - apollo-federation
+  - api-gateway
+  - kubernetes
+  - autoscaling
+home: https://github.com/Protocol-Lattice/grpc_graphql_gateway
+sources:
+  - https://github.com/Protocol-Lattice/grpc_graphql_gateway
+maintainers:
+  - name: Protocol Lattice
+    url: https://github.com/Protocol-Lattice

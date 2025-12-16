@@ -1,0 +1,191 @@
+version: '3.8'
+
+services:
+  # User Subgraph
+  user-subgraph:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: grpc-graphql-gateway:latest
+    container_name: user-subgraph
+    command: ["federation"]
+    ports:
+      - "8891:8891"  # GraphQL HTTP
+      - "50051:50051"  # gRPC
+      - "9091:9090"    # Metrics
+    environment:
+      - RUST_LOG=info
+      - SERVICE_NAME=user
+      - PORT=8891
+      - GRPC_PORT=50051
+      - METRICS_PORT=9090
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8891/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - federation
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Product Subgraph
+  product-subgraph:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: grpc-graphql-gateway:latest
+    container_name: product-subgraph
+    command: ["federation"]
+    ports:
+      - "8892:8892"  # GraphQL HTTP
+      - "50052:50052"  # gRPC
+      - "9092:9090"    # Metrics
+    environment:
+      - RUST_LOG=info
+      - SERVICE_NAME=product
+      - PORT=8892
+      - GRPC_PORT=50052
+      - METRICS_PORT=9090
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8892/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - federation
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Review Subgraph
+  review-subgraph:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: grpc-graphql-gateway:latest
+    container_name: review-subgraph
+    command: ["federation"]
+    ports:
+      - "8893:8893"  # GraphQL HTTP
+      - "50053:50053"  # gRPC
+      - "9093:9090"    # Metrics
+    environment:
+      - RUST_LOG=info
+      - SERVICE_NAME=review
+      - PORT=8893
+      - GRPC_PORT=50053
+      - METRICS_PORT=9090
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8893/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - federation
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Apollo Router
+  apollo-router:
+    image: ghcr.io/apollographql/router:v1.36.0
+    container_name: apollo-router
+    ports:
+      - "4000:4000"  # GraphQL endpoint
+      - "9090:9090"  # Metrics
+    volumes:
+      - ./examples/federation/supergraph.yaml:/etc/apollo/router.yaml:ro
+      - ./examples/federation/supergraph.graphql:/etc/apollo/supergraph.graphql:ro
+    environment:
+      - APOLLO_ROUTER_CONFIG_PATH=/etc/apollo/router.yaml
+      - APOLLO_ROUTER_SUPERGRAPH_PATH=/etc/apollo/supergraph.graphql
+    depends_on:
+      - user-subgraph
+      - product-subgraph
+      - review-subgraph
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - federation
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Redis (optional - for distributed caching)
+  redis:
+    image: redis:7-alpine
+    container_name: federation-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - federation
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # Prometheus (optional - for metrics collection)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: federation-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./helm/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - federation
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+networks:
+  federation:
+    driver: bridge
+
+volumes:
+  prometheus-data:
