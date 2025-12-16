@@ -510,7 +510,17 @@ impl ServeMux {
     }
 
     /// Convert to Axum router
+    ///
+    /// # Security Features
+    ///
+    /// - Request body limit (1MB default) to prevent memory exhaustion
+    /// - Security headers (X-Content-Type-Options, X-Frame-Options)
+    /// - GraphQL Playground disabled by default (enable with ENABLE_GRAPHQL_PLAYGROUND=true)
+    /// - Analytics endpoints require ANALYTICS_API_KEY for access
     pub fn into_router(self) -> Router {
+        use axum::middleware as axum_mw;
+        use axum::response::Response;
+        
         let health_checks_enabled = self.health_checks_enabled;
         let metrics_enabled = self.metrics_enabled;
         let analytics_enabled = self.analytics.is_some();
@@ -520,14 +530,116 @@ impl ServeMux {
         let state = Arc::new(self);
         let subscription = GraphQLSubscription::new(state.schema.executor());
 
-        let mut router = Router::new()
-            .route(
-                "/graphql",
-                post(handle_graphql_post).get(graphql_playground),
-            )
+        // SECURITY: Check if playground should be enabled (default: disabled)
+        let playground_enabled = std::env::var("ENABLE_GRAPHQL_PLAYGROUND")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        let router = if playground_enabled {
+            Router::new()
+                .route(
+                    "/graphql",
+                    post(handle_graphql_post).get(graphql_playground),
+                )
+        } else {
+            Router::new()
+                .route("/graphql", post(handle_graphql_post))
+        };
+        
+        let mut router = router
             .route_service("/graphql/ws", get_service(subscription))
             .layer(Extension(state.schema.executor()))
             .with_state(state.clone());
+
+        // SECURITY: Add request body limit (1MB) to prevent memory exhaustion
+        router = router.layer(axum::extract::DefaultBodyLimit::max(1024 * 1024));
+        
+        // SECURITY: Add security headers using axum middleware
+        async fn add_security_headers(
+            req: axum::http::Request<axum::body::Body>,
+            next: axum_mw::Next,
+        ) -> Response {
+            // Handle OPTIONS preflight for CORS
+            if req.method() == axum::http::Method::OPTIONS {
+                let mut response = Response::builder()
+                    .status(axum::http::StatusCode::NO_CONTENT)
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                let headers = response.headers_mut();
+                // CORS headers for preflight
+                headers.insert(
+                    axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                    axum::http::HeaderValue::from_static("*"),
+                );
+                headers.insert(
+                    axum::http::header::ACCESS_CONTROL_ALLOW_METHODS,
+                    axum::http::HeaderValue::from_static("GET, POST, OPTIONS"),
+                );
+                headers.insert(
+                    axum::http::header::ACCESS_CONTROL_ALLOW_HEADERS,
+                    axum::http::HeaderValue::from_static("Content-Type, Authorization, X-Request-ID"),
+                );
+                headers.insert(
+                    axum::http::header::ACCESS_CONTROL_MAX_AGE,
+                    axum::http::HeaderValue::from_static("86400"),
+                );
+                return response;
+            }
+            
+            let mut response = next.run(req).await;
+            let headers = response.headers_mut();
+            
+            // Core security headers
+            headers.insert(
+                axum::http::header::X_CONTENT_TYPE_OPTIONS,
+                axum::http::HeaderValue::from_static("nosniff"),
+            );
+            headers.insert(
+                axum::http::header::X_FRAME_OPTIONS,
+                axum::http::HeaderValue::from_static("DENY"),
+            );
+            
+            // HSTS (Strict-Transport-Security) - tells browsers to only use HTTPS
+            // max-age=31536000 (1 year), includeSubDomains for comprehensive protection
+            headers.insert(
+                axum::http::header::STRICT_TRANSPORT_SECURITY,
+                axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+            );
+            
+            // Prevent caching of sensitive responses
+            headers.insert(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+            );
+            
+            // XSS Protection (legacy but still useful for older browsers)
+            headers.insert(
+                axum::http::header::HeaderName::from_static("x-xss-protection"),
+                axum::http::HeaderValue::from_static("1; mode=block"),
+            );
+            
+            // Content Security Policy - restrict resource loading
+            headers.insert(
+                axum::http::header::CONTENT_SECURITY_POLICY,
+                axum::http::HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"),
+            );
+            
+            // Referrer Policy - limit referrer information leakage
+            headers.insert(
+                axum::http::header::REFERRER_POLICY,
+                axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"),
+            );
+            
+            // CORS headers for regular requests
+            headers.insert(
+                axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                axum::http::HeaderValue::from_static("*"),
+            );
+            
+            response
+        }
+        
+        router = router.layer(axum_mw::from_fn(add_security_headers));
 
         // Add compression layer if enabled
         if let Some(ref config) = compression_config {
@@ -546,12 +658,12 @@ impl ServeMux {
                 .route("/ready", get(readiness_handler).with_state(health_state));
         }
 
-        // Add metrics route if enabled
+        // Add metrics route if enabled (consider adding auth in production)
         if metrics_enabled {
             router = router.route("/metrics", get(metrics_handler));
         }
 
-        // Add analytics routes if enabled
+        // Add analytics routes if enabled (protected by API key)
         if analytics_enabled {
             router = router
                 .route("/analytics", get(analytics_dashboard_handler))
@@ -652,6 +764,11 @@ async fn handle_graphql_post(
 }
 
 /// Serve the GraphQL Playground UI for ad-hoc exploration.
+///
+/// # Security
+///
+/// This endpoint is only available when ENABLE_GRAPHQL_PLAYGROUND=true.
+/// It should be disabled in production to prevent schema exploration.
 async fn graphql_playground() -> impl IntoResponse {
     Html(async_graphql::http::playground_source(
         async_graphql::http::GraphQLPlaygroundConfig::new("/graphql")
@@ -675,9 +792,30 @@ async fn analytics_dashboard_handler() -> impl IntoResponse {
 }
 
 /// Handler for analytics API endpoint (JSON)
+///
+/// # Security
+///
+/// This endpoint exposes internal metrics. In production, set ANALYTICS_API_KEY
+/// environment variable to require authentication.
 async fn analytics_api_handler(
     State(mux): State<Arc<ServeMux>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    // SECURITY: Check API key if configured
+    if let Ok(required_key) = std::env::var("ANALYTICS_API_KEY") {
+        let provided_key = headers
+            .get("x-analytics-key")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        
+        if provided_key != required_key {
+            return Json(serde_json::json!({
+                "error": "Unauthorized",
+                "message": "Valid x-analytics-key header required"
+            }));
+        }
+    }
+    
     if let Some(ref analytics) = mux.analytics {
         let snapshot = analytics.get_snapshot();
         Json(serde_json::to_value(snapshot).unwrap_or_else(|_| serde_json::json!({"error": "Failed to serialize analytics"})))
@@ -687,9 +825,29 @@ async fn analytics_api_handler(
 }
 
 /// Handler for analytics reset endpoint
+///
+/// # Security
+///
+/// This endpoint can reset analytics data. Protected by ANALYTICS_API_KEY.
 async fn analytics_reset_handler(
     State(mux): State<Arc<ServeMux>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    // SECURITY: Check API key if configured
+    if let Ok(required_key) = std::env::var("ANALYTICS_API_KEY") {
+        let provided_key = headers
+            .get("x-analytics-key")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        
+        if provided_key != required_key {
+            return Json(serde_json::json!({
+                "error": "Unauthorized",
+                "message": "Valid x-analytics-key header required"
+            }));
+        }
+    }
+    
     if let Some(ref analytics) = mux.analytics {
         analytics.reset();
         Json(serde_json::json!({"status": "ok", "message": "Analytics reset successfully"}))

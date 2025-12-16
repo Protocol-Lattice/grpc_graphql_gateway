@@ -598,6 +598,13 @@ impl RestConnector {
     }
 
     /// Build a request from an endpoint and arguments
+    /// 
+    /// # Security
+    /// 
+    /// This function validates all path parameters to prevent SSRF attacks:
+    /// - Rejects path traversal sequences (`..`)
+    /// - Rejects URL control characters (`://`, `@`, null bytes)
+    /// - URL-encodes all values before substitution
     fn build_request(
         &self,
         endpoint: &RestEndpoint,
@@ -608,7 +615,26 @@ impl RestConnector {
         for (key, value) in args {
             let placeholder = format!("{{{}}}", key);
             let value_str = json_value_to_string(value);
-            path = path.replace(&placeholder, &value_str);
+            
+            // SECURITY: Validate path parameter doesn't contain dangerous characters
+            if value_str.contains("..") 
+                || value_str.contains("://") 
+                || value_str.contains('@')
+                || value_str.contains('\0')
+                || value_str.contains('\n')
+                || value_str.contains('\r')
+                || value_str.contains("%00")
+                || value_str.contains("/../")
+                || value_str.contains("/./") {
+                return Err(Error::InvalidRequest(format!(
+                    "Invalid characters in path parameter '{}': potential path traversal or URL injection",
+                    key
+                )));
+            }
+            
+            // URL-encode the value to prevent injection
+            let safe_value = urlencoding::encode(&value_str);
+            path = path.replace(&placeholder, &safe_value);
         }
 
         // Build query string
@@ -631,6 +657,13 @@ impl RestConnector {
         } else {
             format!("{}{}?{}", self.config.base_url, path, query_parts.join("&"))
         };
+        
+        // SECURITY: Final URL validation
+        if !url.starts_with(&self.config.base_url) {
+            return Err(Error::InvalidRequest(
+                "URL manipulation detected: final URL does not match base URL".to_string()
+            ));
+        }
 
         // Build headers
         let mut headers = self.config.default_headers.clone();

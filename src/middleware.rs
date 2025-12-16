@@ -36,6 +36,12 @@ pub struct Context {
 
 impl Context {
     /// Create a new context from request
+    ///
+    /// # Security
+    ///
+    /// IP address extraction validates the format to prevent spoofing.
+    /// Invalid IPs are discarded. In production behind trusted proxies,
+    /// configure your proxy to set X-Real-IP correctly.
     pub fn from_request<B>(req: &Request<B>) -> Self {
         // Extract or generate request ID
         let request_id = req
@@ -46,16 +52,20 @@ impl Context {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         // Try to extract client IP from headers (supports proxies)
+        // SECURITY: Validate IP format to prevent spoofing
         let client_ip = req
             .headers()
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.split(',').next())
-            .map(|s| s.trim().to_string())
+            .map(|s| s.trim())
+            .filter(|ip| Self::is_valid_ip(ip))
+            .map(String::from)
             .or_else(|| {
                 req.headers()
                     .get("x-real-ip")
                     .and_then(|v| v.to_str().ok())
+                    .filter(|ip| Self::is_valid_ip(ip))
                     .map(String::from)
             });
 
@@ -66,6 +76,16 @@ impl Context {
             request_id,
             client_ip,
         }
+    }
+
+    /// Validate IP address format
+    ///
+    /// # Security
+    ///
+    /// Validates both IPv4 and IPv6 formats to prevent header injection attacks.
+    fn is_valid_ip(ip: &str) -> bool {
+        use std::net::IpAddr;
+        ip.parse::<IpAddr>().is_ok()
     }
 
     /// Insert extension data

@@ -41,7 +41,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;  // SECURITY: Non-poisoning locks
 use thiserror::Error;
 
 /// Mode for query whitelist enforcement
@@ -209,6 +210,8 @@ impl QueryWhitelist {
 
         // Build indexes
         for (id, query) in &config.allowed_queries {
+            // SECURITY: Normalize query before hashing to ensure consistent matching
+            // regardless of client formatting
             let hash = Self::hash_query(query);
             
             // Store by hash
@@ -229,11 +232,112 @@ impl QueryWhitelist {
         }
     }
 
-    /// Hash a query string using SHA-256
+    /// Hash a query string using SHA-256 after normalization
     pub fn hash_query(query: &str) -> String {
+        let normalized = Self::normalize_query(query);
         let mut hasher = Sha256::new();
-        hasher.update(query.trim().as_bytes());
+        hasher.update(normalized.as_bytes());
         hex::encode(hasher.finalize())
+    }
+
+    /// Normalize query to handle whitespace and comments consistently
+    ///
+    /// This implementation uses semantic normalization:
+    /// - Drops comments
+    /// - Collapses whitespace
+    /// - Removes whitespace around punctuators (e.g. `( arg )` -> `(arg)`)
+    fn normalize_query(query: &str) -> String {
+        let mut normalized = String::with_capacity(query.len());
+        let mut in_string = false;
+        let mut in_comment = false;
+        let mut pending_space = false;
+        
+        let chars: Vec<char> = query.chars().collect();
+        let mut i = 0;
+        
+        // GraphQL Punctuators + Common separators relative to syntax
+        // ! $ ( ) ... : = @ [ ] { | }
+        let is_punctuator = |c: char| "!$():=@[]{|}".contains(c);
+        
+        while i < chars.len() {
+            let c = chars[i];
+            
+            if in_comment {
+                if c == '\n' || c == '\r' {
+                    in_comment = false;
+                    // Treated as whitespace
+                    pending_space = true;
+                }
+                i += 1;
+                continue;
+            }
+            
+            if in_string {
+                normalized.push(c);
+                if c == '"' {
+                    // Check for escaped quote
+                    let mut backslashes = 0;
+                    let mut j = i;
+                    while j > 0 {
+                        j -= 1;
+                        if chars[j] == '\\' { backslashes += 1; } else { break; }
+                    }
+                    if backslashes % 2 == 0 {
+                        in_string = false;
+                    }
+                }
+                i += 1;
+                continue;
+            }
+            
+            if c == '"' {
+                in_string = true;
+                if pending_space {
+                    if let Some(last) = normalized.chars().last() {
+                         // Space before string if previous char wasn't a punctuator (e.g. `name: "val"` internal space logic)
+                         // Wait, `name:"val"`. `:` is punct. `n:"`. No space.
+                         // `directive @"val"`. `@` is punct. No space.
+                         // `msg "hello"`. `msg` is alpha. `"` is alpha? No.
+                         // String quote is not punctuator in list above.
+                         // So we check.
+                         if !is_punctuator(last) {
+                             normalized.push(' ');
+                         }
+                    }
+                }
+                normalized.push(c);
+                pending_space = false;
+                i += 1;
+                continue;
+            }
+            
+            if c == '#' {
+                in_comment = true;
+                i += 1;
+                continue;
+            }
+            
+            if c.is_whitespace() || c == ',' {
+                pending_space = true;
+                i += 1;
+                continue;
+            }
+            
+            // Valid token char
+            if pending_space {
+                if let Some(last) = normalized.chars().last() {
+                    // Only insert space if neither is punctuator
+                    if !is_punctuator(last) && !is_punctuator(c) {
+                        normalized.push(' ');
+                    }
+                }
+            }
+            normalized.push(c);
+            pending_space = false;
+            i += 1;
+        }
+        
+        normalized
     }
 
     /// Check if the whitelist is enabled
@@ -296,12 +400,12 @@ impl QueryWhitelist {
 
     /// Check if a query is allowed by its hash
     fn is_allowed_by_hash(&self, hash: &str) -> bool {
-        self.query_by_hash.read().unwrap().contains_key(hash)
+        self.query_by_hash.read().contains_key(hash)
     }
 
     /// Check if a query is allowed by its operation ID
     fn is_allowed_by_id(&self, id: &str) -> bool {
-        self.query_by_id.read().unwrap().contains_key(id)
+        self.query_by_id.read().contains_key(id)
     }
 
     /// Check if a query is an introspection query
@@ -314,12 +418,12 @@ impl QueryWhitelist {
 
     /// Get a whitelisted query by operation ID
     pub fn get_query_by_id(&self, id: &str) -> Option<String> {
-        self.query_by_id.read().unwrap().get(id).cloned()
+        self.query_by_id.read().get(id).cloned()
     }
 
     /// Get a whitelisted query by hash
     pub fn get_query_by_hash(&self, hash: &str) -> Option<String> {
-        self.query_by_hash.read().unwrap().get(hash).cloned()
+        self.query_by_hash.read().get(hash).cloned()
     }
 
     /// Register a new allowed query at runtime (useful for dynamic whitelists)
@@ -327,13 +431,13 @@ impl QueryWhitelist {
         let hash = Self::hash_query(&query);
         
         // Add to hash lookup
-        self.query_by_hash.write().unwrap().insert(hash.clone(), query.clone());
+        self.query_by_hash.write().insert(hash.clone(), query.clone());
         
         // Add to ID lookup
-        self.query_by_id.write().unwrap().insert(id.clone(), query);
+        self.query_by_id.write().insert(id.clone(), query);
         
         // Add to reverse lookup
-        self.ids_by_hash.write().unwrap()
+        self.ids_by_hash.write()
             .entry(hash)
             .or_insert_with(HashSet::new)
             .insert(id);
@@ -341,20 +445,20 @@ impl QueryWhitelist {
 
     /// Remove a query from the whitelist
     pub fn remove_query(&self, id: &str) -> bool {
-        let mut query_by_id = self.query_by_id.write().unwrap();
+        let mut query_by_id = self.query_by_id.write();
         
         if let Some(query) = query_by_id.remove(id) {
             let hash = Self::hash_query(&query);
             
             // Update reverse lookup
-            let mut ids_by_hash = self.ids_by_hash.write().unwrap();
+            let mut ids_by_hash = self.ids_by_hash.write();
             if let Some(ids) = ids_by_hash.get_mut(&hash) {
                 ids.remove(id);
                 
                 // If no more IDs reference this hash, remove the hash entry
                 if ids.is_empty() {
                     ids_by_hash.remove(&hash);
-                    self.query_by_hash.write().unwrap().remove(&hash);
+                    self.query_by_hash.write().remove(&hash);
                 }
             }
             
@@ -368,8 +472,8 @@ impl QueryWhitelist {
     pub fn stats(&self) -> WhitelistStats {
         WhitelistStats {
             mode: self.config.mode,
-            total_queries: self.query_by_id.read().unwrap().len(),
-            total_hashes: self.query_by_hash.read().unwrap().len(),
+            total_queries: self.query_by_id.read().len(),
+            total_hashes: self.query_by_hash.read().len(),
             allow_introspection: self.config.allow_introspection,
         }
     }
@@ -531,5 +635,48 @@ mod tests {
         assert_eq!(stats.total_queries, 2);
         assert_eq!(stats.total_hashes, 2);
         assert!(stats.allow_introspection);
+    }
+}
+
+#[cfg(test)]
+mod proptest_checks {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        // 1. Normalization should never panic on random strings
+        #[test]
+        fn doesnt_crash(s in "\\PC*") {
+            let _ = QueryWhitelist::normalize_query(&s);
+        }
+
+        // 2. Idempotency: normalize(normalize(s)) == normalize(s)
+        #[test]
+        fn is_idempotent(s in "\\PC*") {
+            let n1 = QueryWhitelist::normalize_query(&s);
+            let n2 = QueryWhitelist::normalize_query(&n1);
+            assert_eq!(n1, n2);
+        }
+
+        // 3. Stability: Adding comments should not change normalized output
+        #[test]
+        fn ignores_comments(s in "[a-zA-Z0-9]+") {
+            let with_comment = format!("{} # comment", s);
+            let n1 = QueryWhitelist::normalize_query(&s);
+            let n2 = QueryWhitelist::normalize_query(&with_comment);
+            // Normalization trims input, but if `s` is "A", n1="A".
+            // "A # comment" -> "A ".
+            // So we compare trimmed.
+            assert_eq!(n1.trim(), n2.trim());
+        }
+
+        // 4. Stability: Extra whitespace should collapse
+        #[test]
+        fn collapses_whitespace(s in "[a-zA-Z0-9]+") {
+            let spaced = format!("  {}   \n  ", s);
+            let n1 = QueryWhitelist::normalize_query(&s);
+            let n2 = QueryWhitelist::normalize_query(&spaced);
+            assert_eq!(n1.trim(), n2.trim());
+        }
     }
 }

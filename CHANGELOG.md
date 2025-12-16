@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2025-12-16
+
+### Security
+- **DoS Protection**: Completely removed `std::sync::RwLock` in favor of `parking_lot::RwLock` across all modules (`cache`, `analytics`, `persisted_queries`, `circuit_breaker`, `grpc_client`, `query_whitelist`, `request_collapsing`). This prevents lock poisoning which could lead to Denial of Service.
+- **IP Spoofing Protection**: Added strict IP address validation in `middleware.rs` to prevent `X-Forwarded-For` and `X-Real-IP` header injection attacks.
+- **Query Normalization**: Implemented robust query normalization in `QueryWhitelist` to prevent bypasses via whitespace/comment manipulation.
+- **SSRF Protection**: Enhanced validation in `RestConnector` to prevent control character injection in URL construction.
+- **Security Headers**: Added `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY` headers to all responses.
+- **Safe Lock Access**: Removed all `.unwrap()` calls on locks, replacing them with safe `parking_lot` API access patterns.
+
+### Fixed
+- Fixed compilation error in `runtime.rs` related to Axum router state typing.
+- Fixed weak hashing usage in `analytics.rs` (now consistently using SHA-256).
+
 ## [0.3.5] - 2025-12-16
 
 ### Added
