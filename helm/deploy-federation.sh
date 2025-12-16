@@ -8,13 +8,6 @@ echo "=========================================="
 echo "📦 Creating namespace..."
 kubectl create namespace federation-example --dry-run=client -o yaml | kubectl apply -f -
 
-# Check if Helm chart exists
-if [ ! -d "./grpc-graphql-gateway" ]; then
-    echo "❌ Error: Helm chart not found in current directory"
-    echo "   Please run this script from the helm/ directory"
-    exit 1
-fi
-
 # Deploy User Subgraph
 echo ""
 echo "👤 Deploying User Subgraph..."
@@ -25,15 +18,20 @@ helm upgrade --install user-subgraph ./grpc-graphql-gateway \
   --set service.httpPort=8891 \
   --set service.grpcPort=50051 \
   --set ingress.enabled=false \
+  --set persistence.enabled=false \
   --set env[0].name=SERVICE_NAME \
   --set env[0].value=user \
   --set env[1].name=PORT \
   --set env[1].value="8891" \
-  --wait
+  --set env[2].name=GRPC_PORT \
+  --set env[2].value="50051" \
+  --set env[3].name=METRICS_PORT \
+  --set env[3].value="9090"
+
 
 # Deploy Product Subgraph
 echo ""
-echo "📦 Deploying Product Subgraph..."
+echo "🛍️ Deploying Product Subgraph..."
 helm upgrade --install product-subgraph ./grpc-graphql-gateway \
   --namespace federation-example \
   --set nameOverride=product-subgraph \
@@ -41,11 +39,16 @@ helm upgrade --install product-subgraph ./grpc-graphql-gateway \
   --set service.httpPort=8892 \
   --set service.grpcPort=50052 \
   --set ingress.enabled=false \
+  --set persistence.enabled=false \
   --set env[0].name=SERVICE_NAME \
   --set env[0].value=product \
   --set env[1].name=PORT \
   --set env[1].value="8892" \
-  --wait
+  --set env[2].name=GRPC_PORT \
+  --set env[2].value="50052" \
+  --set env[3].name=METRICS_PORT \
+  --set env[3].value="9090"
+
 
 # Deploy Review Subgraph
 echo ""
@@ -57,27 +60,45 @@ helm upgrade --install review-subgraph ./grpc-graphql-gateway \
   --set service.httpPort=8893 \
   --set service.grpcPort=50053 \
   --set ingress.enabled=false \
+  --set persistence.enabled=false \
   --set env[0].name=SERVICE_NAME \
   --set env[0].value=review \
   --set env[1].name=PORT \
   --set env[1].value="8893" \
-  --wait
+  --set env[2].name=GRPC_PORT \
+  --set env[2].value="50053" \
+  --set env[3].name=METRICS_PORT \
+  --set env[3].value="9090"
+
+
+# Deploy Router
+echo ""
+echo "🌐 Deploying Apollo Router..."
+echo "Generating K8s Supergraph..."
+# Assuming rover is installed and running from root context
+if [ -f "../examples/federation/supergraph-k8s.yaml" ]; then
+    rover supergraph compose --config ../examples/federation/supergraph-k8s.yaml > ../examples/federation/supergraph-k8s.graphql
+fi
+
+kubectl create configmap router-schema \
+  --namespace federation-example \
+  --from-file=supergraph.graphql=../examples/federation/supergraph-k8s.graphql \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl create configmap router-config \
+  --namespace federation-example \
+  --from-file=router.yaml=../examples/federation/router-config.yaml \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl apply -f router.yaml
 
 echo ""
-echo "✅ Federation deployment complete!"
+echo "✅ Deployment complete!"
 echo ""
-echo "📊 Check deployment status:"
-echo "  kubectl get pods -n federation-example"
-echo "  kubectl get svc -n federation-example"
+echo "To access the subgraphs locally:"
+echo "kubectl port-forward -n federation-example svc/user-subgraph 8891:8891 &"
+echo "kubectl port-forward -n federation-example svc/product-subgraph 8892:8892 &"
+echo "kubectl port-forward -n federation-example svc/review-subgraph 8893:8893 &"
 echo ""
-echo "🔗 Port forward to test locally:"
-echo "  kubectl port-forward -n federation-example svc/user-subgraph 8891:8891"
-echo "  kubectl port-forward -n federation-example svc/product-subgraph 8892:8892"
-echo "  kubectl port-forward -n federation-example svc/review-subgraph 8893:8893"
-echo ""
-echo "🧪 Test queries:"
-echo '  curl -X POST http://localhost:8891/graphql -H "Content-Type: application/json" -d '"'"'{"query": "{ user(id:\"u1\") { id name } }"}'"'"
-echo ""
-echo "🗑️  To cleanup:"
-echo "  helm uninstall user-subgraph product-subgraph review-subgraph -n federation-example"
-echo "  kubectl delete namespace federation-example"
+echo "To access the Router:"
+echo "kubectl port-forward -n federation-example svc/router 4000:4000"

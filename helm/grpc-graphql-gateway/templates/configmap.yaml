@@ -1,0 +1,11 @@
+{{- if .Values.config.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "grpc-graphql-gateway.fullname" . }}-config
+  labels:
+    {{- include "grpc-graphql-gateway.labels" . | nindent 4 }}
+data:
+  gateway.yaml: |
+{{ index .Values.config "gateway.yaml" | indent 4 }}
+{{- end }}

@@ -1,0 +1,14 @@
+federation_version: 2
+subgraphs:
+  users:
+    routing_url: http://host.k3d.internal:8891/graphql
+    schema:
+      subgraph_url: http://localhost:8891/graphql
+  products:
+    routing_url: http://host.k3d.internal:8892/graphql
+    schema:
+      subgraph_url: http://localhost:8892/graphql
+  reviews:
+    routing_url: http://host.k3d.internal:8893/graphql
+    schema:
+      subgraph_url: http://localhost:8893/graphql
