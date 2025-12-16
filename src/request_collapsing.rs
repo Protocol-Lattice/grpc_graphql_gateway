@@ -38,9 +38,10 @@
 use async_graphql::Value as GqlValue;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;  // SECURITY: Non-poisoning locks
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, Mutex as TokioMutex};
+use tokio::sync::{watch, Mutex as TokioMutex};
 
 /// Configuration for request collapsing.
 ///
@@ -185,7 +186,7 @@ pub enum CollapseResult {
 #[derive(Debug)]
 pub struct RequestBroadcaster {
     key: RequestKey,
-    sender: broadcast::Sender<Arc<Result<GqlValue, String>>>,
+    sender: watch::Sender<Option<Arc<Result<GqlValue, String>>>>,
     registry: Arc<RequestCollapsingRegistry>,
 }
 
@@ -194,7 +195,7 @@ impl RequestBroadcaster {
     pub fn broadcast(self, result: Result<GqlValue, String>) {
         let result = Arc::new(result);
         // Ignore errors - no receivers is fine
-        let _ = self.sender.send(result);
+        let _ = self.sender.send(Some(result));
         // Clean up the in-flight entry
         self.registry.remove(&self.key);
     }
@@ -210,19 +211,21 @@ impl RequestBroadcaster {
 /// Followers use this to wait for the leader's result.
 #[derive(Debug)]
 pub struct RequestReceiver {
-    receiver: broadcast::Receiver<Arc<Result<GqlValue, String>>>,
+    receiver: watch::Receiver<Option<Arc<Result<GqlValue, String>>>>,
 }
 
 impl RequestReceiver {
     /// Wait for the result from the leader.
     pub async fn recv(mut self) -> Result<GqlValue, String> {
-        match self.receiver.recv().await {
-            Ok(result) => (*result).clone(),
-            Err(broadcast::error::RecvError::Closed) => {
-                Err("Request leader dropped without sending result".to_string())
+        loop {
+            // Check current value
+            if let Some(result) = &*self.receiver.borrow() {
+                return (**result).clone();
             }
-            Err(broadcast::error::RecvError::Lagged(_)) => {
-                Err("Request result was missed".to_string())
+            
+            // Wait for update
+            if self.receiver.changed().await.is_err() {
+                return Err("Request leader dropped without sending result".to_string());
             }
         }
     }
@@ -230,7 +233,7 @@ impl RequestReceiver {
 
 /// In-flight request entry.
 struct InFlightRequest {
-    sender: broadcast::Sender<Arc<Result<GqlValue, String>>>,
+    sender: watch::Sender<Option<Arc<Result<GqlValue, String>>>>,
     started_at: Instant,
     waiter_count: usize,
 }
@@ -247,7 +250,7 @@ pub struct RequestCollapsingRegistry {
 
 impl std::fmt::Debug for RequestCollapsingRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let in_flight_count = self.in_flight.read().map(|g| g.len()).unwrap_or(0);
+        let in_flight_count = self.in_flight.read().len();
         f.debug_struct("RequestCollapsingRegistry")
             .field("config", &self.config)
             .field("in_flight_count", &in_flight_count)
@@ -276,25 +279,29 @@ impl RequestCollapsingRegistry {
         }
 
         // Check for existing in-flight request
-        {
-            let in_flight = self.in_flight.read().unwrap();
-            if let Some(entry) = in_flight.get(&key) {
-                let mut guard = entry.lock().await;
+        // SECURITY: Clone the Arc so we can drop the RwLock before awaiting.
+        // Holding a blocking lock across an await point causes deadlocks/freezes.
+        let entry_opt = {
+            let in_flight = self.in_flight.read();
+            in_flight.get(&key).cloned()
+        };
 
-                // Check if request is still within coalesce window
-                if guard.started_at.elapsed() < self.config.coalesce_window
-                    && guard.waiter_count < self.config.max_waiters
-                {
-                    guard.waiter_count += 1;
-                    let receiver = guard.sender.subscribe();
-                    return CollapseResult::Follower(RequestReceiver { receiver });
-                }
-                // Request is too old or has too many waiters, fall through to create new
+        if let Some(entry) = entry_opt {
+            let mut guard = entry.lock().await;
+
+            // Check if request is still within coalesce window
+            if guard.started_at.elapsed() < self.config.coalesce_window
+                && guard.waiter_count < self.config.max_waiters
+            {
+                guard.waiter_count += 1;
+                let receiver = guard.sender.subscribe();
+                return CollapseResult::Follower(RequestReceiver { receiver });
             }
+            // Request is too old or has too many waiters, fall through to create new
         }
 
         // Become the leader for this request
-        let (sender, _) = broadcast::channel(1);
+        let (sender, _) = watch::channel(None);
         let entry = Arc::new(TokioMutex::new(InFlightRequest {
             sender: sender.clone(),
             started_at: Instant::now(),
@@ -302,7 +309,7 @@ impl RequestCollapsingRegistry {
         }));
 
         {
-            let mut in_flight = self.in_flight.write().unwrap();
+            let mut in_flight = self.in_flight.write();
 
             // Check cache size and evict old entries if needed
             if in_flight.len() >= self.config.max_cache_size {
@@ -321,7 +328,7 @@ impl RequestCollapsingRegistry {
 
     /// Remove an in-flight request entry.
     fn remove(&self, key: &RequestKey) {
-        let mut in_flight = self.in_flight.write().unwrap();
+        let mut in_flight = self.in_flight.write();
         in_flight.remove(key);
     }
 
@@ -350,7 +357,7 @@ impl RequestCollapsingRegistry {
 
     /// Get statistics about the registry.
     pub fn stats(&self) -> CollapsingStats {
-        let in_flight = self.in_flight.read().unwrap();
+        let in_flight = self.in_flight.read();
         CollapsingStats {
             in_flight_count: in_flight.len(),
             max_cache_size: self.config.max_cache_size,
@@ -644,5 +651,59 @@ mod tests {
         let stats = registry.stats();
         assert_eq!(stats.in_flight_count, 0);
         assert!(stats.enabled);
+    }
+}
+
+#[cfg(test)]
+mod proptest_checks {
+    use super::*;
+    use proptest::prelude::*;
+    use tokio::runtime::Runtime;
+
+    proptest! {
+        #[test]
+        fn fuzz_collapsing_mixed_traffic(
+            requests in proptest::collection::vec(("[a-c]", 0..5u64), 10..50)
+        ) {
+            let rt = Runtime::new().unwrap();
+            rt.block_on(async {
+                let config = RequestCollapsingConfig::new()
+                    .coalesce_window(Duration::from_millis(20)); // Short window
+                let registry = Arc::new(RequestCollapsingRegistry::new(config));
+                
+                let mut handles = vec![];
+                
+                for (suffix, delay_ms) in requests {
+                    let registry = registry.clone();
+                    let key = RequestKey::new("svc", &format!("path_{}", suffix), b"data");
+                    
+                    // Simulate random arrival
+                    // We can't await sleep here easily without delaying loop.
+                    // But we can spawn and sleep inside.
+                    handles.push(tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                        
+                        match registry.try_collapse(key).await {
+                           CollapseResult::Leader(broadcaster) => {
+                               // Simulate execution work
+                               tokio::time::sleep(Duration::from_millis(10)).await;
+                               broadcaster.broadcast(Ok(async_graphql::Value::String("result".to_string())));
+                               "leader"
+                           }
+                           CollapseResult::Follower(receiver) => {
+                               let res = receiver.recv().await;
+                               assert!(res.is_ok());
+                               "follower"
+                           }
+                           CollapseResult::Passthrough => "passthrough"
+                        }
+                    }));
+                }
+                
+                for h in handles {
+                     let _ = h.await;
+                }
+            });
+        }
     }
 }

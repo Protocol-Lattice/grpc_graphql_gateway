@@ -74,9 +74,44 @@ pub enum Error {
 
 impl Error {
     /// Convert error to GraphQL error format
+    ///
+    /// # Security
+    ///
+    /// In production (ENV=production), internal error details are sanitized
+    /// to prevent information disclosure. Only safe error types show their
+    /// full message to clients.
     pub fn to_graphql_error(&self) -> GraphQLError {
+        let is_production = std::env::var("ENV")
+            .map(|e| e == "production" || e == "prod")
+            .unwrap_or(false);
+        
+        let message = if is_production {
+            // SECURITY: Sanitize internal errors for production
+            match self {
+                Error::Grpc(_) => "Backend service error".to_string(),
+                Error::Transport(_) => "Service connection error".to_string(),
+                Error::Internal(_) => "Internal server error".to_string(),
+                Error::Io(_) => "Internal server error".to_string(),
+                Error::Connection(_) => "Service connection error".to_string(),
+                Error::WebSocket(_) => "Connection error".to_string(),
+                // These errors are safe to expose to clients
+                Error::Schema(msg) => format!("Schema error: {}", msg),
+                Error::InvalidRequest(msg) => format!("Invalid request: {}", msg),
+                Error::Unauthorized(msg) => msg.clone(),
+                Error::Middleware(msg) => format!("Request processing error: {}", msg),
+                Error::Serialization(_) => "Data processing error".to_string(),
+                Error::TooManyRequests(msg) => msg.clone(),
+                Error::QueryTooDeep(msg) => msg.clone(),
+                Error::QueryTooComplex(msg) => msg.clone(),
+                Error::Other(_) => "An unexpected error occurred".to_string(),
+            }
+        } else {
+            // In development, show full error details
+            self.to_string()
+        };
+        
         GraphQLError {
-            message: self.to_string(),
+            message,
             extensions: self.extensions(),
         }
     }

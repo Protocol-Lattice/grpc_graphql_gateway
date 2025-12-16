@@ -23,8 +23,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;  // SECURITY: Non-poisoning locks
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use sha2::{Digest, Sha256};  // SECURITY: Use cryptographic hash
 
 /// Configuration for query analytics
 #[derive(Debug, Clone)]
@@ -355,7 +357,7 @@ impl QueryAnalytics {
         let duration_ms = duration.as_millis() as u64;
         let query_hash = self.hash_query(query);
         
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write();
         
         // Update totals
         state.total_requests += 1;
@@ -421,7 +423,7 @@ impl QueryAnalytics {
         let key = format!("{}.{}", parent_type, field_name);
         let duration_ms = duration.map(|d| d.as_millis() as f64).unwrap_or(0.0);
         
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write();
         let field_stats = state.fields.entry(key.clone()).or_insert_with(|| {
             FieldStats::new(field_name.to_string(), parent_type.to_string())
         });
@@ -446,7 +448,7 @@ impl QueryAnalytics {
 
     /// Record cache hit/miss
     pub fn record_cache_access(&self, hit: bool) {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write();
         if hit {
             state.cache_hits += 1;
         } else {
@@ -456,7 +458,7 @@ impl QueryAnalytics {
 
     /// Get current analytics snapshot
     pub fn get_snapshot(&self) -> AnalyticsSnapshot {
-        let state = self.state.read().unwrap();
+        let state = self.state.read();
         
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -536,7 +538,7 @@ impl QueryAnalytics {
 
     /// Reset all analytics data
     pub fn reset(&self) {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write();
         *state = AnalyticsState::new(self.config.clone());
     }
 
@@ -545,12 +547,16 @@ impl QueryAnalytics {
         &self.config
     }
 
+    /// Create a hash of the query for tracking
+    ///
+    /// # Security
+    ///
+    /// Uses SHA-256 for collision resistance. DefaultHasher is not suitable
+    /// because it's easy to craft collisions that could affect analytics accuracy.
     fn hash_query(&self, query: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        query.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        let mut hasher = Sha256::new();
+        hasher.update(query.as_bytes());
+        hex::encode(hasher.finalize())[..16].to_string()  // First 16 chars for reasonable length
     }
 
     fn truncate_query(query: &str, max_len: usize) -> String {

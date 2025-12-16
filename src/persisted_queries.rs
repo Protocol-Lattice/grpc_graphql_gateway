@@ -48,7 +48,8 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;  // SECURITY: Non-poisoning locks
 use std::time::{Duration, Instant};
 
 /// Configuration for Automatic Persisted Queries
@@ -130,7 +131,7 @@ impl PersistedQueryStore {
     ///
     /// Returns `None` if not found or if TTL has expired.
     pub fn get(&self, hash: &str) -> Option<String> {
-        let cache = self.cache.read().ok()?;
+        let cache = self.cache.read();
         let entry = cache.get(hash)?;
 
         // Check TTL expiration
@@ -138,9 +139,8 @@ impl PersistedQueryStore {
             if entry.created_at.elapsed() > ttl {
                 drop(cache);
                 // Expired - remove it (best effort, don't block)
-                if let Ok(mut cache_write) = self.cache.write() {
-                    cache_write.remove(hash);
-                }
+                let mut cache_write = self.cache.write();
+                cache_write.remove(hash);
                 return None;
             }
         }
@@ -166,7 +166,8 @@ impl PersistedQueryStore {
         self.evict_if_needed();
 
         // Store the query
-        if let Ok(mut cache) = self.cache.write() {
+        {
+            let mut cache = self.cache.write();
             cache.insert(
                 hash.to_string(),
                 CacheEntry {
@@ -176,7 +177,8 @@ impl PersistedQueryStore {
             );
         }
 
-        if let Ok(mut order) = self.insertion_order.write() {
+        {
+            let mut order = self.insertion_order.write();
             // Remove if already present (move to end)
             order.retain(|h| h != hash);
             order.push(hash.to_string());
@@ -192,7 +194,7 @@ impl PersistedQueryStore {
 
     /// Get the current number of cached queries
     pub fn len(&self) -> usize {
-        self.cache.read().map(|c| c.len()).unwrap_or(0)
+        self.cache.read().len()
     }
 
     /// Check if the cache is empty
@@ -202,12 +204,8 @@ impl PersistedQueryStore {
 
     /// Clear all cached queries
     pub fn clear(&self) {
-        if let Ok(mut cache) = self.cache.write() {
-            cache.clear();
-        }
-        if let Ok(mut order) = self.insertion_order.write() {
-            order.clear();
-        }
+        self.cache.write().clear();
+        self.insertion_order.write().clear();
     }
 
     /// Evict oldest entries if cache is at capacity
@@ -216,15 +214,15 @@ impl PersistedQueryStore {
         if current_len >= self.config.cache_size {
             let to_remove = current_len - self.config.cache_size + 1;
             
-            if let Ok(mut order) = self.insertion_order.write() {
+            let hashes_to_remove: Vec<String> = {
+                let mut order = self.insertion_order.write();
                 let drain_count = to_remove.min(order.len());
-                let hashes_to_remove: Vec<String> = order.drain(..drain_count).collect();
-                
-                if let Ok(mut cache) = self.cache.write() {
-                    for hash in hashes_to_remove {
-                        cache.remove(&hash);
-                    }
-                }
+                order.drain(..drain_count).collect()
+            };
+            
+            let mut cache = self.cache.write();
+            for hash in hashes_to_remove {
+                cache.remove(&hash);
             }
         }
     }
@@ -232,8 +230,8 @@ impl PersistedQueryStore {
 
 impl Clone for PersistedQueryStore {
     fn clone(&self) -> Self {
-        let cache = self.cache.read().map(|c| c.clone()).unwrap_or_default();
-        let order = self.insertion_order.read().map(|o| o.clone()).unwrap_or_default();
+        let cache = self.cache.read().clone();
+        let order = self.insertion_order.read().clone();
         
         Self {
             config: self.config.clone(),

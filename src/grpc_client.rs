@@ -117,9 +117,27 @@ pub struct GrpcClientBuilder {
 
 impl GrpcClientBuilder {
     fn new(endpoint: impl Into<String>) -> Self {
+        let endpoint_str = endpoint.into();
+        
+        // SECURITY: Auto-detect secure endpoints
+        // https:// defaults to secure (TLS enabled)
+        // http:// defaults to insecure (TLS disabled)
+        let is_secure_endpoint = endpoint_str.starts_with("https://");
+        let is_insecure_endpoint = endpoint_str.starts_with("http://");
+        
+        // Default to secure unless explicitly http://
+        let insecure = if is_insecure_endpoint {
+            true
+        } else if is_secure_endpoint {
+            false
+        } else {
+            // Unknown scheme - default to secure
+            false
+        };
+        
         Self {
-            endpoint: endpoint.into(),
-            insecure: true,
+            endpoint: endpoint_str,
+            insecure,
             lazy: false,
         }
     }
@@ -180,51 +198,51 @@ fn configure_endpoint(endpoint: &str, insecure: bool) -> Result<Endpoint> {
 /// Pool of gRPC clients for multiple services
 #[derive(Clone, Default)]
 pub struct GrpcClientPool {
-    clients: Arc<std::sync::RwLock<std::collections::HashMap<String, GrpcClient>>>,
+    clients: Arc<parking_lot::RwLock<std::collections::HashMap<String, GrpcClient>>>,
 }
 
 impl GrpcClientPool {
     /// Create a new client pool
     pub fn new() -> Self {
         Self {
-            clients: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+            clients: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
         }
     }
 
     /// Add a client to the pool
     pub fn add(&self, name: impl Into<String>, client: GrpcClient) {
-        let mut clients = self.clients.write().unwrap();
+        let mut clients = self.clients.write();
         clients.insert(name.into(), client);
     }
 
     /// Get a client from the pool
     pub fn get(&self, name: &str) -> Option<GrpcClient> {
-        let clients = self.clients.read().unwrap();
+        let clients = self.clients.read();
         clients.get(name).cloned()
     }
 
     /// Remove a client from the pool
     pub fn remove(&self, name: &str) -> Option<GrpcClient> {
-        let mut clients = self.clients.write().unwrap();
+        let mut clients = self.clients.write();
         clients.remove(name)
     }
 
     /// Get all client names
     pub fn names(&self) -> Vec<String> {
-        let clients = self.clients.read().unwrap();
+        let clients = self.clients.read();
         clients.keys().cloned().collect()
     }
 
     /// Clear all clients
     pub fn clear(&self) {
-        let mut clients = self.clients.write().unwrap();
+        let mut clients = self.clients.write();
         clients.clear();
     }
 }
 
 impl std::fmt::Debug for GrpcClientPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let clients = self.clients.read().unwrap();
+        let clients = self.clients.read();
         f.debug_struct("GrpcClientPool")
             .field("clients", &clients.keys().collect::<Vec<_>>())
             .finish()

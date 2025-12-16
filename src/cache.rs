@@ -36,9 +36,15 @@
 
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;  // SECURITY: Use parking_lot for non-poisoning locks
 use std::time::{Duration, SystemTime};
 use serde::{Serialize, Deserialize};
+
+/// Cache key prefix for Redis to enable safe deletion without FLUSHDB
+const REDIS_CACHE_PREFIX: &str = "gqlcache:";
+const REDIS_TYPE_PREFIX: &str = "gqltype:";
+const REDIS_ENTITY_PREFIX: &str = "gqlentity:";
 
 /// Configuration for response caching
 ///
@@ -173,10 +179,6 @@ enum CacheBackend {
     },
     Redis {
         client: redis::Client,
-        /// Optional local type index for invalidation optimization (might be removed in fully stateless)
-        /// For strict distributed correctness, invalidation must use Redis SETs.
-        /// Here we will use Redis Sets for indexes.
-        connection_manager: tokio::sync::Mutex<Option<redis::aio::ConnectionManager>>,
     },
 }
 
@@ -187,7 +189,6 @@ impl ResponseCache {
             match redis::Client::open(url.as_str()) {
                 Ok(client) => CacheBackend::Redis {
                     client,
-                    connection_manager: tokio::sync::Mutex::new(None),
                 },
                 Err(e) => {
                     tracing::error!("Failed to create Redis client: {}", e);
@@ -265,10 +266,7 @@ impl ResponseCache {
     pub async fn get(&self, cache_key: &str) -> CacheLookupResult {
         match &self.backend {
             CacheBackend::Memory { cache, .. } => {
-                let cache = match cache.read() {
-                    Ok(c) => c,
-                    Err(_) => return CacheLookupResult::Miss,
-                };
+                let cache = cache.read();
         
                 let Some(entry) = cache.get(cache_key) else {
                     return CacheLookupResult::Miss;
@@ -293,7 +291,7 @@ impl ResponseCache {
                 CacheLookupResult::Miss
             }
             CacheBackend::Redis { client, .. } => {
-                 let mut conn = match client.get_async_connection().await {
+                 let mut conn = match client.get_multiplexed_async_connection().await {
                     Ok(c) => c,
                     Err(e) => {
                         tracing::error!("Redis connection error: {}", e);
@@ -354,18 +352,21 @@ impl ResponseCache {
                 };
 
                 // Store in main cache
-                if let Ok(mut c) = cache.write() {
+                {
+                    let mut c = cache.write();
                     c.insert(cache_key.clone(), entry);
                 }
 
                 // Update insertion order
-                if let Ok(mut order) = insertion_order.write() {
+                {
+                    let mut order = insertion_order.write();
                     order.retain(|k| k != &cache_key);
                     order.push(cache_key.clone());
                 }
 
                 // Update type index
-                if let Ok(mut type_idx) = type_index.write() {
+                {
+                    let mut type_idx = type_index.write();
                     for type_name in &referenced_types {
                         type_idx
                             .entry(type_name.clone())
@@ -375,7 +376,8 @@ impl ResponseCache {
                 }
 
                 // Update entity index
-                if let Ok(mut entity_idx) = entity_index.write() {
+                {
+                    let mut entity_idx = entity_index.write();
                     for entity_key in &referenced_entities {
                         entity_idx
                             .entry(entity_key.clone())
@@ -386,7 +388,7 @@ impl ResponseCache {
                  tracing::debug!(cache_key = %cache_key, "Response cached (Memory)");
             }
             CacheBackend::Redis { client, .. } => {
-                 let mut conn = match client.get_async_connection().await {
+                 let mut conn = match client.get_multiplexed_async_connection().await {
                     Ok(c) => c,
                     Err(e) => {
                         tracing::error!("Redis connection error: {}", e);
@@ -432,7 +434,7 @@ impl ResponseCache {
                     pipe.sadd(format!("entity:{}", entity_key), &cache_key);
                 }
                 
-                if let Err(e) = pipe.query_async::<_, ()>(&mut conn).await {
+                if let Err(e) = pipe.query_async::<()>(&mut conn).await {
                      tracing::error!("Redis PUT error: {}", e);
                 } else {
                      tracing::debug!(cache_key = %cache_key, "Response cached (Redis)");
@@ -446,10 +448,7 @@ impl ResponseCache {
         match &self.backend {
             CacheBackend::Memory { type_index, .. } => {
                 let cache_keys = {
-                    let type_idx = match type_index.read() {
-                        Ok(idx) => idx,
-                        Err(_) => return 0,
-                    };
+                    let type_idx = type_index.read();
                     type_idx.get(type_name).cloned().unwrap_or_default()
                 };
 
@@ -461,7 +460,7 @@ impl ResponseCache {
                 count
             }
              CacheBackend::Redis { client, .. } => {
-                let mut conn = match client.get_async_connection().await {
+                let mut conn = match client.get_multiplexed_async_connection().await {
                     Ok(c) => c,
                     Err(_) => return 0,
                 };
@@ -495,10 +494,7 @@ impl ResponseCache {
          match &self.backend {
              CacheBackend::Memory { entity_index, .. } => {
                 let cache_keys = {
-                    let entity_idx = match entity_index.read() {
-                        Ok(idx) => idx,
-                        Err(_) => return 0,
-                    };
+                    let entity_idx = entity_index.read();
                     entity_idx.get(entity_key).cloned().unwrap_or_default()
                 };
 
@@ -510,7 +506,7 @@ impl ResponseCache {
                 count
              }
              CacheBackend::Redis { client, .. } => {
-                let mut conn = match client.get_async_connection().await {
+                let mut conn = match client.get_multiplexed_async_connection().await {
                     Ok(c) => c,
                     Err(_) => return 0,
                 };
@@ -567,36 +563,98 @@ impl ResponseCache {
     }
 
     /// Clear all cached responses
+    ///
+    /// # Security
+    ///
+    /// For Redis, this uses SCAN with key prefixes instead of FLUSHDB
+    /// to avoid destroying data from other applications sharing the same Redis instance.
     pub async fn clear(&self) {
         match &self.backend {
             CacheBackend::Memory { cache, insertion_order, type_index, entity_index, .. } => {
-                if let Ok(mut cache) = cache.write() {
-                    cache.clear();
-                }
-                if let Ok(mut order) = insertion_order.write() {
-                    order.clear();
-                }
-                if let Ok(mut type_idx) = type_index.write() {
-                    type_idx.clear();
-                }
-                if let Ok(mut entity_idx) = entity_index.write() {
-                    entity_idx.clear();
-                }
+                cache.write().clear();
+                insertion_order.write().clear();
+                type_index.write().clear();
+                entity_index.write().clear();
                 tracing::debug!("Response cache cleared (Memory)");
             }
             CacheBackend::Redis { client, .. } => {
-                 let mut conn = match client.get_async_connection().await {
+                let mut conn = match client.get_multiplexed_async_connection().await {
                     Ok(c) => c,
                     Err(_) => return,
                 };
-                // FLUSHDB is strict but clear() usually implies clearing everything.
-                // However, shared redis might be used.
-                // For now, let's just log a warning that clear is heavy.
-                // Or better, we can't easily iterate all keys without proper prefixing.
-                // Assuming we own the DB or have prefix scanning.
-                // Simpler: Just FLUSHDB for this example logic
-                 let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap_or(());
-                 tracing::debug!("Response cache cleared (Redis FLUSHDB)");
+                
+                // SECURITY: Use SCAN with prefix instead of FLUSHDB
+                // This protects other applications sharing the same Redis instance
+                let mut cursor: u64 = 0;
+                let mut total_deleted = 0;
+                
+                loop {
+                    // Scan for cache keys with our prefix
+                    let (next_cursor, keys): (u64, Vec<String>) = match redis::cmd("SCAN")
+                        .arg(cursor)
+                        .arg("MATCH")
+                        .arg(format!("{}*", REDIS_CACHE_PREFIX))
+                        .arg("COUNT")
+                        .arg(100)
+                        .query_async(&mut conn)
+                        .await
+                    {
+                        Ok(result) => result,
+                        Err(e) => {
+                            tracing::error!("Redis SCAN error: {}", e);
+                            break;
+                        }
+                    };
+                    
+                    if !keys.is_empty() {
+                        let _: () = redis::cmd("DEL")
+                            .arg(&keys)
+                            .query_async(&mut conn)
+                            .await
+                            .unwrap_or(());
+                        total_deleted += keys.len();
+                    }
+                    
+                    cursor = next_cursor;
+                    if cursor == 0 {
+                        break;
+                    }
+                }
+                
+                // Also clean up type and entity indexes
+                for prefix in [REDIS_TYPE_PREFIX, REDIS_ENTITY_PREFIX] {
+                    cursor = 0;
+                    loop {
+                        let (next_cursor, keys): (u64, Vec<String>) = match redis::cmd("SCAN")
+                            .arg(cursor)
+                            .arg("MATCH")
+                            .arg(format!("{}*", prefix))
+                            .arg("COUNT")
+                            .arg(100)
+                            .query_async(&mut conn)
+                            .await
+                        {
+                            Ok(result) => result,
+                            Err(_) => break,
+                        };
+                        
+                        if !keys.is_empty() {
+                            let _: () = redis::cmd("DEL")
+                                .arg(&keys)
+                                .query_async(&mut conn)
+                                .await
+                                .unwrap_or(());
+                            total_deleted += keys.len();
+                        }
+                        
+                        cursor = next_cursor;
+                        if cursor == 0 {
+                            break;
+                        }
+                    }
+                }
+                
+                tracing::debug!("Response cache cleared - {} keys deleted (Redis SCAN)", total_deleted);
             }
         }
     }
@@ -605,7 +663,7 @@ impl ResponseCache {
     pub fn len(&self) -> usize {
         match &self.backend {
              CacheBackend::Memory { cache, .. } => {
-                cache.read().map(|c| c.len()).unwrap_or(0)
+                cache.read().len()
              }
              CacheBackend::Redis { .. } => 0, // Not easily available without SCAN, return 0
         }
@@ -622,11 +680,11 @@ impl ResponseCache {
             size: self.len(),
             max_size: self.config.max_size,
             type_index_size: match &self.backend {
-                 CacheBackend::Memory { type_index, .. } => type_index.read().map(|t| t.len()).unwrap_or(0),
+                 CacheBackend::Memory { type_index, .. } => type_index.read().len(),
                  _ => 0,
             },
             entity_index_size: match &self.backend {
-                 CacheBackend::Memory { entity_index, .. } => entity_index.read().map(|e| e.len()).unwrap_or(0),
+                 CacheBackend::Memory { entity_index, .. } => entity_index.read().len(),
                  _ => 0,
             },
         }
@@ -640,11 +698,11 @@ impl ResponseCache {
                     // Logic continues below...
                     let to_remove = current_len - self.config.max_size + 1;
                     if let CacheBackend::Memory { insertion_order, .. } = &self.backend {
-                        if let Ok(mut order) = insertion_order.write() {
-                            let drain_count = to_remove.min(order.len());
-                            let keys_to_remove: Vec<String> = order.drain(..drain_count).collect();
-                            self.remove_entries_internal(&keys_to_remove);
-                        }
+                        let mut order = insertion_order.write();
+                        let drain_count = to_remove.min(order.len());
+                        let keys_to_remove: Vec<String> = order.drain(..drain_count).collect();
+                        drop(order); // Release lock before calling remove_entries_internal
+                        self.remove_entries_internal(&keys_to_remove);
                     }
                 }
             }
@@ -659,9 +717,8 @@ impl ResponseCache {
                 self.remove_entries_internal(&keys_vec);
         
                 // Update insertion order
-                if let Ok(mut order) = insertion_order.write() {
-                    order.retain(|k| !cache_keys.contains(k));
-                }
+                let mut order = insertion_order.write();
+                order.retain(|k| !cache_keys.contains(k));
             }
              _ => {} // Handled elsewhere for Redis
          }
@@ -670,29 +727,28 @@ impl ResponseCache {
     fn remove_entries_internal(&self, cache_keys: &[String]) {
         match &self.backend {
              CacheBackend::Memory { cache, type_index, entity_index, .. } => {
-                if let Ok(mut c) = cache.write() {
-                    for key in cache_keys {
-                        if let Some(entry) = c.remove(key) {
-                            // Clean up type index
-                            if let Ok(mut type_idx) = type_index.write() {
-                                for type_name in &entry.referenced_types {
-                                    if let Some(keys) = type_idx.get_mut(type_name) {
-                                        keys.remove(key);
-                                        if keys.is_empty() {
-                                            type_idx.remove(type_name);
-                                        }
-                                    }
+                let mut c = cache.write();
+                for key in cache_keys {
+                    if let Some(entry) = c.remove(key) {
+                        // Clean up type index
+                        let mut type_idx = type_index.write();
+                        for type_name in &entry.referenced_types {
+                            if let Some(keys) = type_idx.get_mut(type_name) {
+                                keys.remove(key);
+                                if keys.is_empty() {
+                                    type_idx.remove(type_name);
                                 }
                             }
-                            // Clean up entity index
-                            if let Ok(mut entity_idx) = entity_index.write() {
-                                for entity_key in &entry.referenced_entities {
-                                    if let Some(keys) = entity_idx.get_mut(entity_key) {
-                                        keys.remove(key);
-                                        if keys.is_empty() {
-                                            entity_idx.remove(entity_key);
-                                        }
-                                    }
+                        }
+                        drop(type_idx);
+                        
+                        // Clean up entity index
+                        let mut entity_idx = entity_index.write();
+                        for entity_key in &entry.referenced_entities {
+                            if let Some(keys) = entity_idx.get_mut(entity_key) {
+                                keys.remove(key);
+                                if keys.is_empty() {
+                                    entity_idx.remove(entity_key);
                                 }
                             }
                         }
@@ -710,19 +766,10 @@ impl Clone for ResponseCache {
             config: self.config.clone(),
             backend: match &self.backend {
                 CacheBackend::Memory { cache, insertion_order, type_index, entity_index } => {
-                     let cache = cache.read().map(|c| c.clone()).unwrap_or_default();
-                    let order = insertion_order
-                        .read()
-                        .map(|o| o.clone())
-                        .unwrap_or_default();
-                    let type_idx = type_index
-                        .read()
-                        .map(|t| t.clone())
-                        .unwrap_or_default();
-                    let entity_idx = entity_index
-                        .read()
-                        .map(|e| e.clone())
-                        .unwrap_or_default();
+                     let cache = cache.read().clone();
+                    let order = insertion_order.read().clone();
+                    let type_idx = type_index.read().clone();
+                    let entity_idx = entity_index.read().clone();
                     CacheBackend::Memory {
                         cache: RwLock::new(cache),
                         insertion_order: RwLock::new(order),
@@ -730,9 +777,8 @@ impl Clone for ResponseCache {
                         entity_index: RwLock::new(entity_idx),
                     }
                 }
-                CacheBackend::Redis { client, .. } => CacheBackend::Redis {
+                CacheBackend::Redis { client } => CacheBackend::Redis {
                     client: client.clone(),
-                    connection_manager: tokio::sync::Mutex::new(None)
                 }
             }
         }

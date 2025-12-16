@@ -145,8 +145,12 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         .with_query_whitelist(
             grpc_graphql_gateway::QueryWhitelistConfig::from_json_file(
                 "examples/allowed_queries.json",
-                grpc_graphql_gateway::WhitelistMode::Warn  // Change to Enforce for production
-            ).unwrap_or_else(|e| {
+                grpc_graphql_gateway::WhitelistMode::Enforce
+            )
+            .map(|mut c| {
+                c.allow_introspection = false;
+                c
+            }).unwrap_or_else(|e| {
                 eprintln!("Warning: Failed to load query whitelist: {}. Using empty whitelist.", e);
                 grpc_graphql_gateway::QueryWhitelistConfig::warn()
             })

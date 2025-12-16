@@ -39,7 +39,8 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;  // SECURITY: Non-poisoning locks
 use std::time::Duration;
 
 /// Circuit breaker state
@@ -131,7 +132,7 @@ impl CircuitBreaker {
     /// Get current circuit state
     pub fn state(&self) -> CircuitState {
         self.maybe_transition_to_half_open();
-        *self.state.read().unwrap()
+        *self.state.read()
     }
 
     /// Check if a request should be allowed through
@@ -140,7 +141,7 @@ impl CircuitBreaker {
     pub fn allow_request(&self) -> Result<(), CircuitBreakerError> {
         self.maybe_transition_to_half_open();
 
-        let state = *self.state.read().unwrap();
+        let state = *self.state.read();
         match state {
             CircuitState::Closed => Ok(()),
             CircuitState::Open => {
@@ -179,7 +180,7 @@ impl CircuitBreaker {
 
     /// Record a successful request
     pub fn record_success(&self) {
-        let state = *self.state.read().unwrap();
+        let state = *self.state.read();
         match state {
             CircuitState::Closed => {
                 // Reset failure count on success
@@ -205,7 +206,7 @@ impl CircuitBreaker {
 
     /// Record a failed request
     pub fn record_failure(&self) {
-        let state = *self.state.read().unwrap();
+        let state = *self.state.read();
         match state {
             CircuitState::Closed => {
                 let failures = self.failure_count.fetch_add(1, Ordering::SeqCst) + 1;
@@ -244,7 +245,7 @@ impl CircuitBreaker {
 
     /// Transition to Open state
     fn open(&self) {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write();
         *state = CircuitState::Open;
         // Store timestamp for recovery timeout tracking
         let now = std::time::SystemTime::now()
@@ -258,7 +259,7 @@ impl CircuitBreaker {
 
     /// Transition to Closed state
     fn close(&self) {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write();
         *state = CircuitState::Closed;
         self.failure_count.store(0, Ordering::SeqCst);
         self.half_open_requests.store(0, Ordering::SeqCst);
@@ -267,7 +268,7 @@ impl CircuitBreaker {
 
     /// Check if we should transition from Open to Half-Open
     fn maybe_transition_to_half_open(&self) {
-        let state = *self.state.read().unwrap();
+        let state = *self.state.read();
         if state != CircuitState::Open {
             return;
         }
@@ -280,7 +281,7 @@ impl CircuitBreaker {
 
         let elapsed = Duration::from_millis(now.saturating_sub(opened_at));
         if elapsed >= self.config.recovery_timeout {
-            let mut state = self.state.write().unwrap();
+            let mut state = self.state.write();
             if *state == CircuitState::Open {
                 *state = CircuitState::HalfOpen;
                 self.half_open_requests.store(0, Ordering::SeqCst);
@@ -295,7 +296,7 @@ impl CircuitBreaker {
 
     /// Time until circuit transitions to half-open
     fn time_until_half_open(&self) -> Option<Duration> {
-        let state = *self.state.read().unwrap();
+        let state = *self.state.read();
         if state != CircuitState::Open {
             return None;
         }
@@ -324,7 +325,7 @@ impl Clone for CircuitBreaker {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
-            state: RwLock::new(*self.state.read().unwrap()),
+            state: RwLock::new(*self.state.read()),
             failure_count: AtomicU32::new(self.failure_count.load(Ordering::SeqCst)),
             opened_at: AtomicU64::new(self.opened_at.load(Ordering::SeqCst)),
             half_open_requests: AtomicU32::new(self.half_open_requests.load(Ordering::SeqCst)),
@@ -362,12 +363,12 @@ impl CircuitBreakerRegistry {
     /// Get or create a circuit breaker for a service
     pub fn get_or_create(&self, service_name: &str) -> Arc<CircuitBreaker> {
         // Fast path: check if exists
-        if let Some(breaker) = self.breakers.read().unwrap().get(service_name) {
+        if let Some(breaker) = self.breakers.read().get(service_name) {
             return breaker.clone();
         }
 
         // Slow path: create new breaker
-        let mut breakers = self.breakers.write().unwrap();
+        let mut breakers = self.breakers.write();
         breakers
             .entry(service_name.to_string())
             .or_insert_with(|| {
@@ -378,19 +379,18 @@ impl CircuitBreakerRegistry {
 
     /// Get a circuit breaker for a service (if exists)
     pub fn get(&self, service_name: &str) -> Option<Arc<CircuitBreaker>> {
-        self.breakers.read().unwrap().get(service_name).cloned()
+        self.breakers.read().get(service_name).cloned()
     }
 
     /// Get all circuit breakers
     pub fn all(&self) -> Vec<Arc<CircuitBreaker>> {
-        self.breakers.read().unwrap().values().cloned().collect()
+        self.breakers.read().values().cloned().collect()
     }
 
     /// Get status of all circuit breakers
     pub fn status(&self) -> HashMap<String, CircuitState> {
         self.breakers
             .read()
-            .unwrap()
             .iter()
             .map(|(k, v)| (k.clone(), v.state()))
             .collect()
@@ -398,7 +398,7 @@ impl CircuitBreakerRegistry {
 
     /// Reset all circuit breakers
     pub fn reset_all(&self) {
-        for breaker in self.breakers.read().unwrap().values() {
+        for breaker in self.breakers.read().values() {
             breaker.reset();
         }
     }
@@ -408,7 +408,7 @@ impl Clone for CircuitBreakerRegistry {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
-            breakers: RwLock::new(self.breakers.read().unwrap().clone()),
+            breakers: RwLock::new(self.breakers.read().clone()),
         }
     }
 }
@@ -417,7 +417,7 @@ impl std::fmt::Debug for CircuitBreakerRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CircuitBreakerRegistry")
             .field("config", &self.config)
-            .field("services", &self.breakers.read().unwrap().keys().collect::<Vec<_>>())
+            .field("services", &self.breakers.read().keys().collect::<Vec<_>>())
             .finish()
     }
 }
