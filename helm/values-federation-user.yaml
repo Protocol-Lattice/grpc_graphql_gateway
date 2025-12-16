@@ -1,0 +1,53 @@
+# Federation User Subgraph Values
+# Use with: helm install user-subgraph ./grpc-graphql-gateway -f helm/values-federation-user.yaml
+
+replicaCount: 3
+
+image:
+  repository: ghcr.io/protocol-lattice/grpc-graphql-gateway
+  tag: "0.2.9"
+
+nameOverride: "user-subgraph"
+fullnameOverride: "user-subgraph"
+
+service:
+  type: ClusterIP
+  httpPort: 8891
+  grpcPort: 50051
+  metricsPort: 9090
+
+ingress:
+  enabled: false
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+env:
+  - name: RUST_LOG
+    value: "info"
+  - name: PORT
+    value: "8891"
+  - name: GRPC_PORT
+    value: "50051"
+  - name: METRICS_PORT
+    value: "9090"
+  - name: SERVICE_NAME
+    value: "user"
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+persistence:
+  enabled: false

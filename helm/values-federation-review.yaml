@@ -1,0 +1,53 @@
+# Federation Review Subgraph Values
+# Use with: helm install review-subgraph ./grpc-graphql-gateway -f helm/values-federation-review.yaml
+
+replicaCount: 3
+
+image:
+  repository: ghcr.io/protocol-lattice/grpc-graphql-gateway
+  tag: "0.2.9"
+
+nameOverride: "review-subgraph"
+fullnameOverride: "review-subgraph"
+
+service:
+  type: ClusterIP
+  httpPort: 8893
+  grpcPort: 50053
+  metricsPort: 9090
+
+ingress:
+  enabled: false
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+env:
+  - name: RUST_LOG
+    value: "info"
+  - name: PORT
+    value: "8893"
+  - name: GRPC_PORT
+    value: "50053"
+  - name: METRICS_PORT
+    value: "9090"
+  - name: SERVICE_NAME
+    value: "review"
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+persistence:
+  enabled: false

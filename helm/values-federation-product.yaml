@@ -1,0 +1,53 @@
+# Federation Product Subgraph Values
+# Use with: helm install product-subgraph ./grpc-graphql-gateway -f helm/values-federation-product.yaml
+
+replicaCount: 3
+
+image:
+  repository: ghcr.io/protocol-lattice/grpc-graphql-gateway
+  tag: "0.2.9"
+
+nameOverride: "product-subgraph"
+fullnameOverride: "product-subgraph"
+
+service:
+  type: ClusterIP
+  httpPort: 8892
+  grpcPort: 50052
+  metricsPort: 9090
+
+ingress:
+  enabled: false
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+env:
+  - name: RUST_LOG
+    value: "info"
+  - name: PORT
+    value: "8892"
+  - name: GRPC_PORT
+    value: "50052"
+  - name: METRICS_PORT
+    value: "9090"
+  - name: SERVICE_NAME
+    value: "product"
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+persistence:
+  enabled: false
