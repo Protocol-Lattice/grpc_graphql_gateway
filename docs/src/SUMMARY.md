@@ -55,6 +55,7 @@
 
 # Production
 
+- [Security Checklist](./production/security-checklist.md)
 - [Graceful Shutdown](./production/graceful-shutdown.md)
 - [Header Propagation](./production/header-propagation.md)
 - [Configuration Reference](./production/configuration.md)
