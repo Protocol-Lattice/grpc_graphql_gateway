@@ -27,6 +27,34 @@ let gateway = Gateway::builder()
 | `default_ttl` | Duration | Time before entries expire |
 | `stale_while_revalidate` | Option\<Duration\> | Serve stale content while refreshing |
 | `invalidate_on_mutation` | bool | Clear cache on mutations |
+| `redis_url` | Option\<String\> | Redis connection URL for distributed caching |
+| `vary_headers` | Vec\<String\> | Headers to include in cache key (default: `["Authorization"]`) |
+
+## Distributed Caching (Redis)
+
+Use Redis for shared caching across multiple gateway instances:
+
+```rust
+let gateway = Gateway::builder()
+    .with_response_cache(CacheConfig {
+        redis_url: Some("redis://127.0.0.1:6379".to_string()),
+        default_ttl: Duration::from_secs(60),
+        ..Default::default()
+    })
+    .build()?;
+```
+
+## Vary Headers
+
+By default, the cache key includes the `Authorization` header to prevent leaking user data. You can configure which headers affect the cache key:
+
+```rust
+CacheConfig {
+    // Cache per user and per tenant
+    vary_headers: vec!["Authorization".to_string(), "X-Tenant-ID".to_string()],
+    ..Default::default()
+}
+```
 
 ## How It Works
 

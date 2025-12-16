@@ -41,7 +41,7 @@ Transform your gRPC microservices into a unified GraphQL API with zero GraphQL c
 - ⚡ **Rate Limiting** - Built-in rate limiting middleware
 - 📦 **Automatic Persisted Queries (APQ)** - Reduce bandwidth with query hash caching
 - 🔌 **Circuit Breaker** - Prevent cascading failures with automatic backend health management
-- 🗄️ **Response Caching** - In-memory LRU cache with TTL and mutation-triggered invalidation
+- 🗄️ **Response Caching** - In-memory or Redis-based distributed cache with TTL and mutation-triggered invalidation
 - � **Request Collapsing** - Deduplicate identical in-flight gRPC calls for reduced backend load
 - �📋 **Batch Queries** - Execute multiple GraphQL operations in a single HTTP request
 - 🛑 **Graceful Shutdown** - Clean server shutdown with in-flight request draining
@@ -815,6 +815,36 @@ let gateway = Gateway::builder()
   "requests_by_type": {"query": 14000, "mutation": 1400, "subscription": 20}
 }
 ```
+
+### Response Caching
+
+Improve performance with in-memory or Redis-based response caching:
+
+```rust
+use grpc_graphql_gateway::{Gateway, CacheConfig};
+use std::time::Duration;
+
+let gateway = Gateway::builder()
+    .with_response_cache(CacheConfig {
+        // In-memory (default)
+        max_size: 10_000,
+        
+        // OR distributed Redis
+        redis_url: Some("redis://cache:6379".to_string()),
+        
+        default_ttl: Duration::from_secs(60),
+        invalidate_on_mutation: true,
+        ..Default::default()
+    })
+    .build()?;
+```
+
+**Features:**
+- 🚀 **Zero Latency** - Serve cached responses instantly (<1ms)
+- 🔄 **Mutation Invalidation** - Automatically clear cache when data changes
+- 🌐 **Distributed** - Use Redis for sharing cache across gateway instances
+- 🎯 **Vary Headers** - Cache segmentation by auth headers or tenant IDs
+
 
 ### Automatic Persisted Queries (APQ)
 
