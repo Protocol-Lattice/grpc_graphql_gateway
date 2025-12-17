@@ -532,8 +532,8 @@ impl<T: Send> ObjectPool<T> {
     }
 
     /// Get an object from the pool (or create a new one)
-    pub fn get(&self) -> T {
-        self.pool.pop().unwrap_or_else(|| (self.factory)())
+    pub fn get(&self) -> Option<T> {
+        self.pool.pop().or_else(|| Some((self.factory)()))
     }
 
     /// Return an object to the pool
