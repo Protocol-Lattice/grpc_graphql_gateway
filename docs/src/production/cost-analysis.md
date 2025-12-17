@@ -222,15 +222,24 @@ With proper caching, your database load is significantly reduced:
 | 85% | 15,000 queries/s |
 | 90% | 10,000 queries/s |
 
-### Recommended Database Sizing
+### Database Optimization with PgBouncer
 
-| Database Size | Specification | Handles (queries/sec) | Monthly Cost |
-|---------------|--------------|----------------------|--------------|
-| **Small** | 2 vCPU, 4GB RAM | 5-10k queries/s | $30-50 |
-| **Medium** | 4 vCPU, 8GB RAM | 20-40k queries/s | $100-150 |
-| **Large** | 8 vCPU, 32GB RAM | 80-150k queries/s | $300-500 |
+Adding **PgBouncer** (connection pooler) is critical for high-throughput GraphQL workloads. It reduces connection overhead by reusing existing connections, allowing you to handle significantly more requests with smaller database instances.
 
-> **Recommendation:** With 75% cache hit rate, a **Medium** database ($100-150/month) handles 100k req/s comfortably.
+| Optimization | Impact | Cost Saving |
+|--------------|--------|-------------|
+| **PgBouncer** | Increases transaction throughput by 2-4x | Downgrade DB tier (e.g., Large → Medium) |
+| **Read Replicas** | Offloads read traffic from primary | Scale horizontally instead of vertically |
+
+**Revised Database Sizing with PgBouncer:**
+
+| Database Size | Ops/sec (Raw) | Ops/sec (w/ PgBouncer) | Monthly Cost |
+|---------------|---------------|------------------------|--------------|
+| **Small** | ~2,000 | ~8,000 | $30-50 |
+| **Medium** | ~5,000 | ~25,000 | $100-150 |
+| **Large** | ~15,000 | ~60,000+ | $300-500 |
+
+> **Recommendation:** With PgBouncer + Redis Caching, a **Medium** instance or even a well-tuned **Small** instance can often handle 100k req/s traffic if the cache hit rate is high (>85%).
 
 ---
 
@@ -263,7 +272,7 @@ Savings: ~92% reduction in gateway costs
 |------|-----------|--------------|----------|
 | **Development** | 1 Gateway + SQLite | **~$20/month** | Local/Dev |
 | **Staging** | 2 Gateways + CF Free + Managed DB | **~$100/month** | Staging |
-| **Production** | 3 Gateways + CF Pro + Redis + PostgreSQL | **~$370/month** | Production |
+| **Production** | 3 Gateways + CF Pro + Redis + PgBouncer + Postgres | **~$300/month** | Production |
 | **Enterprise** | 5 Gateways + CF Business + Redis Cluster + DB Cluster | **~$800+/month** | High Volume |
 
 ---
@@ -272,18 +281,18 @@ Savings: ~92% reduction in gateway costs
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  100k req/s Full Stack - Production Ready               │
+│  100k req/s Full Stack - Optimized                      │
 ├─────────────────────────────────────────────────────────┤
 │  Cloudflare Pro .......................... $20/month   │
 │  3× Gateway (c6g.large) .................. $90/month   │
-│  Load Balancer ........................... $22/month   │
+│  PgBouncer (t4g.micro) ................... $10/month   │
 │  Redis 3GB ............................... $50/month   │
-│  PostgreSQL (Multi-AZ) .................. $140/month   │
+│  PostgreSQL (Optimization) ............... $80/month   │
 │  Data Transfer (~500GB) .................. $45/month   │
 ├─────────────────────────────────────────────────────────┤
-│  TOTAL .................................. ~$370/month   │
-│  Annual ................................ ~$4,440/year   │
-│  vs Apollo Server savings .............. ~$10,000/year │
+│  TOTAL .................................. ~$295/month   │
+│  Annual ................................ ~$3,540/year   │
+│  vs Standard Setup ..................... save $900/yr  │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -291,8 +300,9 @@ Savings: ~92% reduction in gateway costs
 
 ## Cost Optimization Tips
 
-1. **Use ARM instances** (`c6g` on AWS, `t2a` on GCP) - 20% cheaper than x86
-2. **Enable response caching** - Reduces backend load by 60-80%
+1. **Use PgBouncer** - Essential for high concurrency.
+2. **Use ARM instances** (`c6g` on AWS, `t2a` on GCP) - 20% cheaper than x86.
+3. **Enable response caching** - Reduces backend load by 60-80%.
 3. **Use Cloudflare edge caching** - Reduces origin requests by 30-50%
 4. **Right-size your database** - Start small, scale based on metrics
 5. **Use Reserved Instances** - Save 30-60% on long-term commitments

@@ -23,6 +23,7 @@ Apollo Server         ██░░░░░░░░░░░░░░░░░�
 ```
 
 **14x faster than Node.js** | **54k+ req/s** | **75-87% cost savings**
+**Complete 100k req/s Stack: ~$300/mo**
 
 ## ✨ Features
 
