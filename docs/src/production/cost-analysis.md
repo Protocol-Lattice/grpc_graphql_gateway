@@ -222,6 +222,27 @@ With proper caching, your database load is significantly reduced:
 | 85% | 15,000 queries/s |
 | 90% | 10,000 queries/s |
 
+### Bandwidth Cost Analysis (The Hidden Giant)
+
+For **100k req/s**, data transfer is often the largest cost.
+*Assumption: 2KB average response size.*
+
+**Total Data Transfer**: `2KB * 100k/s` ≈ **518 TB/month**.
+
+| Scenario | Egress Data | AWS Cost ($0.09/GB) |
+|----------|-------------|---------------------|
+| **1. Raw Traffic** | 518 TB | **$46,620 / mo** 😱 |
+| **2. + Compression (70%)** | 155 TB | **$13,950 / mo** |
+| **3. + Cloudflare (80% Hit)** | 31 TB | **$2,790 / mo** |
+| **4. + Both** | ~10 TB | **$900 / mo** |
+
+**How to achieve Scenario 4:**
+1.  **Compression**: Enable Brotli/Gzip in Gateway (`.with_compression(CompressionConfig::default())`).
+2.  **APQ**: Enable Automatic Persisted Queries to reduce Ingress bandwidth.
+3.  **Cloudflare**: Cache common queries at the edge.
+
+> **Savings**: Compression and Caching save you over **$45,000/month** in bandwidth costs.
+
 ### Database Optimization with PgBouncer
 
 Adding **PgBouncer** (connection pooler) is critical for high-throughput GraphQL workloads. It reduces connection overhead by reusing existing connections, allowing you to handle significantly more requests with smaller database instances.
@@ -303,7 +324,8 @@ Savings: ~92% reduction in gateway costs
 1. **Use PgBouncer** - Essential for high concurrency.
 2. **Use ARM instances** (`c6g` on AWS, `t2a` on GCP) - 20% cheaper than x86.
 3. **Enable response caching** - Reduces backend load by 60-80%.
-3. **Use Cloudflare edge caching** - Reduces origin requests by 30-50%
+4. **Bandwidth Optimization** - Use [APQ](../performance/apq.md) and [Compression](../performance/compression.md) to cut data transfer costs by 50-90%.
+5. **Use Cloudflare edge caching** - Reduces origin requests by 30-50%
 4. **Right-size your database** - Start small, scale based on metrics
 5. **Use Reserved Instances** - Save 30-60% on long-term commitments
 6. **Enable compression** - Reduces data transfer costs
