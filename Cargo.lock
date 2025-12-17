@@ -973,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "grpc_graphql_gateway"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "ahash",
  "anyhow",
