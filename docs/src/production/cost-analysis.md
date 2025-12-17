@@ -293,8 +293,8 @@ Savings: ~92% reduction in gateway costs
 |------|-----------|--------------|----------|
 | **Development** | 1 Gateway + SQLite | **~$20/month** | Local/Dev |
 | **Staging** | 2 Gateways + CF Free + Managed DB | **~$100/month** | Staging |
-| **Production** | 3 Gateways + CF Pro + Redis + PgBouncer + Postgres | **~$300/month** | Production |
-| **Enterprise** | 5 Gateways + CF Business + Redis Cluster + DB Cluster | **~$800+/month** | High Volume |
+| **Production** | 3 Gateways + CF Pro + Redis + PgBouncer + Postgres | **~$1,200/month** | 100k req/s (Public) |
+| **Enterprise** | 5 Gateways + CF Business + Redis Cluster + DB Cluster | **~$2,500+/month** | High Volume |
 
 ---
 
@@ -309,11 +309,11 @@ Savings: ~92% reduction in gateway costs
 │  PgBouncer (t4g.micro) ................... $10/month   │
 │  Redis 3GB ............................... $50/month   │
 │  PostgreSQL (Optimization) ............... $80/month   │
-│  Data Transfer (~500GB) .................. $45/month   │
+│  Data Transfer (Optimized 10TB) .......... $900/month  │
 ├─────────────────────────────────────────────────────────┤
-│  TOTAL .................................. ~$295/month   │
-│  Annual ................................ ~$3,540/year   │
-│  vs Standard Setup ..................... save $900/yr  │
+│  TOTAL .................................. ~$1,150/month │
+│  Annual ................................ ~$13,800/year  │
+│  vs Unoptimized (~$47k/mo) ............. save $500k/yr │
 └─────────────────────────────────────────────────────────┘
 ```
 
