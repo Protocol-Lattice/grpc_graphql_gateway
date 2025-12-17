@@ -314,15 +314,19 @@ Cost estimates based on user count (assuming 0.5 req/s per active user):
 
 Since your infrastructure cost is so low (~$155/mo for 10k users), you achieve profitability much faster than with traditional stacks.
 
-**Revenue Scenarios for 10k Active Users:**
+**Revenue Potential Scaling (Freemium Model):**
+*Assumption: 5% of users convert to a $9/mo plan.*
 
-| Business Model | Logic | Monthly Revenue | vs Cost ($155) |
-|----------------|-------|-----------------|----------------|
-| **Freemium** | 5% conversion @ $9/mo | **$4,500 / mo** | ✅ **30x ROI** |
-| **Ad-Supported** | $2.00 RPM (Views) | **$2,000 / mo** | ✅ **12x ROI** |
-| **Pro SaaS** | $29/mo (All Paid) | **$290,000 / mo** | 🚀 **1800x ROI** |
+| User Base | Monthly Revenue | Infra Cost (Ops) | **Net Profit** |
+|-----------|----------------:|------------------|----------------|
+| **1,000** | $450 | ~$20 | **$430** (95% Margin) |
+| **10,000** | $4,500 | ~$155 | **$4,345** (96% Margin) |
+| **100,000** | **$45,000** | ~$600 | **$44,400** (98% Margin) |
+| **1 Million** | **$450,000** | ~$6,000 | **$444,000** (98% Margin) |
 
-*Most startups burn $1000+ just to serve 10k users. You spend $155.*
+> **The "Rust Scaling Advantage"**:
+> With Node.js or Java, your infrastructure costs usually grow *linearly* with users ($20 -> $200 -> $2,000).
+> With this optimized Rust stack, your costs grow *sub-linearly* thanks to high efficiency, meaning **your profit margins actually increase as you scale**.
 
 ---
 
