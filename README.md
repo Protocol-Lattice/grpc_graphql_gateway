@@ -22,7 +22,7 @@ grpc_graphql_gateway  ███████████████████�
 Apollo Server         ██░░░░░░░░░░░░░░░░░░░░░░░  4,000 req/s
 ```
 
-**27x faster than Node.js** | **54k+ req/s** | **75-87% cost savings**
+**14x faster than Node.js** | **54k+ req/s** | **75-87% cost savings**
 
 ## ✨ Features
 
