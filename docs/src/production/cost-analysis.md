@@ -296,6 +296,20 @@ Savings: ~92% reduction in gateway costs
 | **Production** | 3 Gateways + CF Pro + Redis + PgBouncer + Postgres | **~$1,200/month** | 100k req/s (Public) |
 | **Enterprise** | 5 Gateways + CF Business + Redis Cluster + DB Cluster | **~$2,500+/month** | High Volume |
 
+## Scaling Scenarios
+
+Cost estimates based on user count (assuming 0.5 req/s per active user):
+
+| Metric | Startup (1k Users) | Growth (10k Users) | Scale (100k Users) | High Scale |
+|--------|-------------------|--------------------|--------------------|------------|
+| **Est. Load** | ~500 req/s | **~5,000 req/s** | ~50,000 req/s | 100k req/s |
+| **Gateways** | 1 (`t4g.micro`) | **2 (`t4g.small`)** | 3 (`c6g.medium`) | 3 (`c6g.large`) |
+| **Database** | SQLite / Low | **Small RDS** | Medium RDS | Optimized HA |
+| **Bandwidth** | Free Tier | **~$50/mo** | ~$450/mo | ~$900/mo |
+| **Total Cost** | **~$20 / mo** | **~$155 / mo** | **~$600 / mo** | **~$1,200 / mo** |
+
+> **Note**: "10k users online" usually generates ~5,000 req/s. At this scale, your infrastructure cost is negligible (<$200) because the gateway is so efficient.
+
 ---
 
 ## Quick Reference Card
