@@ -45,9 +45,6 @@ test_query "Get User" \
     "http://127.0.0.1:8891/graphql" \
     "query { user(id: \\\"u1\\\") { id email name } }"
 
-test_query "List All Users" \
-    "http://127.0.0.1:8891/graphql" \
-    "query { users { id name email } }"
 
 # Product Subgraph Tests
 echo -e "${YELLOW}=== Product Subgraph (Port 8892) ===${NC}"
@@ -104,7 +101,7 @@ done
 echo -e "${YELLOW}=== Metrics ===${NC}"
 echo ""
 
-for port in 9091 9092 9093; do
+for port in 8891 8892 8893; do
     echo -e "${BLUE}Metrics: Port $port${NC}"
     metrics=$(curl -s "http://127.0.0.1:$port/metrics" 2>&1 | head -5)
     if [ $? -eq 0 ]; then

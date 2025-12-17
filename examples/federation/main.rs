@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_graphql::{Name, Value as GqlValue};
-use grpc_graphql_gateway::{EntityResolver, Gateway, GrpcClient};
+use grpc_graphql_gateway::{EntityResolver, Gateway, GrpcClient, HighPerfConfig};
 use tokio::sync::RwLock;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::info;
@@ -111,9 +111,12 @@ async fn run_user_gateway(entity_resolver: Arc<dyn EntityResolver>) -> Result<()
     Gateway::builder()
         .with_descriptor_set_bytes(DESCRIPTORS)
         .enable_federation()
+        .enable_health_checks()
+        .enable_metrics()
         .with_entity_resolver(entity_resolver)
         .add_grpc_clients([("federation_example.UserService".to_string(), user_client)])
         .with_services(["federation_example.UserService"])
+        .with_high_performance(HighPerfConfig::ultra_fast())
         .serve(USER_GRAPH_ADDR)
         .await?;
 
@@ -132,12 +135,15 @@ async fn run_product_gateway(entity_resolver: Arc<dyn EntityResolver>) -> Result
     Gateway::builder()
         .with_descriptor_set_bytes(DESCRIPTORS)
         .enable_federation()
+        .enable_health_checks()
+        .enable_metrics()
         .with_entity_resolver(entity_resolver)
         .add_grpc_clients([(
             "federation_example.ProductService".to_string(),
             product_client,
         )])
         .with_services(["federation_example.ProductService"])
+        .with_high_performance(HighPerfConfig::ultra_fast())
         .serve(PRODUCT_GRAPH_ADDR)
         .await?;
 
@@ -155,12 +161,15 @@ async fn run_review_gateway(entity_resolver: Arc<dyn EntityResolver>) -> Result<
     Gateway::builder()
         .with_descriptor_set_bytes(DESCRIPTORS)
         .enable_federation()
+        .enable_health_checks()
+        .enable_metrics()
         .with_entity_resolver(entity_resolver)
         .add_grpc_clients([(
             "federation_example.ReviewService".to_string(),
             review_client,
         )])
         .with_services(["federation_example.ReviewService"])
+        .with_high_performance(HighPerfConfig::ultra_fast())
         .serve(REVIEW_GRAPH_ADDR)
         .await?;
 

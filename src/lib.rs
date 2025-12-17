@@ -77,6 +77,7 @@ pub mod request_collapsing;
 pub mod openapi;
 pub mod tracing_otel;
 pub mod types;
+pub mod high_performance;
 
 pub use analytics::{
     create_analytics, AnalyticsConfig, AnalyticsGuard, AnalyticsSnapshot, ErrorStats,
@@ -144,4 +145,9 @@ pub use request_collapsing::{
 pub use openapi::{
     Components, MediaType, OpenApiInfo, OpenApiParser, OpenApiServer, OpenApiSpec,
     Operation, OperationInfo, Parameter, PathItem, RequestBody, Response, SchemaObject,
+};
+pub use high_performance::{
+    FastJsonParser, FastJsonError, ShardedCache, CacheStats as ShardedCacheStats,
+    ObjectPool, BatchProcessor, BatchConfig, HighPerfConfig, OptimizedConnectionConfig,
+    PerfMetrics, ResponseTemplates, recommended_workers, pin_to_core,
 };

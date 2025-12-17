@@ -45,6 +45,7 @@
 
 # Performance & Resilience
 
+- [High Performance](./performance/high-performance.md)
 - [Response Caching](./performance/caching.md)
 - [Response Compression](./performance/compression.md)
 - [Request Collapsing](./performance/request-collapsing.md)

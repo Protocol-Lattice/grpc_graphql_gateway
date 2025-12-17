@@ -15,6 +15,11 @@ use crate::persisted_queries::{
 use crate::query_whitelist::{QueryWhitelistConfig, SharedQueryWhitelist};
 use crate::request_collapsing::{RequestCollapsingConfig, SharedRequestCollapsingRegistry};
 use crate::schema::{DynamicSchema, GrpcResponseCache};
+use crate::high_performance::{
+    HighPerfConfig, FastJsonParser, ShardedCache, PerfMetrics, ResponseTemplates,
+    recommended_workers, pin_to_core,
+};
+use bytes::Bytes;
 use async_graphql::ServerError;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use axum::{
@@ -26,7 +31,7 @@ use axum::{
 };
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// ServeMux - main gateway handler
 ///
@@ -56,6 +61,16 @@ pub struct ServeMux {
     analytics: Option<SharedQueryAnalytics>,
     /// Request collapsing registry for deduplication
     request_collapsing: Option<SharedRequestCollapsingRegistry>,
+    /// High-performance configuration
+    high_perf_config: Option<HighPerfConfig>,
+    /// Fast JSON parser (SIMD-accelerated)
+    json_parser: Arc<FastJsonParser>,
+    /// High-performance sharded cache
+    sharded_cache: Option<Arc<ShardedCache<Bytes>>>,
+    /// Performance metrics tracking
+    perf_metrics: Arc<PerfMetrics>,
+    /// Pre-computed response templates
+    response_templates: Arc<ResponseTemplates>,
 }
 
 impl ServeMux {
@@ -75,6 +90,11 @@ impl ServeMux {
             query_whitelist: None,
             analytics: None,
             request_collapsing: None,
+            high_perf_config: None,
+            json_parser: Arc::new(FastJsonParser::default()),
+            sharded_cache: None,
+            perf_metrics: Arc::new(PerfMetrics::default()),
+            response_templates: Arc::new(ResponseTemplates::new()),
         }
     }
 
@@ -158,6 +178,31 @@ impl ServeMux {
         self.request_collapsing.as_ref()
     }
 
+    /// Enable high-performance optimizations for 100K+ RPS
+    pub fn enable_high_performance(&mut self, config: HighPerfConfig) {
+        self.json_parser = Arc::new(FastJsonParser::new(config.buffer_pool_size));
+        self.sharded_cache = Some(Arc::new(ShardedCache::new(
+            config.cache_shards,
+            config.max_entries_per_shard,
+        )));
+        
+        // Optional CPU affinity pinning
+        if config.cpu_affinity {
+            let num_cores = recommended_workers();
+            for i in 0..num_cores {
+                // Pinning usually happens in thread creation, but we can try for current
+                let _ = pin_to_core(i); 
+            }
+        }
+        
+        self.high_perf_config = Some(config);
+    }
+
+    /// Get high-performance metrics
+    pub fn perf_metrics(&self) -> &PerfMetrics {
+        &self.perf_metrics
+    }
+
     /// Add middleware to the execution pipeline
     ///
     /// Middlewares are executed in the order they are added.
@@ -236,20 +281,17 @@ impl ServeMux {
     pub async fn handle_http(
         &self,
         headers: HeaderMap,
-        request: GraphQLRequest,
-    ) -> GraphQLResponse {
-        let inner_request = request.into_inner();
-        
-        // Process APQ if enabled
+        request: async_graphql::Request,
+    ) -> async_graphql::Response {
         let processed_request = if let Some(ref apq_store) = self.apq_store {
-            match self.process_apq_request(apq_store, inner_request) {
+            match self.process_apq_request(apq_store, request) {
                 Ok(req) => req,
                 Err(apq_err) => {
                     return self.apq_error_response(apq_err);
                 }
             }
         } else {
-            inner_request
+            request
         };
 
         // Validate query against whitelist if enabled
@@ -398,6 +440,9 @@ impl ServeMux {
                             cache.invalidate_for_mutation(&resp_json).await;
                         }
                     }
+                    if let Some(ref sharded) = self.sharded_cache {
+                        sharded.clear(); // Simple invalidation for sharded cache on mutation
+                    }
                 } else if let Some((query, vars, op_name)) = cache_query_info {
                     // Cache the response for queries
                     if let Some(ref cache) = self.response_cache {
@@ -412,11 +457,18 @@ impl ServeMux {
                             // Extract types and entities for invalidation tracking
                             let types = extract_types_from_response(&resp_json);
                             let entities = extract_entities_from_response(&resp_json);
-                            cache.put(cache_key, resp_json, types, entities).await;
+                            cache.put(cache_key.clone(), resp_json, types, entities).await;
+                            
+                            // Also cache in sharded cache if enabled
+                            if let Some(ref sharded) = self.sharded_cache {
+                                if let Ok(resp_bytes) = self.json_parser.serialize(&resp) {
+                                    sharded.insert(&cache_key, resp_bytes, Duration::from_secs(60));
+                                }
+                            }
                         }
                     }
                 }
-                resp.into()
+                resp
             }
             Err(err) => {
                 let duration = request_start.elapsed();
@@ -438,23 +490,94 @@ impl ServeMux {
                     handler(vec![gql_err.clone()]);
                 }
                 let server_err = ServerError::new(gql_err.message.clone(), None);
-                async_graphql::Response::from_errors(vec![server_err]).into()
+                async_graphql::Response::from_errors(vec![server_err])
             }
         }
     }
 
+    /// High-performance GraphQL handler for maximum throughput
+    pub async fn handle_fast(
+        &self,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> axum::response::Response {
+        let start = Instant::now();
+        
+        // 1. SIMD JSON parsing
+        let request_val = match self.json_parser.parse_bytes(&body) {
+            Ok(v) => v,
+            Err(err) => {
+                tracing::warn!("Failed to parse JSON with SIMD: {}", err);
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    self.response_templates.errors.get("PARSE_ERROR").cloned()
+                        .unwrap_or_else(|| Bytes::from(r#"{"errors":[{"message":"Invalid JSON"}]}"#))
+                ).into_response();
+            }
+        };
+
+        let query = request_val["query"].as_str().unwrap_or("");
+        let variables = &request_val["variables"];
+        let operation_name = request_val["operationName"].as_str();
+
+        // 2. High-performance cache lookup
+        if let Some(ref sharded) = self.sharded_cache {
+            let vary_header_values: Vec<String> = if let Some(ref cache) = self.response_cache {
+                cache.config.vary_headers.iter()
+                    .map(|h| format!("{}:{}", h, headers.get(h).and_then(|v| v.to_str().ok()).unwrap_or("")))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            let cache_key = crate::cache::ResponseCache::generate_cache_key(
+                query,
+                Some(variables),
+                operation_name,
+                &vary_header_values,
+            );
+
+            if let Some(cached_bytes) = sharded.get(&cache_key) {
+                self.perf_metrics.record(start.elapsed().as_nanos() as u64, true);
+                return (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    cached_bytes
+                ).into_response();
+            }
+        }
+
+        // 3. Fallback to normal execution for cache miss
+        // Convert to async_graphql::Request
+        let mut gql_req = async_graphql::Request::new(query);
+        if !variables.is_null() {
+            if let Ok(vars) = serde_json::from_value(variables.clone()) {
+                gql_req = gql_req.variables(vars);
+            }
+        }
+        if let Some(op) = operation_name {
+            gql_req = gql_req.operation_name(op);
+        }
+
+        let resp = self.handle_http(headers, gql_req).await;
+        
+        // Record metrics
+        self.perf_metrics.record(start.elapsed().as_nanos() as u64, false);
+        
+        GraphQLResponse::from(resp).into_response()
+    }
+
     /// Convert cached JSON to GraphQL response
-    fn cached_to_response(&self, data: serde_json::Value) -> GraphQLResponse {
+    fn cached_to_response(&self, data: serde_json::Value) -> async_graphql::Response {
         // Try to deserialize as Response, or create a simple data response
         match serde_json::from_value::<async_graphql::Response>(data.clone()) {
-            Ok(resp) => resp.into(),
+            Ok(resp) => resp,
             Err(_) => {
                 // Fallback: wrap in a simple response
-                let resp = async_graphql::Response::new(
+                async_graphql::Response::new(
                     serde_json::from_value::<async_graphql::Value>(data)
                         .unwrap_or(async_graphql::Value::Null)
-                );
-                resp.into()
+                )
             }
         }
     }
@@ -493,7 +616,7 @@ impl ServeMux {
     }
 
     /// Create an error response for APQ errors
-    fn apq_error_response(&self, err: PersistedQueryError) -> GraphQLResponse {
+    fn apq_error_response(&self, err: PersistedQueryError) -> async_graphql::Response {
         let error_extensions = err.to_extensions();
         let code = error_extensions.get("code")
             .and_then(|v| v.as_str())
@@ -506,7 +629,7 @@ impl ServeMux {
             ext
         });
         
-        async_graphql::Response::from_errors(vec![server_err]).into()
+        async_graphql::Response::from_errors(vec![server_err])
     }
 
     /// Convert to Axum router
@@ -527,7 +650,7 @@ impl ServeMux {
         let client_pool = self.client_pool.clone();
         let compression_config = self.compression_config.clone();
         
-        let state = Arc::new(self);
+        let state = Arc::new(self.clone());
         let subscription = GraphQLSubscription::new(state.schema.executor());
 
         // SECURITY: Check if playground should be enabled (default: disabled)
@@ -535,15 +658,20 @@ impl ServeMux {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
-        let router = if playground_enabled {
-            Router::new()
-                .route(
-                    "/graphql",
-                    post(handle_graphql_post).get(graphql_playground),
-                )
+        let state = Arc::new(self);
+        let use_fast_path = state.high_perf_config.is_some();
+
+        let router = Router::new();
+        let router = if use_fast_path {
+            router.route("/graphql", post(handle_graphql_fast))
         } else {
-            Router::new()
-                .route("/graphql", post(handle_graphql_post))
+            router.route("/graphql", post(handle_graphql_post))
+        };
+
+        let router = if playground_enabled {
+            router.route("/graphql", get(graphql_playground))
+        } else {
+            router
         };
         
         let mut router = router
@@ -691,6 +819,11 @@ impl Clone for ServeMux {
             query_whitelist: self.query_whitelist.clone(),
             analytics: self.analytics.clone(),
             request_collapsing: self.request_collapsing.clone(),
+            high_perf_config: self.high_perf_config.clone(),
+            json_parser: self.json_parser.clone(),
+            sharded_cache: self.sharded_cache.clone(),
+            perf_metrics: self.perf_metrics.clone(),
+            response_templates: self.response_templates.clone(),
         }
     }
 }
@@ -760,7 +893,16 @@ async fn handle_graphql_post(
     headers: HeaderMap,
     request: GraphQLRequest,
 ) -> impl IntoResponse {
-    mux.handle_http(headers, request).await
+    GraphQLResponse::from(mux.handle_http(headers, request.into_inner()).await)
+}
+
+/// Handler for high-performance POST requests to /graphql
+async fn handle_graphql_fast(
+    State(mux): State<Arc<ServeMux>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    mux.handle_fast(headers, body).await
 }
 
 /// Serve the GraphQL Playground UI for ad-hoc exploration.

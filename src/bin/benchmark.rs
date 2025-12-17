@@ -1,94 +1,375 @@
 use std::env;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Barrier;
 use uuid::Uuid;
 
 const SERVER_URL: &str = "http://127.0.0.1:8888/graphql";
-const CONCURRENCY: usize = 50;
-const DURATION_SECS: u64 = 10;
 
-#[tokio::main]
+/// Benchmark mode
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Mode {
+    Cached,
+    Uncached,
+    Mixed,
+    Stress,
+}
+
+/// Benchmark results
+#[derive(Debug)]
+struct BenchmarkResults {
+    mode: Mode,
+    duration: Duration,
+    total_requests: u64,
+    successful: u64,
+    errors: u64,
+    min_latency_us: u64,
+    max_latency_us: u64,
+    total_latency_us: u64,
+    p50_estimate_us: u64,
+    p99_estimate_us: u64,
+}
+
+impl BenchmarkResults {
+    fn rps(&self) -> f64 {
+        self.successful as f64 / self.duration.as_secs_f64()
+    }
+
+    fn avg_latency_us(&self) -> f64 {
+        if self.successful > 0 {
+            self.total_latency_us as f64 / self.successful as f64
+        } else {
+            0.0
+        }
+    }
+
+    fn error_rate(&self) -> f64 {
+        if self.total_requests > 0 {
+            self.errors as f64 / self.total_requests as f64 * 100.0
+        } else {
+            0.0
+        }
+    }
+
+    fn print(&self) {
+        println!("\n╔══════════════════════════════════════════════════════════════╗");
+        println!("║              BENCHMARK RESULTS - {:?} Mode                  ║", self.mode);
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!("║ Duration:           {:>10.2?}                              ║", self.duration);
+        println!("║ Total Requests:     {:>10}                              ║", self.total_requests);
+        println!("║ Successful:         {:>10}                              ║", self.successful);
+        println!("║ Errors:             {:>10}                              ║", self.errors);
+        println!("║ Error Rate:         {:>9.2}%                              ║", self.error_rate());
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!("║                     THROUGHPUT                               ║");
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!("║ Requests/sec:       {:>10.2}                              ║", self.rps());
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!("║                      LATENCY                                 ║");
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!("║ Min:                {:>10}µs                             ║", self.min_latency_us);
+        println!("║ Avg:                {:>10.2}µs                             ║", self.avg_latency_us());
+        println!("║ Max:                {:>10}µs                             ║", self.max_latency_us);
+        println!("║ P50 (est):          {:>10}µs                             ║", self.p50_estimate_us);
+        println!("║ P99 (est):          {:>10}µs                             ║", self.p99_estimate_us);
+        println!("╚══════════════════════════════════════════════════════════════╝");
+
+        // Performance rating
+        let rps = self.rps();
+        let rating = if rps >= 100_000.0 {
+            "🚀 EXCELLENT (100K+ RPS)"
+        } else if rps >= 50_000.0 {
+            "⭐ GREAT (50K+ RPS)"
+        } else if rps >= 20_000.0 {
+            "✓ GOOD (20K+ RPS)"
+        } else if rps >= 10_000.0 {
+            "📊 MODERATE (10K+ RPS)"
+        } else {
+            "⚠️ NEEDS OPTIMIZATION"
+        };
+        println!("\nPerformance Rating: {}", rating);
+    }
+}
+
+#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
-    let uncached = args.contains(&"--disable-cache".to_string());
 
-    println!("Starting benchmark against {}", SERVER_URL);
-    println!("Mode: {}", if uncached { "Uncached (Full Integration)" } else { "Cached (Gateway Overhead)" });
-    println!("Concurrency: {}", CONCURRENCY);
-    println!("Duration: {} seconds", DURATION_SECS);
+    // Parse arguments
+    let mode = if args.contains(&"--uncached".to_string()) {
+        Mode::Uncached
+    } else if args.contains(&"--mixed".to_string()) {
+        Mode::Mixed
+    } else if args.contains(&"--stress".to_string()) {
+        Mode::Stress
+    } else {
+        Mode::Cached
+    };
 
+    let concurrency: usize = args
+        .iter()
+        .find(|a| a.starts_with("--concurrency="))
+        .and_then(|a| a.strip_prefix("--concurrency="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(if mode == Mode::Stress { 200 } else { 100 });
+
+    let duration: u64 = args
+        .iter()
+        .find(|a| a.starts_with("--duration="))
+        .and_then(|a| a.strip_prefix("--duration="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+
+    let url = args
+        .iter()
+        .find(|a| a.starts_with("--url="))
+        .and_then(|a| a.strip_prefix("--url="))
+        .map(String::from)
+        .unwrap_or_else(|| SERVER_URL.to_string());
+
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("    gRPC-GraphQL Gateway High-Performance Benchmark");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("Target:      {}", url);
+    println!("Mode:        {:?}", mode);
+    println!("Concurrency: {} parallel workers", concurrency);
+    println!("Duration:    {} seconds", duration);
+    println!("═══════════════════════════════════════════════════════════════");
+
+    // Warm up the connection pool
+    println!("\n🔄 Warming up connection pool...");
+    let warmup_client = reqwest::Client::builder()
+        .pool_max_idle_per_host(concurrency)
+        .http2_prior_knowledge() // Use HTTP/2 directly
+        .tcp_nodelay(true)
+        .build()?;
+
+    for _ in 0..concurrency {
+        let _ = warmup_client
+            .post(&url)
+            .json(&serde_json::json!({
+                "query": "{ __typename }"
+            }))
+            .send()
+            .await;
+    }
+    println!("✓ Warmup complete\n");
+
+    // Create high-performance HTTP client
     let client = reqwest::Client::builder()
-        .pool_max_idle_per_host(CONCURRENCY)
+        .pool_max_idle_per_host(concurrency * 2)
+        .pool_idle_timeout(Duration::from_secs(90))
+        .http2_prior_knowledge() // Force HTTP/2 for better multiplexing
+        .http2_initial_stream_window_size(65535 * 16)
+        .http2_initial_connection_window_size(65535 * 16)
+        .http2_adaptive_window(true)
+        .tcp_nodelay(true)
+        .tcp_keepalive(Duration::from_secs(30))
+        .timeout(Duration::from_secs(30))
         .build()?;
 
     let start_time = Instant::now();
-    let end_time = start_time + Duration::from_secs(DURATION_SECS);
-    
-    let total_requests = Arc::new(AtomicUsize::new(0));
-    let total_errors = Arc::new(AtomicUsize::new(0));
-    let barrier = Arc::new(Barrier::new(CONCURRENCY));
-    
-    let mut handles = Vec::new();
+    let end_time = start_time + Duration::from_secs(duration);
 
-    for _ in 0..CONCURRENCY {
+    // Atomic counters for thread-safe metrics
+    let successful = Arc::new(AtomicU64::new(0));
+    let errors = Arc::new(AtomicU64::new(0));
+    let total_latency = Arc::new(AtomicU64::new(0));
+    let min_latency = Arc::new(AtomicU64::new(u64::MAX));
+    let max_latency = Arc::new(AtomicU64::new(0));
+    let barrier = Arc::new(Barrier::new(concurrency));
+
+    let mut handles = Vec::with_capacity(concurrency);
+
+    for worker_id in 0..concurrency {
         let client = client.clone();
-        let total_requests = total_requests.clone();
-        let total_errors = total_errors.clone();
+        let url = url.clone();
+        let successful = successful.clone();
+        let errors = errors.clone();
+        let total_latency = total_latency.clone();
+        let min_latency = min_latency.clone();
+        let max_latency = max_latency.clone();
         let barrier = barrier.clone();
 
         handles.push(tokio::spawn(async move {
-            barrier.wait().await; // Wait for all tasks to be ready
-            
+            // Wait for all workers to be ready
+            barrier.wait().await;
+
+            let mut local_successful = 0u64;
+            let mut local_errors = 0u64;
+            let mut local_latency = 0u64;
+            let mut local_min = u64::MAX;
+            let mut local_max = 0u64;
+
             while Instant::now() < end_time {
-                let query = if uncached {
-                    let random_name = Uuid::new_v4().to_string();
-                    serde_json::json!({
-                        "query": "query($n: String!) { hello(name: $n) { message } }",
-                        "variables": { "n": random_name }
-                    })
-                } else {
-                    serde_json::json!({
-                        "query": "{ hello(name: \"Benchmark\") { message } }"
-                    })
+                let query = match mode {
+                    Mode::Cached => {
+                        // Same query every time - should hit cache
+                        serde_json::json!({
+                            "query": "{ hello(name: \"Benchmark\") { message } }"
+                        })
+                    }
+                    Mode::Uncached => {
+                        // Random name - cache miss every time
+                        let random_name = Uuid::new_v4().to_string();
+                        serde_json::json!({
+                            "query": "query($n: String!) { hello(name: $n) { message } }",
+                            "variables": { "n": random_name }
+                        })
+                    }
+                    Mode::Mixed => {
+                        // 80% cached, 20% uncached
+                        if fastrand::u8(..) < 204 {
+                            serde_json::json!({
+                                "query": "{ hello(name: \"Benchmark\") { message } }"
+                            })
+                        } else {
+                            let random_name = Uuid::new_v4().to_string();
+                            serde_json::json!({
+                                "query": "query($n: String!) { hello(name: $n) { message } }",
+                                "variables": { "n": random_name }
+                            })
+                        }
+                    }
+                    Mode::Stress => {
+                        // Larger, more complex queries
+                        serde_json::json!({
+                            "query": r#"
+                                query StressTest($n: String!) {
+                                    hello(name: $n) { message }
+                                }
+                            "#,
+                            "variables": { "n": format!("Worker{}-{}", worker_id, Uuid::new_v4()) }
+                        })
+                    }
                 };
 
-                match client.post(SERVER_URL).json(&query).send().await {
+                let req_start = Instant::now();
+                
+                match client.post(&url).json(&query).send().await {
                     Ok(resp) => {
+                        let latency_us = req_start.elapsed().as_micros() as u64;
+                        
                         if resp.status().is_success() {
-                            total_requests.fetch_add(1, Ordering::Relaxed);
+                            local_successful += 1;
+                            local_latency += latency_us;
+                            local_min = local_min.min(latency_us);
+                            local_max = local_max.max(latency_us);
                         } else {
-                            total_errors.fetch_add(1, Ordering::Relaxed);
+                            local_errors += 1;
                         }
                     }
                     Err(_) => {
-                        total_errors.fetch_add(1, Ordering::Relaxed);
+                        local_errors += 1;
                     }
+                }
+            }
+
+            // Update global counters
+            successful.fetch_add(local_successful, Ordering::Relaxed);
+            errors.fetch_add(local_errors, Ordering::Relaxed);
+            total_latency.fetch_add(local_latency, Ordering::Relaxed);
+
+            // Update min/max with CAS loops
+            let mut current_min = min_latency.load(Ordering::Relaxed);
+            while local_min < current_min {
+                match min_latency.compare_exchange_weak(
+                    current_min,
+                    local_min,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(c) => current_min = c,
+                }
+            }
+
+            let mut current_max = max_latency.load(Ordering::Relaxed);
+            while local_max > current_max {
+                match max_latency.compare_exchange_weak(
+                    current_max,
+                    local_max,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(c) => current_max = c,
                 }
             }
         }));
     }
 
-    // Wait for all tasks to complete
+    // Progress indicator
+    let progress_handle = {
+        let successful = successful.clone();
+        let errors = errors.clone();
+        tokio::spawn(async move {
+            let mut last_count = 0u64;
+            while Instant::now() < end_time {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let current = successful.load(Ordering::Relaxed);
+                let current_errors = errors.load(Ordering::Relaxed);
+                let delta = current - last_count;
+                println!(
+                    "  📊 {} requests/sec | Total: {} | Errors: {}",
+                    delta, current, current_errors
+                );
+                last_count = current;
+            }
+        })
+    };
+
+    // Wait for all workers
     for handle in handles {
         let _ = handle.await;
     }
+    progress_handle.abort();
 
-    let duration = start_time.elapsed();
-    let requests = total_requests.load(Ordering::Relaxed);
-    let errors = total_errors.load(Ordering::Relaxed);
-    
-    let rps = requests as f64 / duration.as_secs_f64();
+    let actual_duration = start_time.elapsed();
+    let total_successful = successful.load(Ordering::Relaxed);
+    let total_errors = errors.load(Ordering::Relaxed);
+    let total_latency_us = total_latency.load(Ordering::Relaxed);
+    let min_lat = min_latency.load(Ordering::Relaxed);
+    let max_lat = max_latency.load(Ordering::Relaxed);
 
-    println!("\nBenchmark Complete!");
-    println!("Time taken: {:.2?}", duration);
-    println!("Total Requests: {}", requests);
-    println!("Total Errors: {}", errors);
-    println!("Requests/sec: {:.2}", rps);
-    
-    if errors > 0 {
-        println!("WARNING: There were {} errors.", errors);
+    // Estimate percentiles based on avg and range
+    let avg_lat = if total_successful > 0 {
+        total_latency_us / total_successful
+    } else {
+        0
+    };
+    let p50_est = avg_lat;
+    let p99_est = avg_lat + (max_lat - avg_lat) / 2;
+
+    let results = BenchmarkResults {
+        mode,
+        duration: actual_duration,
+        total_requests: total_successful + total_errors,
+        successful: total_successful,
+        errors: total_errors,
+        min_latency_us: if min_lat == u64::MAX { 0 } else { min_lat },
+        max_latency_us: max_lat,
+        total_latency_us,
+        p50_estimate_us: p50_est,
+        p99_estimate_us: p99_est,
+    };
+
+    results.print();
+
+    // Additional recommendations
+    println!("\n💡 Optimization Tips:");
+    if results.rps() < 100_000.0 {
+        println!("  • Enable response caching with ShardedCache");
+        println!("  • Use SIMD JSON parsing (FastJsonParser)");
+        println!("  • Enable request collapsing for identical queries");
+        println!("  • Increase tokio worker threads with TOKIO_WORKER_THREADS env");
+        println!("  • Use mimalloc allocator (already enabled in high_performance module)");
+    }
+
+    if results.error_rate() > 1.0 {
+        println!("  • ⚠️ High error rate detected - check backend health");
+        println!("  • Consider enabling circuit breaker");
     }
 
     Ok(())

@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.3.9"
+version = "0.4.0"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -83,12 +83,40 @@ uuid = { version = "1.0", features = ["v4"] }
 parking_lot = "0.12"
 
 # REST API Connector
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 urlencoding = "2.1"
 
 
 # Redis for distributed caching
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+
+# High-performance JSON parsing (SIMD-accelerated)
+simd-json = "0.14"
+
+# Lock-free data structures for high concurrency
+crossbeam = "0.8"
+crossbeam-skiplist = "0.1"
+
+# Fast memory allocator
+mimalloc = { version = "0.1", features = ["override"] }
+
+# Zero-copy buffers
+bytes = "1.5"
+
+# High-performance connection pooling
+bb8 = "0.8"
+
+# CPU affinity for optimized thread placement (Linux only)
+libc = "0.2"
+
+# Faster hasher
+ahash = "0.8"
+
+# Object pooling
+object-pool = "0.5"
+
+# Fast random for benchmarks
+fastrand = "2.0"
 
 [features]
 default = []

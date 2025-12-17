@@ -114,6 +114,8 @@ pub struct GatewayBuilder {
     analytics_config: Option<crate::analytics::AnalyticsConfig>,
     /// Request collapsing configuration
     request_collapsing_config: Option<RequestCollapsingConfig>,
+    /// High-performance configuration
+    high_perf_config: Option<crate::high_performance::HighPerfConfig>,
 }
 
 impl GatewayBuilder {
@@ -139,6 +141,7 @@ impl GatewayBuilder {
             rest_connectors: RestConnectorRegistry::new(),
             analytics_config: None,
             request_collapsing_config: None,
+            high_perf_config: None,
         }
     }
 
@@ -618,6 +621,29 @@ impl GatewayBuilder {
         config: crate::cache::CacheConfig,
     ) -> Self {
         self.cache_config = Some(config);
+        self
+    }
+
+    /// Enable high-performance optimizations for 100K+ RPS.
+    ///
+    /// This enables features like SIMD-accelerated JSON parsing, lock-free
+    /// sharded caching, and optimized gRPC connection pool settings.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, HighPerfConfig};
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .with_high_performance(HighPerfConfig::ultra_fast())
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_high_performance(mut self, config: crate::high_performance::HighPerfConfig) -> Self {
+        self.high_perf_config = Some(config);
         self
     }
 
@@ -1156,6 +1182,11 @@ impl GatewayBuilder {
         // Configure Request Collapsing
         if let Some(collapsing_config) = self.request_collapsing_config {
             mux.enable_request_collapsing(collapsing_config);
+        }
+        
+        // Configure High Performance mode
+        if let Some(high_perf_config) = self.high_perf_config {
+            mux.enable_high_performance(high_perf_config);
         }
 
         Ok(Gateway {

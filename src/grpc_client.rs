@@ -192,6 +192,32 @@ fn configure_endpoint(endpoint: &str, insecure: bool) -> Result<Endpoint> {
             .map_err(|e| Error::Connection(e.to_string()))?;
     }
 
+    // HIGH-PERFORMANCE SETTINGS for 100K+ RPS
+    // These settings optimize HTTP/2 for maximum throughput
+    
+    // Keep connections alive to avoid reconnection overhead
+    endpoint_builder = endpoint_builder
+        .keep_alive_timeout(std::time::Duration::from_secs(10))
+        .keep_alive_while_idle(true)
+        .http2_keep_alive_interval(std::time::Duration::from_secs(30));
+    
+    // Enable adaptive flow control for automatic window sizing
+    endpoint_builder = endpoint_builder.http2_adaptive_window(true);
+    
+    // Larger initial window sizes for high-throughput (2MB each)
+    // This reduces the need for window updates and improves throughput
+    endpoint_builder = endpoint_builder
+        .initial_connection_window_size(65535 * 32) // ~2MB
+        .initial_stream_window_size(65535 * 32);    // ~2MB
+    
+    // TCP_NODELAY for lower latency (disable Nagle's algorithm)
+    endpoint_builder = endpoint_builder.tcp_nodelay(true);
+
+    // Connection timeout for fast failure detection
+    endpoint_builder = endpoint_builder
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(30));
+
     Ok(endpoint_builder)
 }
 
