@@ -13,6 +13,12 @@ Thank you for considering contributing to the gRPC-GraphQL Gateway! This documen
 
 ---
 
+Please note that this project is released with a [Contributor Code of Conduct](CODE_OF_CONDUCT.md). By participating in this project you agree to abide by its terms.
+
+## Security
+
+If you discover a security vulnerability, please see our [Security Policy](SECURITY.md) for reporting instructions.
+
 ## Getting Started
 
 ### Prerequisites

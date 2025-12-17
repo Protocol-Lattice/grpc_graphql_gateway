@@ -1,0 +1,20 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [ "main" ]
+  schedule:
+    - cron: '0 0 * * 1'
+
+jobs:
+  security_audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: cargo-bins/cargo-binstall@main
+      - name: Install cargo-audit
+        run: cargo binstall cargo-audit --no-confirm --force
+      - name: Security Audit
+        run: cargo audit
