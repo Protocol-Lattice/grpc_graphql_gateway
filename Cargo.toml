@@ -68,7 +68,7 @@ once_cell = "1.19"
 
 # OpenTelemetry / Distributed Tracing
 opentelemetry = "0.21"
-opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.14", optional = true }
 tracing-opentelemetry = "0.22"
 
