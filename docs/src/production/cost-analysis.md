@@ -310,6 +310,20 @@ Cost estimates based on user count (assuming 0.5 req/s per active user):
 
 > **Note**: "10k users online" usually generates ~5,000 req/s. At this scale, your infrastructure cost is negligible (<$200) because the gateway is so efficient.
 
+## Profitability Analysis (ROI)
+
+Since your infrastructure cost is so low (~$155/mo for 10k users), you achieve profitability much faster than with traditional stacks.
+
+**Revenue Scenarios for 10k Active Users:**
+
+| Business Model | Logic | Monthly Revenue | vs Cost ($155) |
+|----------------|-------|-----------------|----------------|
+| **Freemium** | 5% conversion @ $9/mo | **$4,500 / mo** | ✅ **30x ROI** |
+| **Ad-Supported** | $2.00 RPM (Views) | **$2,000 / mo** | ✅ **12x ROI** |
+| **Pro SaaS** | $29/mo (All Paid) | **$290,000 / mo** | 🚀 **1800x ROI** |
+
+*Most startups burn $1000+ just to serve 10k users. You spend $155.*
+
 ---
 
 ## Quick Reference Card
