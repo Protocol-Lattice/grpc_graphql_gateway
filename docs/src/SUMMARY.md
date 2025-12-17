@@ -61,6 +61,7 @@
 - [Graceful Shutdown](./production/graceful-shutdown.md)
 - [Header Propagation](./production/header-propagation.md)
 - [Configuration Reference](./production/configuration.md)
+- [Cost Analysis](./production/cost-analysis.md)
 
 # Reference
 
