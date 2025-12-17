@@ -87,12 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let entities = collect_entities(&pool, &request)?;
     let content = render_template(&services, &entities, &request.file_to_generate, &options);
 
-    let filename = if let Some(svc) = services.first() {
-        let service_name = svc.full_name.split('.').last().unwrap_or(&svc.full_name);
-        format!("{}_graphql_gateway.rs", to_snake_case(service_name))
-    } else {
-        "graphql_gateway.rs".to_string()
-    };
+    let filename = "./src/main.rs".to_string();
 
     let response = CodeGeneratorResponse {
         file: vec![code_generator_response::File {
