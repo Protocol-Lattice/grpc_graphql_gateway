@@ -156,7 +156,7 @@ impl FastJsonParser {
         }
 
         // Get a buffer from the pool
-        let mut buffer = self.buffer_pool.get().`unwrap_or_else(|| Vec::with_capacity(input.len()));
+        let mut buffer = self.buffer_pool.get().unwrap_or_else(|| Vec::with_capacity(input.len()));
         buffer.clear();
         buffer.extend_from_slice(input);
 
