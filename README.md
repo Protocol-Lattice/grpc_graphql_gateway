@@ -33,14 +33,6 @@ GBP Ultra (800KB)          ▏                    0.8% ⚡ (<1ms latency)
 **Complete 100k req/s Stack: ~$120/mo**
 
 ## 💰 Cost Efficiency (100k req/s)
-
-| Component | Standard (Node.js) | Optimized (Rust) | Monthly Savings |
-|-----------|-------------------|------------------|-----------------|
-
-| **Compute** | ~$1,200 (25 instances) | ~$300 (3 instances) | **$900** |
-| **Bandwidth** | ~$46,000 (518 TB) | ~$460 (GBP Ultra: 99% Compression) | **$45,500+** |
-| **Total** | **~$47,200/mo** | **~$760/mo** | **98.4% Cheaper** |
-
 *See the full [Cost Analysis](https://protocol-lattice.github.io/grpc_graphql_gateway/production/cost-analysis.html).*
 
 ## ✨ Features
