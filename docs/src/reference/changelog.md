@@ -7,6 +7,38 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.5.3] - 2025-12-18
+
+**GBP Federation Router**
+
+- **`GbpRouter`**: New scatter-gather federation router with GBP Ultra compression for subgraph communication.
+  - `RouterConfig` - Configure subgraphs, GBP settings, and HTTP/2 connections
+  - `SubgraphConfig` - Per-subgraph configuration (URL, timeout, GBP enable)
+  - `DdosConfig` - Two-tier DDoS protection with global and per-IP rate limiting
+  - `DdosProtection` - Token bucket algorithm with `strict()` and `relaxed()` presets
+- **Performance**: ~99% bandwidth reduction between router and subgraphs, parallel execution with latency ≈ slowest subgraph.
+- **Binary**: New `cargo run --bin router` for standalone federation router deployment.
+
+### [0.5.2] - 2025-12-18
+
+**DDoS Protection Enhancements**
+
+- Added `DdosConfig::strict()` and `DdosConfig::relaxed()` presets for common use cases.
+- Improved token bucket algorithm efficiency.
+- Enhanced rate limiter cleanup for stale IP entries.
+
+### [0.5.1] - 2025-12-18
+
+**GBP Decoder & Fixes**
+
+- **`GbpDecoder`**: Full decoder implementation for GBP Ultra payloads.
+  - `decode()` - Decode raw GBP bytes to JSON
+  - `decode_lz4()` - Decode LZ4-compressed GBP payloads
+  - Value pool reference resolution
+  - Columnar array reconstruction
+- **Fixed**: Value pool synchronization between encoder and decoder (Post-Order traversal).
+- **Fixed**: Columnar encoding for arrays with 5+ homogeneous objects.
+
 ### [0.5.0] - 2025-12-18
 
 **GBP Ultra: The "Speed of Light" Upgrade**
