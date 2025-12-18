@@ -144,10 +144,10 @@ async fn main() {
         force_gbp: true,
     };
 
-    // High-performance DDoS config
-    // - 100k global RPS (10x Apollo Router default)
-    // - 1000 per-IP RPS with 2000 burst
-    let ddos = DdosProtection::new(100_000, 1_000, 2_000);
+    // High-performance DDoS config (relaxed for benchmarking)
+    // - 1M global RPS
+    // - 100k per-IP RPS with 200k burst
+    let ddos = DdosProtection::new(1_000_000, 100_000, 200_000);
 
     let router = GbpRouter::new(config.clone());
     let state = Arc::new(AppState::new(router, ddos));

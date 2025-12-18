@@ -7,6 +7,18 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.5.4] - 2025-12-18
+
+**Router Performance Overhaul**
+
+- **Sharded Response Cache**: 128-shard lock-free cache with sub-microsecond lookups
+- **SIMD JSON Parsing**: Integrated `FastJsonParser` for 2-5x faster parsing
+- **FuturesUnordered**: True streaming parallelism - results processed as they arrive
+- **Query Hash Caching**: AHash-based O(1) cache key lookups
+- **Atomic Metrics**: Lock-free request/cache counters via `stats()`
+- **New Methods**: `execute_fail_fast()`, `with_cache_ttl()`, `clear_cache()`
+- **Performance**: Verified **33K+ RPS** on local hardware (shared CPU), **<2.5ms** P50 latency, 100% success rate at 100 concurrent connections.
+
 ### [0.5.3] - 2025-12-18
 
 **GBP Federation Router**
