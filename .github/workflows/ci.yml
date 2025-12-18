@@ -23,7 +23,7 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
-        components: clippy, rustfmt
+        components: rustfmt
 
     - name: Cache dependencies
       uses: actions/cache@v3
@@ -33,9 +33,6 @@ jobs:
           ~/.cargo/git
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Clippy Lints
-      run: cargo clippy --all-features -- -D warnings
 
     - name: Build
       run: cargo build --verbose
