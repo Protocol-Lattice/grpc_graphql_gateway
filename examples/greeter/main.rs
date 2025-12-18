@@ -136,6 +136,7 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
             invalidate_on_mutation: true,
             redis_url: None,                                   // Use in-memory ShardedCache for max speed
             vary_headers: vec!["Authorization".to_string()],
+            smart_ttl_manager: None,                           // Optional: Add SmartTtlManager for intelligent TTL
         })
         // Enable Response Compression for bandwidth savings
         .with_compression(grpc_graphql_gateway::CompressionConfig::default())
