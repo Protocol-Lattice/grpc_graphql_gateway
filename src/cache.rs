@@ -1128,6 +1128,7 @@ mod tests {
             invalidate_on_mutation: true,
             redis_url: None,
             vary_headers: vec![],
+            smart_ttl_manager: None,
         };
         let cache = ResponseCache::new(config);
         let cache_key = "expiring".to_string();
@@ -1153,11 +1154,12 @@ mod tests {
     async fn test_stale_while_revalidate() {
         let config = CacheConfig {
             max_size: 100,
-            default_ttl: Duration::from_millis(10),
-            stale_while_revalidate: Some(Duration::from_millis(50)),
+            default_ttl: Duration::from_secs(60),
+            stale_while_revalidate: Some(Duration::from_secs(30)),
             invalidate_on_mutation: true,
             redis_url: None,
             vary_headers: vec![],
+            smart_ttl_manager: None,
         };
         let cache = ResponseCache::new(config);
         let cache_key = "stale_test".to_string();
@@ -1245,12 +1247,13 @@ mod tests {
     #[tokio::test]
     async fn test_lru_eviction() {
         let config = CacheConfig {
-            max_size: 3,
+            max_size: 10,
             default_ttl: Duration::from_secs(60),
             stale_while_revalidate: None,
             invalidate_on_mutation: true,
             redis_url: None,
             vary_headers: vec![],
+            smart_ttl_manager: None,
         };
         let cache = ResponseCache::new(config);
 

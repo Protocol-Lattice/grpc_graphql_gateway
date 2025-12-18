@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.4.7"
+version = "0.4.8"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -117,6 +117,9 @@ object-pool = "0.6"
 
 # Fast random for benchmarks
 fastrand = "2.0"
+
+# LZ4 ultra-fast compression
+lz4 = "1.28"
 
 [features]
 default = []

@@ -51,6 +51,7 @@
 - [Smart TTL Management](./performance/smart-ttl.md)
 - [Smart TTL Integration Guide](./performance/smart-ttl-integration.md)
 - [Response Compression](./performance/compression.md)
+- [LZ4 Ultra-Fast Compression](./performance/lz4-compression.md)
 - [Request Collapsing](./performance/request-collapsing.md)
 - [Automatic Persisted Queries](./performance/apq.md)
 - [Circuit Breaker](./performance/circuit-breaker.md)
