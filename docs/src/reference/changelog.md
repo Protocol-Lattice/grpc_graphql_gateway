@@ -18,10 +18,23 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ### [0.4.8] - 2025-12-18
 
+**LZ4 + GBP Ultra Refinement**
+
+- Refined the structural deduplication algorithm to achieve higher compression ratios.
+- Optimized `GbpEncoder` and `GbpDecoder` for deeper recursion.
+
+### [0.4.7] - 2025-12-18
+
 **LZ4 Block Compression**
 
 - Integrated `lz4` block compression for ultra-fast, low-CPU overhead data transfer.
 - New `CompressionConfig::ultra_fast()` preset.
+
+### [0.4.6] - 2025-12-18
+
+**Maintenance Release**
+
+- Internal buffer optimizations and dependency updates.
 
 ### [0.4.4] - 2025-12-17
 
@@ -29,6 +42,13 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 - Critical dependency updates to address identified security vulnerabilities.
 - Hardened gRPC metadata handling.
+
+### [0.4.2] - 2025-12-17
+
+**Vulnerability Patching**
+
+- Fixed multiple security vulnerabilities identified in CI/CD pipeline.
+- Improved error handling in `protoc-gen-graphql-template`.
 
 ### [0.4.0] - 2025-12-17
 

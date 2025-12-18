@@ -40,8 +40,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.8] - 2025-12-18
 
 ### Added
-- Integrated **LZ4 Block Compression** support for high-throughput scenarios.
-- Added `ultra_fast()` preset in `CompressionConfig`.
+- Refined **LZ4 + GBP Ultra** algorithm with aggressive structural deduplication.
+- Updated `GbpEncoder` to v8 for improved performance on deeply nested responses.
+
+## [0.4.7] - 2025-12-18
+
+### Added
+- Initial support for **LZ4 algorithm (#49)** integration.
+- Performance benchmarks for LZ4 vs standard Gzip.
+
+## [0.4.6] - 2025-12-18
+
+### Changed
+- Updated internal buffer handling for high-throughput mode.
+- Maintenance bump for dependency synchronization.
+
+## [0.4.5] - 2025-12-18
+
+### Fixed
+- Minor fixes in the `protoc` plugin's template generation.
 
 ## [0.4.4] - 2025-12-17
 
@@ -49,11 +66,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Version Bump**: Critical security fixes for dependency vulnerabilities.
 - Hardened internal gRPC client request handling.
 
+## [0.4.3] - 2025-12-17
+
+### Changed
+- Improved memory management in the sharded cache implementation.
+
 ## [0.4.2] - 2025-12-17
 
 ### Security
 - **Vulnerability Patch**: Fixed multiple security vulnerabilities identified in CI/CD pipeline.
 - Improved error handling in `protoc-gen-graphql-template`.
+
+## [0.4.1] - 2025-12-17
+
+### Fixed
+- Fixed edge cases in JSON serialization for large integers.
 
 ## [0.4.0] - 2025-12-17
 
