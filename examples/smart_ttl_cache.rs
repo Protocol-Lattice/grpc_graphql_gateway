@@ -98,7 +98,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   - Real-time data: 5 seconds");
     println!("   - Learning enabled: TTLs will auto-adjust based on data volatility");
     
-    gateway.serve("0.0.0.0:8888").await?;
+    let app = gateway.into_router();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8888").await?;
+    axum::serve(listener, app).await?;
     
     Ok(())
 }
