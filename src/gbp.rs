@@ -12,7 +12,8 @@ pub struct GbpEncoder {
     string_map: AHashMap<String, u32>,
     shape_pool: Vec<Vec<u32>>,
     shape_map: AHashMap<Vec<u32>, u32>,
-    value_map: AHashMap<u64, u32>,
+    value_map: AHashMap<u64, Vec<u32>>,
+    value_pool: Vec<Value>,
     value_counter: u32,
 }
 
@@ -82,10 +83,17 @@ impl GbpEncoder {
     fn encode_recursive(&mut self, value: &Value, buf: &mut Vec<u8>) {
         if value.is_object() || value.is_array() {
             let hash = hash_json_value(value);
-            if let Some(&idx) = self.value_map.get(&hash) {
-                buf.push(0x08);
-                write_varint(idx, buf);
-                return;
+            if let Some(indices) = self.value_map.get(&hash) {
+                // Check all candidates with matching hash for true equality
+                for &idx in indices {
+                    if let Some(stored_value) = self.value_pool.get(idx as usize) {
+                        if stored_value == value {
+                            buf.push(0x08);
+                            write_varint(idx, buf);
+                            return;
+                        }
+                    }
+                }
             }
         }
 
@@ -145,7 +153,8 @@ impl GbpEncoder {
             || (value.is_array() && value.as_array().unwrap().len() > 1)
         {
             let hash = hash_json_value(value);
-            self.value_map.insert(hash, self.value_counter);
+            self.value_map.entry(hash).or_default().push(self.value_counter);
+            self.value_pool.push(value.clone());
             self.value_counter += 1;
         }
     }

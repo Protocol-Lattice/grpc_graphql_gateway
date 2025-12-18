@@ -7,12 +7,20 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.5.6] - 2025-12-18
+
+**GBP Data Integrity**
+
+- **Hash Collision Protection**: Enhanced `GbpEncoder` to resolve hash collisions by verifying value equality, ensuring 100% data integrity for large-scale datasets.
+- **Safety**: Fully deterministic encoding behavior even with 64-bit hash collisions.
+
 ### [0.5.5] - 2025-12-18
 
 **Federation & Stability**
 
 - **Full Federation Demo**: Complete 3-subgraph setup (Users, Products, Reviews) with standalone `router`.
 - **Hardened GBP**: Improved `read_varint` safety against malformed payloads (DoS protection).
+
 - **Benchmarks**: Updated performance tools to match the new federation schema.
 - **Fixes**: Resolved compilation issues in examples and build configuration.
 
