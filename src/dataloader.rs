@@ -278,10 +278,7 @@ mod tests {
     async fn test_normalizes_nested_fields_for_cache_keys() {
         let resolver = Arc::new(CountingResolver::default());
         let mut configs = HashMap::new();
-        configs.insert(
-            "federation_example_User".to_string(),
-            user_entity_config(),
-        );
+        configs.insert("federation_example_User".to_string(), user_entity_config());
         let loader = EntityDataLoader::new(resolver.clone(), configs);
 
         let first = loader
@@ -304,10 +301,7 @@ mod tests {
     async fn test_batching_nested_fields_preserves_order() {
         let resolver = Arc::new(CountingResolver::default());
         let mut configs = HashMap::new();
-        configs.insert(
-            "federation_example_User".to_string(),
-            user_entity_config(),
-        );
+        configs.insert("federation_example_User".to_string(), user_entity_config());
         let loader = EntityDataLoader::new(resolver.clone(), configs);
 
         let first_repr = nested_representation("u1", false);
@@ -350,10 +344,7 @@ mod tests {
             representations: Vec<Representation>,
         ) -> Result<Vec<GqlValue>> {
             self.batch_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(representations
-                .into_iter()
-                .map(GqlValue::Object)
-                .collect())
+            Ok(representations.into_iter().map(GqlValue::Object).collect())
         }
     }
 
@@ -379,15 +370,9 @@ mod tests {
         let mut profile = IndexMap::new();
         if flip_order {
             profile.insert(Name::new("region"), GqlValue::String("us".to_string()));
-            profile.insert(
-                Name::new("id"),
-                GqlValue::String(format!("{id}-profile")),
-            );
+            profile.insert(Name::new("id"), GqlValue::String(format!("{id}-profile")));
         } else {
-            profile.insert(
-                Name::new("id"),
-                GqlValue::String(format!("{id}-profile")),
-            );
+            profile.insert(Name::new("id"), GqlValue::String(format!("{id}-profile")));
             profile.insert(Name::new("region"), GqlValue::String("us".to_string()));
         }
 

@@ -352,7 +352,9 @@ impl GatewayBuilder {
     /// - **100-500**: Moderate, good for authenticated users
     /// - **500-1000**: Lenient, for internal/trusted clients
     pub fn with_query_complexity_limit(mut self, max_complexity: usize) -> Self {
-        self.schema_builder = self.schema_builder.with_query_complexity_limit(max_complexity);
+        self.schema_builder = self
+            .schema_builder
+            .with_query_complexity_limit(max_complexity);
         self
     }
 
@@ -616,10 +618,7 @@ impl GatewayBuilder {
     /// - Sorted variables JSON
     /// - Operation name (if provided)
     /// - Vary headers (e.g. Authorization)
-    pub fn with_response_cache(
-        mut self,
-        config: crate::cache::CacheConfig,
-    ) -> Self {
+    pub fn with_response_cache(mut self, config: crate::cache::CacheConfig) -> Self {
         self.cache_config = Some(config);
         self
     }
@@ -642,7 +641,10 @@ impl GatewayBuilder {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_high_performance(mut self, config: crate::high_performance::HighPerfConfig) -> Self {
+    pub fn with_high_performance(
+        mut self,
+        config: crate::high_performance::HighPerfConfig,
+    ) -> Self {
         self.high_perf_config = Some(config);
         self
     }
@@ -1183,7 +1185,7 @@ impl GatewayBuilder {
         if let Some(collapsing_config) = self.request_collapsing_config {
             mux.enable_request_collapsing(collapsing_config);
         }
-        
+
         // Configure High Performance mode
         if let Some(high_perf_config) = self.high_perf_config {
             mux.enable_high_performance(high_perf_config);
@@ -1280,7 +1282,11 @@ impl GatewayBuilder {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn serve_with_shutdown<F>(self, addr: impl Into<String>, shutdown_signal: F) -> Result<()>
+    pub async fn serve_with_shutdown<F>(
+        self,
+        addr: impl Into<String>,
+        shutdown_signal: F,
+    ) -> Result<()>
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {

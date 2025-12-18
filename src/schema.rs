@@ -367,7 +367,9 @@ impl SchemaBuilder {
     /// - Type conflicts exist between descriptor sets
     pub fn build(self, client_pool: &GrpcClientPool) -> Result<DynamicSchema> {
         if self.descriptor_sets.is_empty() {
-            return Err(Error::Schema("at least one descriptor set is required".into()));
+            return Err(Error::Schema(
+                "at least one descriptor set is required".into(),
+            ));
         }
 
         // Build a merged DescriptorPool from all descriptor sets
@@ -541,8 +543,8 @@ impl SchemaBuilder {
 
         // Register JSON scalar for REST connector responses
         if self.rest_connectors.is_some() {
-            let json_scalar = Scalar::new("JSON")
-                .description("Arbitrary JSON value returned from REST APIs");
+            let json_scalar =
+                Scalar::new("JSON").description("Arbitrary JSON value returned from REST APIs");
             schema_builder = schema_builder.register(json_scalar);
 
             // Register typed REST objects
@@ -678,30 +680,32 @@ impl SchemaBuilder {
     /// then merges additional descriptor sets into it.
     fn build_merged_descriptor_pool(&self) -> Result<DescriptorPool> {
         let mut iter = self.descriptor_sets.iter();
-        
+
         // Decode the first descriptor set as the base pool
-        let first = iter.next().ok_or_else(|| {
-            Error::Schema("at least one descriptor set is required".into())
-        })?;
-        
+        let first = iter
+            .next()
+            .ok_or_else(|| Error::Schema("at least one descriptor set is required".into()))?;
+
         let mut pool = DescriptorPool::decode(first.as_slice())
             .map_err(|e| Error::Schema(format!("failed to decode primary descriptor set: {e}")))?;
-        
+
         // Merge additional descriptor sets
         for (index, bytes) in iter.enumerate() {
             pool.decode_file_descriptor_set(bytes.as_slice())
-                .map_err(|e| Error::Schema(format!(
-                    "failed to merge descriptor set #{}: {e}",
-                    index + 2
-                )))?;
-            
+                .map_err(|e| {
+                    Error::Schema(format!(
+                        "failed to merge descriptor set #{}: {e}",
+                        index + 2
+                    ))
+                })?;
+
             tracing::debug!(
                 "Merged descriptor set #{} ({} bytes) into schema pool",
                 index + 2,
                 bytes.len()
             );
         }
-        
+
         if self.descriptor_sets.len() > 1 {
             tracing::info!(
                 "Merged {} descriptor sets into unified schema ({} services, {} types)",
@@ -710,7 +714,7 @@ impl SchemaBuilder {
                 pool.all_messages().count()
             );
         }
-        
+
         Ok(pool)
     }
 
@@ -881,11 +885,12 @@ fn build_rest_response_type(schema: &RestResponseSchema) -> Object {
 
             FieldFuture::new(async move {
                 let parent_value = ctx.parent_value.try_downcast_ref::<serde_json::Value>()?;
-                
+
                 let value = match parent_value {
-                    serde_json::Value::Object(map) => {
-                        map.get(&field_name).cloned().unwrap_or(serde_json::Value::Null)
-                    }
+                    serde_json::Value::Object(map) => map
+                        .get(&field_name)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
                     _ => serde_json::Value::Null,
                 };
 
@@ -894,7 +899,7 @@ fn build_rest_response_type(schema: &RestResponseSchema) -> Object {
                 match field_type {
                     RestFieldType::Object(_) | RestFieldType::List(_) => {
                         Ok(Some(FieldValue::owned_any(value)))
-                    },
+                    }
                     _ => {
                         let gql_value = json_to_gql_typed(value, &field_type);
                         Ok(Some(FieldValue::value(gql_value)))
@@ -920,32 +925,34 @@ fn json_to_gql_typed(value: serde_json::Value, field_type: &RestFieldType) -> Gq
         (serde_json::Value::String(s), RestFieldType::String) => GqlValue::String(s),
         // Allow automatic conversion for numbers/booleans to string if needed
         (v, RestFieldType::String) => GqlValue::String(v.to_string()),
-        
+
         (serde_json::Value::Number(n), RestFieldType::Int) => {
             if let Some(i) = n.as_i64() {
                 GqlValue::Number(i.into())
             } else {
                 GqlValue::Null
             }
-        },
+        }
         (serde_json::Value::Number(n), RestFieldType::Float) => {
-             if let Some(f) = n.as_f64() {
-                 match async_graphql::Number::from_f64(f) {
+            if let Some(f) = n.as_f64() {
+                match async_graphql::Number::from_f64(f) {
                     Some(num) => GqlValue::Number(num),
                     None => GqlValue::Number(0i64.into()),
                 }
-             } else {
-                 GqlValue::Null
-             }
-        },
+            } else {
+                GqlValue::Null
+            }
+        }
         (serde_json::Value::Bool(b), RestFieldType::Boolean) => GqlValue::Boolean(b),
-        
-        // For lists, we map each item. Logic implies recursion handled by resolver for objects 
+
+        // For lists, we map each item. Logic implies recursion handled by resolver for objects
         // but for scalar lists we need to convert here
-        (serde_json::Value::Array(arr), RestFieldType::List(inner)) => {
-            GqlValue::List(arr.into_iter().map(|v| json_to_gql_typed(v, inner)).collect())
-        },
-        
+        (serde_json::Value::Array(arr), RestFieldType::List(inner)) => GqlValue::List(
+            arr.into_iter()
+                .map(|v| json_to_gql_typed(v, inner))
+                .collect(),
+        ),
+
         // Objects are handled by returning the raw JSON as parent value for sub-resolvers
         // But if this is called directly, we treat as generic conversion
         (v, _) => json_to_gql_value(v),
@@ -1000,9 +1007,7 @@ mod tests {
 
         // This query has depth 2 (_service -> sdl), should be blocked with limit of 1
         let response = schema
-            .execute(async_graphql::Request::new(
-                "{ _service { sdl } }",
-            ))
+            .execute(async_graphql::Request::new("{ _service { sdl } }"))
             .await;
 
         // The query depth limit should trigger an error
@@ -1030,9 +1035,7 @@ mod tests {
 
         // This query should exceed complexity of 1
         let response = schema
-            .execute(async_graphql::Request::new(
-                "{ _service { sdl } }",
-            ))
+            .execute(async_graphql::Request::new("{ _service { sdl } }"))
             .await;
 
         // The query complexity limit should trigger an error
@@ -1059,9 +1062,7 @@ mod tests {
 
         // This query should succeed without limits
         let response = schema
-            .execute(async_graphql::Request::new(
-                "{ _service { sdl } }",
-            ))
+            .execute(async_graphql::Request::new("{ _service { sdl } }"))
             .await;
 
         assert!(
@@ -1076,16 +1077,14 @@ mod tests {
         let schema = SchemaBuilder::new()
             .with_descriptor_set_bytes(FEDERATION_DESCRIPTOR)
             .enable_federation()
-            .with_query_depth_limit(10)      // Reasonable limit
+            .with_query_depth_limit(10) // Reasonable limit
             .with_query_complexity_limit(100) // Reasonable limit
             .build(&GrpcClientPool::new())
             .expect("schema builds");
 
         // Normal query should succeed
         let response = schema
-            .execute(async_graphql::Request::new(
-                "{ _service { sdl } }",
-            ))
+            .execute(async_graphql::Request::new("{ _service { sdl } }"))
             .await;
 
         assert!(
@@ -1119,7 +1118,10 @@ mod tests {
 
         let error_message = response.errors[0].message.to_lowercase();
         assert!(
-            error_message.contains("introspection") || error_message.contains("disabled") || error_message.contains("unknown") || error_message.contains("__schema"),
+            error_message.contains("introspection")
+                || error_message.contains("disabled")
+                || error_message.contains("unknown")
+                || error_message.contains("__schema"),
             "expected introspection error, got: {}",
             response.errors[0].message
         );
@@ -1228,7 +1230,7 @@ impl TypeRegistry {
 
         let mut input = InputObject::new(name.clone());
         for field in message.fields() {
-            if field_is_omitted(&field, &field_ext) {
+            if field_is_omitted(&field, field_ext) {
                 continue;
             }
 
@@ -1519,12 +1521,13 @@ fn build_field(
 
             // Build the gRPC request and apply header propagation
             let mut grpc_request = tonic::Request::new(request_msg);
-            
+
             // Extract headers from middleware context and apply to gRPC request
             if let Some(ref propagation_config) = header_propagation {
                 if let Some(middleware_ctx) = ctx.data_opt::<crate::middleware::Context>() {
                     let metadata = propagation_config.extract_metadata(&middleware_ctx.headers);
-                    grpc_request = crate::headers::apply_metadata_to_request(grpc_request, metadata);
+                    grpc_request =
+                        crate::headers::apply_metadata_to_request(grpc_request, metadata);
                 }
             }
 
@@ -1591,12 +1594,13 @@ fn build_subscription_field(
 
             // Build the gRPC request and apply header propagation
             let mut grpc_request = tonic::Request::new(request_msg);
-            
+
             // Extract headers from middleware context and apply to gRPC request
             if let Some(ref propagation_config) = header_propagation {
                 if let Some(middleware_ctx) = ctx.data_opt::<crate::middleware::Context>() {
                     let metadata = propagation_config.extract_metadata(&middleware_ctx.headers);
-                    grpc_request = crate::headers::apply_metadata_to_request(grpc_request, metadata);
+                    grpc_request =
+                        crate::headers::apply_metadata_to_request(grpc_request, metadata);
                 }
             }
 
@@ -2124,9 +2128,9 @@ impl Decoder for ReflectDecoder {
         }
         let len = Buf::remaining(buf);
         let bytes = buf.copy_to_bytes(len);
-        Ok(DynamicMessage::decode(self.desc.clone(), bytes)
+        DynamicMessage::decode(self.desc.clone(), bytes)
             .map(Some)
-            .map_err(|e| Status::internal(format!("decode error: {e}")))?)
+            .map_err(|e| Status::internal(format!("decode error: {e}")))
     }
 }
 

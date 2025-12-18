@@ -7,6 +7,15 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.5.5] - 2025-12-18
+
+**Federation & Stability**
+
+- **Full Federation Demo**: Complete 3-subgraph setup (Users, Products, Reviews) with standalone `router`.
+- **Hardened GBP**: Improved `read_varint` safety against malformed payloads (DoS protection).
+- **Benchmarks**: Updated performance tools to match the new federation schema.
+- **Fixes**: Resolved compilation issues in examples and build configuration.
+
 ### [0.5.4] - 2025-12-18
 
 **Router Performance Overhaul**

@@ -437,7 +437,7 @@ fn render_template(
             render_entity_configs(entities)
         ));
     }
-    buf.push_str("\n");
+    buf.push('\n');
 
     // Generate modules for the proto packages
     let mut packages = std::collections::BTreeSet::new();
@@ -465,7 +465,7 @@ fn render_template(
             ));
         }
     }
-    buf.push_str("\n");
+    buf.push('\n');
 
     buf.push_str("pub struct ServiceConfig {\n");
     buf.push_str("    pub name: &'static str,\n");
@@ -484,8 +484,7 @@ fn render_template(
     for (idx, svc) in services.iter().enumerate() {
         let const_name = svc.full_name.replace('.', "_").to_uppercase();
         let endpoint = normalize_endpoint(
-            &svc
-                .endpoint
+            &svc.endpoint
                 .clone()
                 .unwrap_or_else(|| default_service_endpoint(idx)),
         );
@@ -768,13 +767,13 @@ fn render_template(
     } else {
         buf.push_str("    builder = builder.with_services([svc.name]);\n");
     }
-    buf.push_str("\n");
+    buf.push('\n');
     buf.push_str("    let client = GrpcClient::builder(svc.endpoint)\n");
     buf.push_str("        .insecure(svc.insecure)\n");
     buf.push_str("        .lazy(true)\n");
     buf.push_str("        .connect_lazy()?;\n");
     buf.push_str("    builder = builder.add_grpc_client(svc.name, client);\n");
-    buf.push_str("\n");
+    buf.push('\n');
     buf.push_str("    Ok(builder)\n");
     buf.push_str("}\n\n");
 
@@ -854,7 +853,7 @@ fn render_template(
     buf.push_str(
         "        .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))?;\n",
     );
-    buf.push_str("\n");
+    buf.push('\n');
     buf.push_str("    Ok(())\n");
     buf.push_str("}\n");
 
@@ -981,7 +980,7 @@ fn derive_entity_resolver_name(entities: &[EntityInfo], services: &[ServiceInfo]
             }
         }
 
-        let name = svc.full_name.split('.').last().unwrap_or(&svc.full_name);
+        let name = svc.full_name.split('.').next_back().unwrap_or(&svc.full_name);
         return format!("{}EntityResolver", to_pascal_case(name));
     }
 
@@ -1018,7 +1017,7 @@ fn to_snake_case(s: &str) -> String {
 
 fn to_pascal_case(input: &str) -> String {
     input
-        .split(|c: char| c == '.' || c == '_' || c == '-')
+        .split(['.', '_', '-'])
         .filter(|part| !part.is_empty())
         .map(|part| {
             let mut chars = part.chars();

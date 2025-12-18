@@ -37,10 +37,10 @@
 //! # }
 //! ```
 
+use parking_lot::RwLock; // SECURITY: Non-poisoning locks
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use parking_lot::RwLock;  // SECURITY: Non-poisoning locks
 use std::time::Duration;
 
 /// Circuit breaker state
@@ -371,9 +371,7 @@ impl CircuitBreakerRegistry {
         let mut breakers = self.breakers.write();
         breakers
             .entry(service_name.to_string())
-            .or_insert_with(|| {
-                Arc::new(CircuitBreaker::new(service_name, self.config.clone()))
-            })
+            .or_insert_with(|| Arc::new(CircuitBreaker::new(service_name, self.config.clone())))
             .clone()
     }
 
@@ -426,7 +424,9 @@ impl std::fmt::Debug for CircuitBreakerRegistry {
 pub type SharedCircuitBreakerRegistry = Arc<CircuitBreakerRegistry>;
 
 /// Create a new shared circuit breaker registry
-pub fn create_circuit_breaker_registry(config: CircuitBreakerConfig) -> SharedCircuitBreakerRegistry {
+pub fn create_circuit_breaker_registry(
+    config: CircuitBreakerConfig,
+) -> SharedCircuitBreakerRegistry {
     Arc::new(CircuitBreakerRegistry::new(config))
 }
 
@@ -446,7 +446,10 @@ impl CircuitBreakerError {
     pub fn to_extensions(&self) -> HashMap<String, serde_json::Value> {
         let mut extensions = HashMap::new();
         match self {
-            CircuitBreakerError::CircuitOpen { service, retry_after } => {
+            CircuitBreakerError::CircuitOpen {
+                service,
+                retry_after,
+            } => {
                 extensions.insert("code".to_string(), serde_json::json!("SERVICE_UNAVAILABLE"));
                 extensions.insert("service".to_string(), serde_json::json!(service));
                 if let Some(retry) = retry_after {
@@ -617,7 +620,10 @@ mod tests {
         };
 
         let ext = err.to_extensions();
-        assert_eq!(ext.get("code"), Some(&serde_json::json!("SERVICE_UNAVAILABLE")));
+        assert_eq!(
+            ext.get("code"),
+            Some(&serde_json::json!("SERVICE_UNAVAILABLE"))
+        );
         assert_eq!(ext.get("service"), Some(&serde_json::json!("test")));
         assert_eq!(ext.get("retryAfter"), Some(&serde_json::json!(30)));
     }

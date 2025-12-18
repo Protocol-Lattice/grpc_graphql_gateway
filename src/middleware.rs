@@ -249,6 +249,7 @@ impl AuthScheme {
 
 /// Authentication result containing validated claims
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Default)]
 pub struct AuthClaims {
     /// Subject (user ID)
     pub sub: Option<String>,
@@ -267,19 +268,6 @@ pub struct AuthClaims {
     pub custom: HashMap<String, serde_json::Value>,
 }
 
-impl Default for AuthClaims {
-    fn default() -> Self {
-        Self {
-            sub: None,
-            iss: None,
-            aud: None,
-            exp: None,
-            iat: None,
-            roles: Vec::new(),
-            custom: HashMap::new(),
-        }
-    }
-}
 
 impl AuthClaims {
     /// Check if claims have expired
@@ -620,12 +608,14 @@ impl Middleware for AuthMiddleware {
 
 /// Log level for the logging middleware
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum LogLevel {
     /// Trace level (most verbose)
     Trace,
     /// Debug level
     Debug,
     /// Info level (recommended for production)
+    #[default]
     Info,
     /// Warn level
     Warn,
@@ -633,11 +623,6 @@ pub enum LogLevel {
     Error,
 }
 
-impl Default for LogLevel {
-    fn default() -> Self {
-        Self::Info
-    }
-}
 
 /// Headers that should be masked in logs
 const DEFAULT_SENSITIVE_HEADERS: &[&str] = &[
@@ -833,7 +818,11 @@ impl Middleware for EnhancedLoggingMiddleware {
                         "GraphQL request received"
                     );
                 } else {
-                    tracing::info!("GraphQL request {} from {:?}", ctx.request_id, ctx.client_ip);
+                    tracing::info!(
+                        "GraphQL request {} from {:?}",
+                        ctx.request_id,
+                        ctx.client_ip
+                    );
                 }
             }
             LogLevel::Warn | LogLevel::Error => {
@@ -1051,8 +1040,7 @@ mod tests {
 
     #[test]
     fn test_logging_config_masking() {
-        let config = LoggingConfig::default()
-            .mask_header("x-custom-secret");
+        let config = LoggingConfig::default().mask_header("x-custom-secret");
 
         assert!(config.sensitive_headers.contains("authorization"));
         assert!(config.sensitive_headers.contains("x-custom-secret"));
@@ -1084,20 +1072,22 @@ mod tests {
         #[async_trait::async_trait]
         impl Middleware for CounterMiddleware {
             async fn call(&self, _ctx: &mut Context) -> Result<()> {
-                self.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.counter
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
             }
         }
 
         let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let chain = MiddlewareChain::new()
-            .add(CounterMiddleware { counter: counter.clone() })
-            .add(CounterMiddleware { counter: counter.clone() });
+            .add(CounterMiddleware {
+                counter: counter.clone(),
+            })
+            .add(CounterMiddleware {
+                counter: counter.clone(),
+            });
 
-        let req = Request::builder()
-            .uri("/graphql")
-            .body(())
-            .unwrap();
+        let req = Request::builder().uri("/graphql").body(()).unwrap();
         let mut ctx = Context::from_request(&req);
 
         chain.execute(&mut ctx).await.unwrap();

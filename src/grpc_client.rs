@@ -118,13 +118,13 @@ pub struct GrpcClientBuilder {
 impl GrpcClientBuilder {
     fn new(endpoint: impl Into<String>) -> Self {
         let endpoint_str = endpoint.into();
-        
+
         // SECURITY: Auto-detect secure endpoints
         // https:// defaults to secure (TLS enabled)
         // http:// defaults to insecure (TLS disabled)
         let is_secure_endpoint = endpoint_str.starts_with("https://");
         let is_insecure_endpoint = endpoint_str.starts_with("http://");
-        
+
         // Default to secure unless explicitly http://
         let insecure = if is_insecure_endpoint {
             true
@@ -134,7 +134,7 @@ impl GrpcClientBuilder {
             // Unknown scheme - default to secure
             false
         };
-        
+
         Self {
             endpoint: endpoint_str,
             insecure,
@@ -194,22 +194,22 @@ fn configure_endpoint(endpoint: &str, insecure: bool) -> Result<Endpoint> {
 
     // HIGH-PERFORMANCE SETTINGS for 100K+ RPS
     // These settings optimize HTTP/2 for maximum throughput
-    
+
     // Keep connections alive to avoid reconnection overhead
     endpoint_builder = endpoint_builder
         .keep_alive_timeout(std::time::Duration::from_secs(10))
         .keep_alive_while_idle(true)
         .http2_keep_alive_interval(std::time::Duration::from_secs(30));
-    
+
     // Enable adaptive flow control for automatic window sizing
     endpoint_builder = endpoint_builder.http2_adaptive_window(true);
-    
+
     // Larger initial window sizes for high-throughput (2MB each)
     // This reduces the need for window updates and improves throughput
     endpoint_builder = endpoint_builder
         .initial_connection_window_size(65535 * 32) // ~2MB
-        .initial_stream_window_size(65535 * 32);    // ~2MB
-    
+        .initial_stream_window_size(65535 * 32); // ~2MB
+
     // TCP_NODELAY for lower latency (disable Nagle's algorithm)
     endpoint_builder = endpoint_builder.tcp_nodelay(true);
 

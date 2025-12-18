@@ -7,6 +7,10 @@ use crate::compression::{create_compression_layer, CompressionConfig};
 use crate::error::{GraphQLError, Result};
 use crate::grpc_client::GrpcClientPool;
 use crate::health::{health_handler, readiness_handler, HealthState};
+use crate::high_performance::{
+    pin_to_core, recommended_workers, FastJsonParser, HighPerfConfig, PerfMetrics,
+    ResponseTemplates, ShardedCache,
+};
 use crate::metrics::GatewayMetrics;
 use crate::middleware::{Context, Middleware};
 use crate::persisted_queries::{
@@ -15,11 +19,6 @@ use crate::persisted_queries::{
 use crate::query_whitelist::{QueryWhitelistConfig, SharedQueryWhitelist};
 use crate::request_collapsing::{RequestCollapsingConfig, SharedRequestCollapsingRegistry};
 use crate::schema::{DynamicSchema, GrpcResponseCache};
-use crate::high_performance::{
-    HighPerfConfig, FastJsonParser, ShardedCache, PerfMetrics, ResponseTemplates,
-    recommended_workers, pin_to_core,
-};
-use bytes::Bytes;
 use async_graphql::ServerError;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use axum::{
@@ -29,6 +28,7 @@ use axum::{
     routing::{get, get_service, post},
     Extension, Router,
 };
+use bytes::Bytes;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -47,12 +47,14 @@ pub struct ServeMux {
     health_checks_enabled: bool,
     /// Enable metrics endpoint
     metrics_enabled: bool,
+    /// Enable GraphQL Playground
+    playground_enabled: bool,
     /// APQ store for persisted queries
     apq_store: Option<SharedPersistedQueryStore>,
     /// Circuit breaker registry
     circuit_breaker: Option<SharedCircuitBreakerRegistry>,
     /// Response cache
-        response_cache: Option<SharedResponseCache>,
+    response_cache: Option<SharedResponseCache>,
     /// Response compression configuration
     compression_config: Option<CompressionConfig>,
     /// Query whitelist for security
@@ -83,6 +85,9 @@ impl ServeMux {
             client_pool: None,
             health_checks_enabled: false,
             metrics_enabled: false,
+            playground_enabled: std::env::var("ENABLE_GRAPHQL_PLAYGROUND")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
             apq_store: None,
             circuit_breaker: None,
             response_cache: None,
@@ -113,6 +118,11 @@ impl ServeMux {
         self.metrics_enabled = true;
     }
 
+    /// Enable GraphQL Playground
+    pub fn enable_playground(&mut self) {
+        self.playground_enabled = true;
+    }
+
     /// Enable Automatic Persisted Queries (APQ)
     pub fn enable_persisted_queries(&mut self, config: PersistedQueryConfig) {
         self.apq_store = Some(crate::persisted_queries::create_apq_store(config));
@@ -120,7 +130,9 @@ impl ServeMux {
 
     /// Enable Circuit Breaker for gRPC backend resilience
     pub fn enable_circuit_breaker(&mut self, config: CircuitBreakerConfig) {
-        self.circuit_breaker = Some(crate::circuit_breaker::create_circuit_breaker_registry(config));
+        self.circuit_breaker = Some(crate::circuit_breaker::create_circuit_breaker_registry(
+            config,
+        ));
     }
 
     /// Get the circuit breaker registry (if enabled)
@@ -150,7 +162,9 @@ impl ServeMux {
 
     /// Enable query whitelist
     pub fn enable_query_whitelist(&mut self, config: QueryWhitelistConfig) {
-        self.query_whitelist = Some(Arc::new(crate::query_whitelist::QueryWhitelist::new(config)));
+        self.query_whitelist = Some(Arc::new(crate::query_whitelist::QueryWhitelist::new(
+            config,
+        )));
     }
 
     /// Get the query whitelist (if enabled)
@@ -170,7 +184,8 @@ impl ServeMux {
 
     /// Enable request collapsing for deduplicating identical gRPC calls
     pub fn enable_request_collapsing(&mut self, config: RequestCollapsingConfig) {
-        self.request_collapsing = Some(crate::request_collapsing::create_request_collapsing_registry(config));
+        self.request_collapsing =
+            Some(crate::request_collapsing::create_request_collapsing_registry(config));
     }
 
     /// Get the request collapsing registry (if enabled)
@@ -185,16 +200,16 @@ impl ServeMux {
             config.cache_shards,
             config.max_entries_per_shard,
         )));
-        
+
         // Optional CPU affinity pinning
         if config.cpu_affinity {
             let num_cores = recommended_workers();
             for i in 0..num_cores {
                 // Pinning usually happens in thread creation, but we can try for current
-                let _ = pin_to_core(i); 
+                let _ = pin_to_core(i);
             }
         }
-        
+
         self.high_perf_config = Some(config);
     }
 
@@ -297,14 +312,15 @@ impl ServeMux {
         // Validate query against whitelist if enabled
         if let Some(ref whitelist) = self.query_whitelist {
             // Extract operation ID from extensions if present
-            let operation_id = processed_request.extensions.get("operationId")
+            let operation_id = processed_request
+                .extensions
+                .get("operationId")
                 .and_then(|v| serde_json::to_value(v).ok())
                 .and_then(|v| v.as_str().map(String::from));
 
-            if let Err(err) = whitelist.validate_query(
-                &processed_request.query, 
-                operation_id.as_deref()
-            ) {
+            if let Err(err) =
+                whitelist.validate_query(&processed_request.query, operation_id.as_deref())
+            {
                 tracing::warn!("Query whitelist validation failed: {}", err);
                 let mut server_err = ServerError::new(err.to_string(), None);
                 server_err.extensions = Some({
@@ -312,7 +328,7 @@ impl ServeMux {
                     ext.set("code", "QUERY_NOT_WHITELISTED");
                     ext
                 });
-                return async_graphql::Response::from_errors(vec![server_err]).into();
+                return async_graphql::Response::from_errors(vec![server_err]);
             }
         }
 
@@ -327,10 +343,13 @@ impl ServeMux {
 
         // Extract vary headers for cache key generation
         let vary_header_values = if let Some(ref cache) = self.response_cache {
-            cache.config.vary_headers.iter()
+            cache
+                .config
+                .vary_headers
+                .iter()
                 .map(|h| {
-                     let val = headers.get(h).and_then(|v| v.to_str().ok()).unwrap_or("");
-                     format!("{}:{}", h, val)
+                    let val = headers.get(h).and_then(|v| v.to_str().ok()).unwrap_or("");
+                    format!("{}:{}", h, val)
                 })
                 .collect::<Vec<_>>()
         } else {
@@ -404,16 +423,21 @@ impl ServeMux {
         };
 
         // Execute the query
-        match self.execute_with_middlewares(headers, processed_request).await {
+        match self
+            .execute_with_middlewares(headers, processed_request)
+            .await
+        {
             Ok(resp) => {
                 let duration = request_start.elapsed();
                 let had_error = !resp.errors.is_empty();
-                
+
                 // Track in analytics
                 if let Some(ref analytics) = self.analytics {
                     let error_details = if had_error {
                         resp.errors.first().map(|e| {
-                            let code = e.extensions.as_ref()
+                            let code = e
+                                .extensions
+                                .as_ref()
                                 .and_then(|ext| ext.get("code"))
                                 .map(|c| c.to_string())
                                 .unwrap_or_else(|| "GRAPHQL_ERROR".to_string());
@@ -422,14 +446,16 @@ impl ServeMux {
                     } else {
                         None
                     };
-                    
+
                     analytics.record_query(
                         &analytics_query,
                         analytics_op_name.as_deref(),
                         operation_type,
                         duration,
                         had_error,
-                        error_details.as_ref().map(|(c, m)| (c.as_str(), m.as_str())),
+                        error_details
+                            .as_ref()
+                            .map(|(c, m)| (c.as_str(), m.as_str())),
                     );
                 }
 
@@ -457,11 +483,13 @@ impl ServeMux {
                             // Extract types and entities for invalidation tracking
                             let types = extract_types_from_response(&resp_json);
                             let entities = extract_entities_from_response(&resp_json);
-                            cache.put(cache_key.clone(), resp_json.clone(), types, entities).await;
-                            
+                            cache
+                                .put(cache_key.clone(), resp_json.clone(), types, entities)
+                                .await;
+
                             // Explicitly cache entities (Cache by Field result)
                             cache.put_all_entities(&resp_json, None).await;
-                            
+
                             // Also cache in sharded cache if enabled
                             if let Some(ref sharded) = self.sharded_cache {
                                 if let Ok(resp_bytes) = self.json_parser.serialize(&resp) {
@@ -476,7 +504,7 @@ impl ServeMux {
             Err(err) => {
                 let duration = request_start.elapsed();
                 let gql_err: GraphQLError = err.into();
-                
+
                 // Track error in analytics
                 if let Some(ref analytics) = self.analytics {
                     analytics.record_query(
@@ -488,7 +516,7 @@ impl ServeMux {
                         Some(("INTERNAL_ERROR", &gql_err.message)),
                     );
                 }
-                
+
                 if let Some(handler) = &self.error_handler {
                     handler(vec![gql_err.clone()]);
                 }
@@ -499,13 +527,9 @@ impl ServeMux {
     }
 
     /// High-performance GraphQL handler for maximum throughput
-    pub async fn handle_fast(
-        &self,
-        headers: HeaderMap,
-        body: Bytes,
-    ) -> axum::response::Response {
+    pub async fn handle_fast(&self, headers: HeaderMap, body: Bytes) -> axum::response::Response {
         let start = Instant::now();
-        
+
         // 1. SIMD JSON parsing
         let request_val = match self.json_parser.parse_bytes(&body) {
             Ok(v) => v,
@@ -514,9 +538,15 @@ impl ServeMux {
                 return (
                     axum::http::StatusCode::BAD_REQUEST,
                     [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    self.response_templates.errors.get("PARSE_ERROR").cloned()
-                        .unwrap_or_else(|| Bytes::from(r#"{"errors":[{"message":"Invalid JSON"}]}"#))
-                ).into_response();
+                    self.response_templates
+                        .errors
+                        .get("PARSE_ERROR")
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            Bytes::from(r#"{"errors":[{"message":"Invalid JSON"}]}"#)
+                        }),
+                )
+                    .into_response();
             }
         };
 
@@ -527,8 +557,17 @@ impl ServeMux {
         // 2. High-performance cache lookup
         if let Some(ref sharded) = self.sharded_cache {
             let vary_header_values: Vec<String> = if let Some(ref cache) = self.response_cache {
-                cache.config.vary_headers.iter()
-                    .map(|h| format!("{}:{}", h, headers.get(h).and_then(|v| v.to_str().ok()).unwrap_or("")))
+                cache
+                    .config
+                    .vary_headers
+                    .iter()
+                    .map(|h| {
+                        format!(
+                            "{}:{}",
+                            h,
+                            headers.get(h).and_then(|v| v.to_str().ok()).unwrap_or("")
+                        )
+                    })
                     .collect()
             } else {
                 Vec::new()
@@ -542,11 +581,13 @@ impl ServeMux {
             );
 
             if let Some(cached_bytes) = sharded.get(&cache_key) {
-                self.perf_metrics.record(start.elapsed().as_nanos() as u64, true);
+                self.perf_metrics
+                    .record(start.elapsed().as_nanos() as u64, true);
                 return (
                     [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    cached_bytes
-                ).into_response();
+                    cached_bytes,
+                )
+                    .into_response();
             }
         }
 
@@ -563,10 +604,11 @@ impl ServeMux {
         }
 
         let resp = self.handle_http(headers, gql_req).await;
-        
+
         // Record metrics
-        self.perf_metrics.record(start.elapsed().as_nanos() as u64, false);
-        
+        self.perf_metrics
+            .record(start.elapsed().as_nanos() as u64, false);
+
         GraphQLResponse::from(resp).into_response()
     }
 
@@ -579,7 +621,7 @@ impl ServeMux {
                 // Fallback: wrap in a simple response
                 async_graphql::Response::new(
                     serde_json::from_value::<async_graphql::Value>(data)
-                        .unwrap_or(async_graphql::Value::Null)
+                        .unwrap_or(async_graphql::Value::Null),
                 )
             }
         }
@@ -597,7 +639,7 @@ impl ServeMux {
         } else {
             Some(request.query.as_str())
         };
-        
+
         // Convert extensions to serde_json::Value for APQ processing
         let extensions_value = if request.extensions.is_empty() {
             None
@@ -621,17 +663,18 @@ impl ServeMux {
     /// Create an error response for APQ errors
     fn apq_error_response(&self, err: PersistedQueryError) -> async_graphql::Response {
         let error_extensions = err.to_extensions();
-        let code = error_extensions.get("code")
+        let code = error_extensions
+            .get("code")
             .and_then(|v| v.as_str())
             .unwrap_or("PERSISTED_QUERY_ERROR");
-        
+
         let mut server_err = ServerError::new(err.to_string(), None);
         server_err.extensions = Some({
             let mut ext = async_graphql::ErrorExtensionValues::default();
             ext.set("code", code);
             ext
         });
-        
+
         async_graphql::Response::from_errors(vec![server_err])
     }
 
@@ -646,20 +689,18 @@ impl ServeMux {
     pub fn into_router(self) -> Router {
         use axum::middleware as axum_mw;
         use axum::response::Response;
-        
+
         let health_checks_enabled = self.health_checks_enabled;
         let metrics_enabled = self.metrics_enabled;
         let analytics_enabled = self.analytics.is_some();
         let client_pool = self.client_pool.clone();
         let compression_config = self.compression_config.clone();
-        
+
         let state = Arc::new(self.clone());
         let subscription = GraphQLSubscription::new(state.schema.executor());
 
         // SECURITY: Check if playground should be enabled (default: disabled)
-        let playground_enabled = std::env::var("ENABLE_GRAPHQL_PLAYGROUND")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
+        let playground_enabled = self.playground_enabled;
 
         let state = Arc::new(self);
         let use_fast_path = state.high_perf_config.is_some();
@@ -676,7 +717,7 @@ impl ServeMux {
         } else {
             router
         };
-        
+
         let mut router = router
             .route_service("/graphql/ws", get_service(subscription))
             .layer(Extension(state.schema.executor()))
@@ -684,7 +725,7 @@ impl ServeMux {
 
         // SECURITY: Add request body limit (1MB) to prevent memory exhaustion
         router = router.layer(axum::extract::DefaultBodyLimit::max(1024 * 1024));
-        
+
         // SECURITY: Add security headers using axum middleware
         async fn add_security_headers(
             req: axum::http::Request<axum::body::Body>,
@@ -708,7 +749,9 @@ impl ServeMux {
                 );
                 headers.insert(
                     axum::http::header::ACCESS_CONTROL_ALLOW_HEADERS,
-                    axum::http::HeaderValue::from_static("Content-Type, Authorization, X-Request-ID"),
+                    axum::http::HeaderValue::from_static(
+                        "Content-Type, Authorization, X-Request-ID",
+                    ),
                 );
                 headers.insert(
                     axum::http::header::ACCESS_CONTROL_MAX_AGE,
@@ -716,10 +759,10 @@ impl ServeMux {
                 );
                 return response;
             }
-            
+
             let mut response = next.run(req).await;
             let headers = response.headers_mut();
-            
+
             // Core security headers
             headers.insert(
                 axum::http::header::X_CONTENT_TYPE_OPTIONS,
@@ -729,47 +772,49 @@ impl ServeMux {
                 axum::http::header::X_FRAME_OPTIONS,
                 axum::http::HeaderValue::from_static("DENY"),
             );
-            
+
             // HSTS (Strict-Transport-Security) - tells browsers to only use HTTPS
             // max-age=31536000 (1 year), includeSubDomains for comprehensive protection
             headers.insert(
                 axum::http::header::STRICT_TRANSPORT_SECURITY,
                 axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
             );
-            
+
             // Prevent caching of sensitive responses
             headers.insert(
                 axum::http::header::CACHE_CONTROL,
                 axum::http::HeaderValue::from_static("no-store, no-cache, must-revalidate"),
             );
-            
+
             // XSS Protection (legacy but still useful for older browsers)
             headers.insert(
                 axum::http::header::HeaderName::from_static("x-xss-protection"),
                 axum::http::HeaderValue::from_static("1; mode=block"),
             );
-            
+
             // Content Security Policy - restrict resource loading
             headers.insert(
                 axum::http::header::CONTENT_SECURITY_POLICY,
-                axum::http::HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"),
+                axum::http::HeaderValue::from_static(
+                    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'",
+                ),
             );
-            
+
             // Referrer Policy - limit referrer information leakage
             headers.insert(
                 axum::http::header::REFERRER_POLICY,
                 axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"),
             );
-            
+
             // CORS headers for regular requests
             headers.insert(
                 axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
                 axum::http::HeaderValue::from_static("*"),
             );
-            
+
             response
         }
-        
+
         router = router.layer(axum_mw::from_fn(add_security_headers));
 
         // Add compression layer if enabled
@@ -777,10 +822,12 @@ impl ServeMux {
             if config.enabled {
                 // Add standard compression (brotli, gzip, etc.)
                 router = router.layer(create_compression_layer(config));
-                
+
                 // Add custom ultra-fast compression (LZ4, GBP-LZ4)
                 if config.lz4_enabled() || config.gbp_lz4_enabled() {
-                    router = router.layer(axum::middleware::from_fn(crate::lz4_compression::lz4_compression_middleware));
+                    router = router.layer(axum::middleware::from_fn(
+                        crate::lz4_compression::lz4_compression_middleware,
+                    ));
                 }
             }
         }
@@ -788,7 +835,7 @@ impl ServeMux {
         // Add health check routes if enabled
         if health_checks_enabled {
             let health_state = Arc::new(HealthState::new(
-                client_pool.unwrap_or_else(GrpcClientPool::new)
+                client_pool.unwrap_or_default(),
             ));
             router = router
                 .route("/health", get(health_handler))
@@ -804,8 +851,14 @@ impl ServeMux {
         if analytics_enabled {
             router = router
                 .route("/analytics", get(analytics_dashboard_handler))
-                .route("/analytics/api", get(analytics_api_handler).with_state(state.clone()))
-                .route("/analytics/reset", post(analytics_reset_handler).with_state(state));
+                .route(
+                    "/analytics/api",
+                    get(analytics_api_handler).with_state(state.clone()),
+                )
+                .route(
+                    "/analytics/reset",
+                    post(analytics_reset_handler).with_state(state),
+                );
         }
 
         router
@@ -821,6 +874,7 @@ impl Clone for ServeMux {
             client_pool: self.client_pool.clone(),
             health_checks_enabled: self.health_checks_enabled,
             metrics_enabled: self.metrics_enabled,
+            playground_enabled: self.playground_enabled,
             apq_store: self.apq_store.clone(),
             circuit_breaker: self.circuit_breaker.clone(),
             response_cache: self.response_cache.clone(),
@@ -932,7 +986,10 @@ async fn metrics_handler() -> impl IntoResponse {
     let metrics = GatewayMetrics::global();
     let body = metrics.render();
     (
-        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
         body,
     )
 }
@@ -958,7 +1015,7 @@ async fn analytics_api_handler(
             .get("x-analytics-key")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        
+
         if provided_key != required_key {
             return Json(serde_json::json!({
                 "error": "Unauthorized",
@@ -966,10 +1023,13 @@ async fn analytics_api_handler(
             }));
         }
     }
-    
+
     if let Some(ref analytics) = mux.analytics {
         let snapshot = analytics.get_snapshot();
-        Json(serde_json::to_value(snapshot).unwrap_or_else(|_| serde_json::json!({"error": "Failed to serialize analytics"})))
+        Json(
+            serde_json::to_value(snapshot)
+                .unwrap_or_else(|_| serde_json::json!({"error": "Failed to serialize analytics"})),
+        )
     } else {
         Json(serde_json::json!({"error": "Analytics not enabled"}))
     }
@@ -990,7 +1050,7 @@ async fn analytics_reset_handler(
             .get("x-analytics-key")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        
+
         if provided_key != required_key {
             return Json(serde_json::json!({
                 "error": "Unauthorized",
@@ -998,7 +1058,7 @@ async fn analytics_reset_handler(
             }));
         }
     }
-    
+
     if let Some(ref analytics) = mux.analytics {
         analytics.reset();
         Json(serde_json::json!({"status": "ok", "message": "Analytics reset successfully"}))
@@ -1018,18 +1078,22 @@ mod tests {
 
     const GREETER_DESCRIPTOR: &[u8] = include_bytes!("generated/greeter_descriptor.bin");
 
-    fn build_router() -> Router {
+    fn build_router_mux() -> ServeMux {
         let schema = crate::schema::SchemaBuilder::new()
             .with_descriptor_set_bytes(GREETER_DESCRIPTOR)
             .build(&crate::grpc_client::GrpcClientPool::new())
             .expect("schema builds");
 
-        ServeMux::new(schema).into_router()
+        ServeMux::new(schema)
     }
 
     #[tokio::test]
     async fn playground_served_on_get() {
-        let app = build_router();
+        let mut mux = build_router_mux();
+        mux.enable_playground();
+        let app = mux.into_router();
+
+        // ... rest of test
         let response = app
             .oneshot(
                 Request::builder()

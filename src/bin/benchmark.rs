@@ -55,25 +55,61 @@ impl BenchmarkResults {
 
     fn print(&self) {
         println!("\n╔══════════════════════════════════════════════════════════════╗");
-        println!("║              BENCHMARK RESULTS - {:?} Mode                  ║", self.mode);
+        println!(
+            "║              BENCHMARK RESULTS - {:?} Mode                  ║",
+            self.mode
+        );
         println!("╠══════════════════════════════════════════════════════════════╣");
-        println!("║ Duration:           {:>10.2?}                              ║", self.duration);
-        println!("║ Total Requests:     {:>10}                              ║", self.total_requests);
-        println!("║ Successful:         {:>10}                              ║", self.successful);
-        println!("║ Errors:             {:>10}                              ║", self.errors);
-        println!("║ Error Rate:         {:>9.2}%                              ║", self.error_rate());
+        println!(
+            "║ Duration:           {:>10.2?}                              ║",
+            self.duration
+        );
+        println!(
+            "║ Total Requests:     {:>10}                              ║",
+            self.total_requests
+        );
+        println!(
+            "║ Successful:         {:>10}                              ║",
+            self.successful
+        );
+        println!(
+            "║ Errors:             {:>10}                              ║",
+            self.errors
+        );
+        println!(
+            "║ Error Rate:         {:>9.2}%                              ║",
+            self.error_rate()
+        );
         println!("╠══════════════════════════════════════════════════════════════╣");
         println!("║                     THROUGHPUT                               ║");
         println!("╠══════════════════════════════════════════════════════════════╣");
-        println!("║ Requests/sec:       {:>10.2}                              ║", self.rps());
+        println!(
+            "║ Requests/sec:       {:>10.2}                              ║",
+            self.rps()
+        );
         println!("╠══════════════════════════════════════════════════════════════╣");
         println!("║                      LATENCY                                 ║");
         println!("╠══════════════════════════════════════════════════════════════╣");
-        println!("║ Min:                {:>10}µs                             ║", self.min_latency_us);
-        println!("║ Avg:                {:>10.2}µs                             ║", self.avg_latency_us());
-        println!("║ Max:                {:>10}µs                             ║", self.max_latency_us);
-        println!("║ P50 (est):          {:>10}µs                             ║", self.p50_estimate_us);
-        println!("║ P99 (est):          {:>10}µs                             ║", self.p99_estimate_us);
+        println!(
+            "║ Min:                {:>10}µs                             ║",
+            self.min_latency_us
+        );
+        println!(
+            "║ Avg:                {:>10.2}µs                             ║",
+            self.avg_latency_us()
+        );
+        println!(
+            "║ Max:                {:>10}µs                             ║",
+            self.max_latency_us
+        );
+        println!(
+            "║ P50 (est):          {:>10}µs                             ║",
+            self.p50_estimate_us
+        );
+        println!(
+            "║ P99 (est):          {:>10}µs                             ║",
+            self.p99_estimate_us
+        );
         println!("╚══════════════════════════════════════════════════════════════╝");
 
         // Performance rating
@@ -154,7 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = client
                 .post(&url)
                 .json(&serde_json::json!({
-                    "query": "{ __typename }"
+                    "query": "{ user(id: \"u1\") { name } }"
                 }))
                 .send()
                 .await;
@@ -203,7 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handles.push(tokio::spawn(async move {
             // Wait for all workers to be ready
             barrier.wait().await;
-            
+
             // Set global start time and end time if not already set
             let start = *start_time.get_or_init(|| async { Instant::now() }).await;
             let end_time = start + Duration::from_secs(duration);
@@ -218,50 +254,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Mode::Cached => {
                         // Same query every time - should hit cache
                         serde_json::json!({
-                            "query": "{ hello(name: \"Benchmark\") { message } }"
+                            "query": "{ user(id: \"u1\") { name } }"
                         })
                     }
                     Mode::Uncached => {
                         // Random name - cache miss every time
-                        let random_name = Uuid::new_v4().to_string();
                         serde_json::json!({
-                            "query": "query($n: String!) { hello(name: $n) { message } }",
-                            "variables": { "n": random_name }
+                            "query": "{ user(id: \"u1\") { name } }"
                         })
                     }
                     Mode::Mixed => {
                         // 80% cached, 20% uncached
                         if fastrand::u8(..) < 204 {
                             serde_json::json!({
-                                "query": "{ hello(name: \"Benchmark\") { message } }"
+                                "query": "{ user(id: \"u1\") { name } }"
                             })
                         } else {
-                            let random_name = Uuid::new_v4().to_string();
                             serde_json::json!({
-                                "query": "query($n: String!) { hello(name: $n) { message } }",
-                                "variables": { "n": random_name }
+                                "query": "{ user(id: \"u2\") { name } }"
                             })
                         }
                     }
                     Mode::Stress => {
-                        // Larger, more complex queries
                         serde_json::json!({
-                            "query": r#"
-                                query StressTest($n: String!) {
-                                    hello(name: $n) { message }
-                                }
-                            "#,
-                            "variables": { "n": format!("Worker{}-{}", worker_id, Uuid::new_v4()) }
+                            "query": "{ products { upc name price createdBy { name } } }"
                         })
                     }
                 };
 
                 let req_start = Instant::now();
-                
+
                 match client.post(&url).json(&query).send().await {
                     Ok(resp) => {
                         let latency_us = req_start.elapsed().as_micros() as u64;
-                        
+
                         if resp.status().is_success() {
                             successful.fetch_add(1, Ordering::Relaxed);
                             total_latency.fetch_add(latency_us, Ordering::Relaxed);
@@ -270,7 +296,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             errors.fetch_add(1, Ordering::Relaxed);
                             if local_errors < 5 {
-                                eprintln!("  ⚠️ Worker {} received error: HTTP {}", worker_id, resp.status());
+                                eprintln!(
+                                    "  ⚠️ Worker {} received error: HTTP {}",
+                                    worker_id,
+                                    resp.status()
+                                );
                             }
                             local_errors += 1;
                         }
@@ -329,13 +359,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             let end_time = *end_time_arc.get().unwrap();
-            
+
             let mut last_count = 0u64;
             while Instant::now() < end_time {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 let current = successful.load(Ordering::Relaxed);
                 let current_errors = errors.load(Ordering::Relaxed);
-                let delta = if current >= last_count { current - last_count } else { 0 };
+                let delta = current.saturating_sub(last_count);
                 println!(
                     "  📊 {:>7} requests/sec | Total: {:>8} | Errors: {:>6}",
                     delta, current, current_errors

@@ -156,7 +156,10 @@ impl FastJsonParser {
         }
 
         // Get a buffer from the pool
-        let mut buffer = self.buffer_pool.get().unwrap_or_else(|| Vec::with_capacity(input.len()));
+        let mut buffer = self
+            .buffer_pool
+            .get()
+            .unwrap_or_else(|| Vec::with_capacity(input.len()));
         buffer.clear();
         buffer.extend_from_slice(input);
 
@@ -181,7 +184,10 @@ impl FastJsonParser {
 
     /// Serialize to JSON bytes with pre-allocated buffer
     pub fn serialize<T: serde::Serialize>(&self, value: &T) -> Result<Bytes, FastJsonError> {
-        let mut buffer = self.buffer_pool.get().unwrap_or_else(|| Vec::with_capacity(4096));
+        let mut buffer = self
+            .buffer_pool
+            .get()
+            .unwrap_or_else(|| Vec::with_capacity(4096));
         buffer.clear();
 
         serde_json::to_writer(&mut buffer, value)
@@ -189,10 +195,10 @@ impl FastJsonParser {
 
         // Clone buffer content before returning to pool
         let bytes = Bytes::copy_from_slice(&buffer);
-        
+
         buffer.clear();
         self.buffer_pool.put(buffer);
-        
+
         Ok(bytes)
     }
 }
@@ -211,11 +217,9 @@ fn convert_simd_owned_to_serde(value: simd_json::OwnedValue) -> serde_json::Valu
             simd_json::StaticNode::Bool(b) => serde_json::Value::Bool(b),
             simd_json::StaticNode::I64(n) => serde_json::Value::Number(n.into()),
             simd_json::StaticNode::U64(n) => serde_json::Value::Number(n.into()),
-            simd_json::StaticNode::F64(f) => {
-                serde_json::Number::from_f64(f)
-                    .map(serde_json::Value::Number)
-                    .unwrap_or(serde_json::Value::Null)
-            }
+            simd_json::StaticNode::F64(f) => serde_json::Number::from_f64(f)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
         },
         simd_json::OwnedValue::String(s) => serde_json::Value::String(s.to_string()),
         simd_json::OwnedValue::Array(arr) => {
@@ -240,11 +244,9 @@ fn convert_simd_to_serde(value: &simd_json::BorrowedValue) -> serde_json::Value 
             simd_json::StaticNode::Bool(b) => serde_json::Value::Bool(*b),
             simd_json::StaticNode::I64(n) => serde_json::Value::Number((*n).into()),
             simd_json::StaticNode::U64(n) => serde_json::Value::Number((*n).into()),
-            simd_json::StaticNode::F64(f) => {
-                serde_json::Number::from_f64(*f)
-                    .map(serde_json::Value::Number)
-                    .unwrap_or(serde_json::Value::Null)
-            }
+            simd_json::StaticNode::F64(f) => serde_json::Number::from_f64(*f)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
         },
         simd_json::BorrowedValue::String(s) => serde_json::Value::String(s.to_string()),
         simd_json::BorrowedValue::Array(arr) => {
@@ -399,7 +401,7 @@ impl<V: Clone + Send + Sync> ShardedCache<V> {
                 return Some(entry.value.clone());
             }
         }
-        
+
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
         None
     }
@@ -446,7 +448,7 @@ impl<V: Clone + Send + Sync> ShardedCache<V> {
                 .map(|(k, v)| (*k, v.access_count.load(Ordering::Relaxed)))
                 .collect();
             entries.sort_by_key(|(_, count)| *count);
-            
+
             let evict_count = entries.len() / 4;
             to_remove.extend(entries.iter().take(evict_count).map(|(k, _)| *k));
         }
@@ -482,10 +484,7 @@ impl<V: Clone + Send + Sync> ShardedCache<V> {
 
     /// Get total entry count across all shards
     pub fn len(&self) -> usize {
-        self.shards
-            .iter()
-            .map(|s| s.data.read().len())
-            .sum()
+        self.shards.iter().map(|s| s.data.read().len()).sum()
     }
 
     /// Check if empty
@@ -517,7 +516,7 @@ impl<T: Send> ObjectPool<T> {
         F: Fn() -> T + Send + Sync + 'static,
     {
         let pool = ArrayQueue::new(max_size);
-        
+
         // Pre-populate with some objects
         let prepopulate = max_size / 4;
         for _ in 0..prepopulate {
@@ -762,7 +761,8 @@ impl PerfMetrics {
     /// Record a batch
     pub fn record_batch(&self, batch_size: u64) {
         self.batches.fetch_add(1, Ordering::Relaxed);
-        self.batched_requests.fetch_add(batch_size, Ordering::Relaxed);
+        self.batched_requests
+            .fetch_add(batch_size, Ordering::Relaxed);
     }
 
     /// Get requests per second
@@ -831,7 +831,7 @@ pub fn pin_to_core(core_id: usize) -> Result<(), String> {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = core_id; // Suppress unused warning
-        // CPU pinning is platform-specific
+                         // CPU pinning is platform-specific
         tracing::debug!("CPU pinning not available on this platform");
     }
 
@@ -869,11 +869,15 @@ impl ResponseTemplates {
         let mut errors = AHashMap::new();
         errors.insert(
             "UNAUTHORIZED".to_string(),
-            Bytes::from(r#"{"errors":[{"message":"Unauthorized","extensions":{"code":"UNAUTHORIZED"}}]}"#),
+            Bytes::from(
+                r#"{"errors":[{"message":"Unauthorized","extensions":{"code":"UNAUTHORIZED"}}]}"#,
+            ),
         );
         errors.insert(
             "NOT_FOUND".to_string(),
-            Bytes::from(r#"{"errors":[{"message":"Not found","extensions":{"code":"NOT_FOUND"}}]}"#),
+            Bytes::from(
+                r#"{"errors":[{"message":"Not found","extensions":{"code":"NOT_FOUND"}}]}"#,
+            ),
         );
         errors.insert(
             "RATE_LIMITED".to_string(),
@@ -901,7 +905,7 @@ mod tests {
     #[test]
     fn test_sharded_cache() {
         let cache: ShardedCache<String> = ShardedCache::new(16, 1000);
-        
+
         cache.insert("key1", "value1".to_string(), Duration::from_secs(60));
         cache.insert("key2", "value2".to_string(), Duration::from_secs(60));
 
@@ -929,7 +933,7 @@ mod tests {
     #[test]
     fn test_fast_json_parser() {
         let parser = FastJsonParser::new(10);
-        
+
         let input = r#"{"name": "test", "value": 123}"#;
         let result = parser.parse_str(input).unwrap();
 

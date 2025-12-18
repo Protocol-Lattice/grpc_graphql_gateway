@@ -322,14 +322,14 @@ impl RestEndpoint {
     }
 
     /// Set the response schema for typed responses
-    /// 
+    ///
     /// This enables GraphQL field selection on REST responses.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```rust,ignore
     /// use grpc_graphql_gateway::{RestEndpoint, RestResponseSchema, RestResponseField};
-    /// 
+    ///
     /// let endpoint = RestEndpoint::new("getPost", "/posts/{id}")
     ///     .with_response_schema(RestResponseSchema::new("Post")
     ///         .field(RestResponseField::int("id"))
@@ -344,7 +344,7 @@ impl RestEndpoint {
 
     /// Determine if this is a mutation based on method or explicit setting
     pub fn is_mutation(&self) -> bool {
-        self.is_mutation.unwrap_or_else(|| {
+        self.is_mutation.unwrap_or({
             matches!(
                 self.method,
                 HttpMethod::POST | HttpMethod::PUT | HttpMethod::PATCH | HttpMethod::DELETE
@@ -598,9 +598,9 @@ impl RestConnector {
     }
 
     /// Build a request from an endpoint and arguments
-    /// 
+    ///
     /// # Security
-    /// 
+    ///
     /// This function validates all path parameters to prevent SSRF attacks:
     /// - Rejects path traversal sequences (`..`)
     /// - Rejects URL control characters (`://`, `@`, null bytes)
@@ -615,23 +615,24 @@ impl RestConnector {
         for (key, value) in args {
             let placeholder = format!("{{{}}}", key);
             let value_str = json_value_to_string(value);
-            
+
             // SECURITY: Validate path parameter doesn't contain dangerous characters
-            if value_str.contains("..") 
-                || value_str.contains("://") 
+            if value_str.contains("..")
+                || value_str.contains("://")
                 || value_str.contains('@')
                 || value_str.contains('\0')
                 || value_str.contains('\n')
                 || value_str.contains('\r')
                 || value_str.contains("%00")
                 || value_str.contains("/../")
-                || value_str.contains("/./") {
+                || value_str.contains("/./")
+            {
                 return Err(Error::InvalidRequest(format!(
                     "Invalid characters in path parameter '{}': potential path traversal or URL injection",
                     key
                 )));
             }
-            
+
             // URL-encode the value to prevent injection
             let safe_value = urlencoding::encode(&value_str);
             path = path.replace(&placeholder, &safe_value);
@@ -657,11 +658,11 @@ impl RestConnector {
         } else {
             format!("{}{}?{}", self.config.base_url, path, query_parts.join("&"))
         };
-        
+
         // SECURITY: Final URL validation
         if !url.starts_with(&self.config.base_url) {
             return Err(Error::InvalidRequest(
-                "URL manipulation detected: final URL does not match base URL".to_string()
+                "URL manipulation detected: final URL does not match base URL".to_string(),
             ));
         }
 
@@ -732,7 +733,9 @@ impl RestConnector {
                         );
                         tokio::time::sleep(backoff).await;
                         backoff = std::cmp::min(
-                            Duration::from_secs_f64(backoff.as_secs_f64() * retry_config.multiplier),
+                            Duration::from_secs_f64(
+                                backoff.as_secs_f64() * retry_config.multiplier,
+                            ),
                             retry_config.max_backoff,
                         );
                         continue;
@@ -741,21 +744,25 @@ impl RestConnector {
                     // Return error for non-retryable status
                     return Err(Error::Schema(format!(
                         "REST {} {} failed with status {}: {}",
-                        request.method,
-                        request.url,
-                        response.status,
-                        response.body
+                        request.method, request.url, response.status, response.body
                     )));
                 }
                 Err(e) => {
                     if attempts <= retry_config.max_retries {
                         warn!(
                             "REST {} {} failed: {}, retrying in {:?} (attempt {}/{})",
-                            request.method, request.url, e, backoff, attempts, retry_config.max_retries
+                            request.method,
+                            request.url,
+                            e,
+                            backoff,
+                            attempts,
+                            retry_config.max_retries
                         );
                         tokio::time::sleep(backoff).await;
                         backoff = std::cmp::min(
-                            Duration::from_secs_f64(backoff.as_secs_f64() * retry_config.multiplier),
+                            Duration::from_secs_f64(
+                                backoff.as_secs_f64() * retry_config.multiplier,
+                            ),
                             retry_config.max_backoff,
                         );
                         continue;
@@ -823,7 +830,7 @@ impl RestConnector {
                 error!("Failed to read REST response bytes: {}", e);
                 Error::Schema(format!("Failed to read REST response: {}", e))
             })?;
-            
+
             let mut decoder = crate::gbp::GbpDecoder::new();
             decoder.decode_lz4(&bytes).map_err(|e| {
                 error!("Failed to decode GBP response: {}", e);
@@ -975,7 +982,9 @@ impl RestConnectorBuilder {
             config: self.config,
             endpoints: self.endpoints,
             client,
-            transformer: self.transformer.unwrap_or_else(|| Arc::new(DefaultTransformer)),
+            transformer: self
+                .transformer
+                .unwrap_or_else(|| Arc::new(DefaultTransformer)),
             interceptors: self.interceptors,
             cache,
         })
@@ -1184,15 +1193,15 @@ impl RestConnectorRegistry {
     }
 
     /// Build GraphQL fields for all REST endpoints in this registry
-    /// 
+    ///
     /// This generates dynamic GraphQL fields that can be added to Query and Mutation types.
     /// GET endpoints become queries, POST/PUT/PATCH/DELETE become mutations.
-    /// 
+    ///
     /// Field names use the endpoint name directly (e.g., `getPost`, `createUser`).
     /// Ensure endpoint names are unique across all connectors to avoid conflicts.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A tuple of (query_fields, mutation_fields) as vectors of RestGraphQLField
     pub fn build_graphql_fields(&self) -> (Vec<RestGraphQLField>, Vec<RestGraphQLField>) {
         let mut query_fields = Vec::new();
@@ -1203,12 +1212,17 @@ impl RestConnectorRegistry {
                 // Use endpoint name directly (no connector prefix)
                 let field_name = endpoint_name.clone();
                 let description = endpoint.description.clone().unwrap_or_else(|| {
-                    format!("REST {} {}{}", endpoint.method, connector.base_url(), endpoint.path)
+                    format!(
+                        "REST {} {}{}",
+                        endpoint.method,
+                        connector.base_url(),
+                        endpoint.path
+                    )
                 });
 
                 // Extract path parameters from path template
                 let path_params = extract_path_params(&endpoint.path);
-                
+
                 // Combine with query params
                 let mut all_params = path_params;
                 for key in endpoint.query_params.keys() {

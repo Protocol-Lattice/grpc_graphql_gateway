@@ -37,12 +37,12 @@
 //! # }
 //! ```
 
+use parking_lot::RwLock; // SECURITY: Non-poisoning locks
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use parking_lot::RwLock;  // SECURITY: Non-poisoning locks
 use thiserror::Error;
 
 /// Mode for query whitelist enforcement
@@ -112,10 +112,13 @@ impl QueryWhitelistConfig {
     ///   "listProducts": "query { products { id name price } }"
     /// }
     /// ```
-    pub fn from_json_file<P: AsRef<Path>>(path: P, mode: WhitelistMode) -> Result<Self, QueryWhitelistError> {
+    pub fn from_json_file<P: AsRef<Path>>(
+        path: P,
+        mode: WhitelistMode,
+    ) -> Result<Self, QueryWhitelistError> {
         let content = std::fs::read_to_string(path.as_ref())
             .map_err(|e| QueryWhitelistError::FileLoadError(e.to_string()))?;
-        
+
         let allowed_queries: HashMap<String, String> = serde_json::from_str(&content)
             .map_err(|e| QueryWhitelistError::ParseError(e.to_string()))?;
 
@@ -127,14 +130,17 @@ impl QueryWhitelistConfig {
     }
 
     /// Load allowed queries from a YAML file
-    /// 
+    ///
     /// Note: Requires the `yaml` feature to be enabled in Cargo.toml and
     /// the `serde_yaml` dependency to be added.
     #[cfg(feature = "yaml")]
-    pub fn from_yaml_file<P: AsRef<Path>>(path: P, mode: WhitelistMode) -> Result<Self, QueryWhitelistError> {
+    pub fn from_yaml_file<P: AsRef<Path>>(
+        path: P,
+        mode: WhitelistMode,
+    ) -> Result<Self, QueryWhitelistError> {
         let content = std::fs::read_to_string(path.as_ref())
             .map_err(|e| QueryWhitelistError::FileLoadError(e.to_string()))?;
-        
+
         let allowed_queries: HashMap<String, String> = serde_yaml::from_str(&content)
             .map_err(|e| QueryWhitelistError::ParseError(e.to_string()))?;
 
@@ -175,13 +181,13 @@ impl QueryWhitelistConfig {
 pub enum QueryWhitelistError {
     #[error("Query not in whitelist: {0}")]
     QueryNotWhitelisted(String),
-    
+
     #[error("Failed to load whitelist file: {0}")]
     FileLoadError(String),
-    
+
     #[error("Failed to parse whitelist file: {0}")]
     ParseError(String),
-    
+
     #[error("Query validation failed: {0}")]
     ValidationError(String),
 }
@@ -213,15 +219,18 @@ impl QueryWhitelist {
             // SECURITY: Normalize query before hashing to ensure consistent matching
             // regardless of client formatting
             let hash = Self::hash_query(query);
-            
+
             // Store by hash
             query_by_hash.insert(hash.clone(), query.clone());
-            
+
             // Store by ID
             query_by_id.insert(id.clone(), query.clone());
-            
+
             // Track which IDs map to this hash
-            ids_by_hash.entry(hash).or_insert_with(HashSet::new).insert(id.clone());
+            ids_by_hash
+                .entry(hash)
+                .or_default()
+                .insert(id.clone());
         }
 
         Self {
@@ -251,17 +260,17 @@ impl QueryWhitelist {
         let mut in_string = false;
         let mut in_comment = false;
         let mut pending_space = false;
-        
+
         let chars: Vec<char> = query.chars().collect();
         let mut i = 0;
-        
+
         // GraphQL Punctuators + Common separators relative to syntax
         // ! $ ( ) ... : = @ [ ] { | }
         let is_punctuator = |c: char| "!$():=@[]{|}".contains(c);
-        
+
         while i < chars.len() {
             let c = chars[i];
-            
+
             if in_comment {
                 if c == '\n' || c == '\r' {
                     in_comment = false;
@@ -271,7 +280,7 @@ impl QueryWhitelist {
                 i += 1;
                 continue;
             }
-            
+
             if in_string {
                 normalized.push(c);
                 if c == '"' {
@@ -280,7 +289,11 @@ impl QueryWhitelist {
                     let mut j = i;
                     while j > 0 {
                         j -= 1;
-                        if chars[j] == '\\' { backslashes += 1; } else { break; }
+                        if chars[j] == '\\' {
+                            backslashes += 1;
+                        } else {
+                            break;
+                        }
                     }
                     if backslashes % 2 == 0 {
                         in_string = false;
@@ -289,20 +302,20 @@ impl QueryWhitelist {
                 i += 1;
                 continue;
             }
-            
+
             if c == '"' {
                 in_string = true;
                 if pending_space {
                     if let Some(last) = normalized.chars().last() {
-                         // Space before string if previous char wasn't a punctuator (e.g. `name: "val"` internal space logic)
-                         // Wait, `name:"val"`. `:` is punct. `n:"`. No space.
-                         // `directive @"val"`. `@` is punct. No space.
-                         // `msg "hello"`. `msg` is alpha. `"` is alpha? No.
-                         // String quote is not punctuator in list above.
-                         // So we check.
-                         if !is_punctuator(last) {
-                             normalized.push(' ');
-                         }
+                        // Space before string if previous char wasn't a punctuator (e.g. `name: "val"` internal space logic)
+                        // Wait, `name:"val"`. `:` is punct. `n:"`. No space.
+                        // `directive @"val"`. `@` is punct. No space.
+                        // `msg "hello"`. `msg` is alpha. `"` is alpha? No.
+                        // String quote is not punctuator in list above.
+                        // So we check.
+                        if !is_punctuator(last) {
+                            normalized.push(' ');
+                        }
                     }
                 }
                 normalized.push(c);
@@ -310,19 +323,19 @@ impl QueryWhitelist {
                 i += 1;
                 continue;
             }
-            
+
             if c == '#' {
                 in_comment = true;
                 i += 1;
                 continue;
             }
-            
+
             if c.is_whitespace() || c == ',' {
                 pending_space = true;
                 i += 1;
                 continue;
             }
-            
+
             // Valid token char
             if pending_space {
                 if let Some(last) = normalized.chars().last() {
@@ -336,7 +349,7 @@ impl QueryWhitelist {
             pending_space = false;
             i += 1;
         }
-        
+
         normalized
     }
 
@@ -353,7 +366,11 @@ impl QueryWhitelist {
     /// Validate a query against the whitelist
     ///
     /// Returns Ok(()) if the query is allowed, or an error if it's not whitelisted.
-    pub fn validate_query(&self, query: &str, operation_id: Option<&str>) -> Result<(), QueryWhitelistError> {
+    pub fn validate_query(
+        &self,
+        query: &str,
+        operation_id: Option<&str>,
+    ) -> Result<(), QueryWhitelistError> {
         // Disabled mode - always allow
         if self.config.mode == WhitelistMode::Disabled {
             return Ok(());
@@ -391,7 +408,10 @@ impl QueryWhitelist {
                 Err(QueryWhitelistError::QueryNotWhitelisted(error_msg))
             }
             WhitelistMode::Warn => {
-                tracing::warn!("Query not in whitelist (allowed in Warn mode): {}", error_msg);
+                tracing::warn!(
+                    "Query not in whitelist (allowed in Warn mode): {}",
+                    error_msg
+                );
                 Ok(())
             }
             WhitelistMode::Disabled => Ok(()),
@@ -411,7 +431,7 @@ impl QueryWhitelist {
     /// Check if a query is an introspection query
     fn is_introspection_query(&self, query: &str) -> bool {
         let normalized = query.trim().to_lowercase();
-        normalized.contains("__schema") 
+        normalized.contains("__schema")
             || normalized.contains("__type")
             || normalized.contains("introspectionquery")
     }
@@ -429,39 +449,42 @@ impl QueryWhitelist {
     /// Register a new allowed query at runtime (useful for dynamic whitelists)
     pub fn register_query(&self, id: String, query: String) {
         let hash = Self::hash_query(&query);
-        
+
         // Add to hash lookup
-        self.query_by_hash.write().insert(hash.clone(), query.clone());
-        
+        self.query_by_hash
+            .write()
+            .insert(hash.clone(), query.clone());
+
         // Add to ID lookup
         self.query_by_id.write().insert(id.clone(), query);
-        
+
         // Add to reverse lookup
-        self.ids_by_hash.write()
+        self.ids_by_hash
+            .write()
             .entry(hash)
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(id);
     }
 
     /// Remove a query from the whitelist
     pub fn remove_query(&self, id: &str) -> bool {
         let mut query_by_id = self.query_by_id.write();
-        
+
         if let Some(query) = query_by_id.remove(id) {
             let hash = Self::hash_query(&query);
-            
+
             // Update reverse lookup
             let mut ids_by_hash = self.ids_by_hash.write();
             if let Some(ids) = ids_by_hash.get_mut(&hash) {
                 ids.remove(id);
-                
+
                 // If no more IDs reference this hash, remove the hash entry
                 if ids.is_empty() {
                     ids_by_hash.remove(&hash);
                     self.query_by_hash.write().remove(&hash);
                 }
             }
-            
+
             true
         } else {
             false
@@ -514,22 +537,31 @@ mod tests {
     fn test_whitelist_enforce_mode() {
         let config = QueryWhitelistConfig {
             mode: WhitelistMode::Enforce,
-            allowed_queries: vec![
-                ("getUser".to_string(), "query { user { id name } }".to_string()),
-            ].into_iter().collect(),
+            allowed_queries: vec![(
+                "getUser".to_string(),
+                "query { user { id name } }".to_string(),
+            )]
+            .into_iter()
+            .collect(),
             allow_introspection: false,
         };
 
         let whitelist = QueryWhitelist::new(config);
 
         // Allowed query
-        assert!(whitelist.validate_query("query { user { id name } }", None).is_ok());
+        assert!(whitelist
+            .validate_query("query { user { id name } }", None)
+            .is_ok());
 
         // Allowed by operation ID
-        assert!(whitelist.validate_query("query { user { id name } }", Some("getUser")).is_ok());
+        assert!(whitelist
+            .validate_query("query { user { id name } }", Some("getUser"))
+            .is_ok());
 
         // Not allowed
-        assert!(whitelist.validate_query("query { posts { title } }", None).is_err());
+        assert!(whitelist
+            .validate_query("query { posts { title } }", None)
+            .is_err());
     }
 
     #[test]
@@ -543,7 +575,9 @@ mod tests {
         let whitelist = QueryWhitelist::new(config);
 
         // Any query should pass in Warn mode
-        assert!(whitelist.validate_query("query { unknown { field } }", None).is_ok());
+        assert!(whitelist
+            .validate_query("query { unknown { field } }", None)
+            .is_ok());
     }
 
     #[test]
@@ -566,11 +600,17 @@ mod tests {
         let whitelist = QueryWhitelist::new(config);
 
         // Introspection queries should be allowed
-        assert!(whitelist.validate_query("query { __schema { types { name } } }", None).is_ok());
-        assert!(whitelist.validate_query("query { __type(name: \"User\") { fields { name } } }", None).is_ok());
+        assert!(whitelist
+            .validate_query("query { __schema { types { name } } }", None)
+            .is_ok());
+        assert!(whitelist
+            .validate_query("query { __type(name: \"User\") { fields { name } } }", None)
+            .is_ok());
 
         // Regular queries should still be blocked
-        assert!(whitelist.validate_query("query { user { id } }", None).is_err());
+        assert!(whitelist
+            .validate_query("query { user { id } }", None)
+            .is_err());
     }
 
     #[test]
@@ -604,13 +644,17 @@ mod tests {
         let whitelist = QueryWhitelist::new(config);
 
         // Initially allowed
-        assert!(whitelist.validate_query("query { user { id } }", Some("getUser")).is_ok());
+        assert!(whitelist
+            .validate_query("query { user { id } }", Some("getUser"))
+            .is_ok());
 
         // Remove it
         assert!(whitelist.remove_query("getUser"));
 
         // Now should be blocked
-        assert!(whitelist.validate_query("query { user { id } }", Some("getUser")).is_err());
+        assert!(whitelist
+            .validate_query("query { user { id } }", Some("getUser"))
+            .is_err());
 
         // Removing again should return false
         assert!(!whitelist.remove_query("getUser"));

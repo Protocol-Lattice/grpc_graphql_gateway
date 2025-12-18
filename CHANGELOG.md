@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.5] - 2025-12-18
+
+### Added
+- **Federation Example Expansion**: Added `subgraph-reviews` service and configured `router` to orchestrate 3 subgraphs (Users, Products, Reviews).
+- **Benchmark Alignment**: Updated `benchmark` tool to target specific entities in the new federation schema.
+
+### Fixed
+- **DoS Protection**: Hardened `read_varint` against infinite loops from malformed GBP payloads.
+- **Example Compilation**: Fixed `federation` and `smart_ttl_cache` examples to use modern `axum::serve` and correct file paths.
+- **Build Warnings**: Resolved multiple build target conflicts in `Cargo.toml`.
+
+### Changed
+- **Default Ports**: Standardized federation example ports: Users (`4002`), Products (`4003`), Reviews (`4004`).
+
 ## [0.5.4] - 2025-12-18
 
 ### Added

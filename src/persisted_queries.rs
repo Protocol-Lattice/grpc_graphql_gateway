@@ -45,11 +45,11 @@
 //! # }
 //! ```
 
+use parking_lot::RwLock; // SECURITY: Non-poisoning locks
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;  // SECURITY: Non-poisoning locks
 use std::time::{Duration, Instant};
 
 /// Configuration for Automatic Persisted Queries
@@ -213,13 +213,13 @@ impl PersistedQueryStore {
         let current_len = self.len();
         if current_len >= self.config.cache_size {
             let to_remove = current_len - self.config.cache_size + 1;
-            
+
             let hashes_to_remove: Vec<String> = {
                 let mut order = self.insertion_order.write();
                 let drain_count = to_remove.min(order.len());
                 order.drain(..drain_count).collect()
             };
-            
+
             let mut cache = self.cache.write();
             for hash in hashes_to_remove {
                 cache.remove(&hash);
@@ -232,7 +232,7 @@ impl Clone for PersistedQueryStore {
     fn clone(&self) -> Self {
         let cache = self.cache.read().clone();
         let order = self.insertion_order.read().clone();
-        
+
         Self {
             config: self.config.clone(),
             cache: RwLock::new(cache),
@@ -259,10 +259,7 @@ pub enum PersistedQueryError {
 
     /// Hash of provided query doesn't match the provided hash
     #[error("Provided APQ hash does not match query. Provided: {provided}, Computed: {computed}")]
-    HashMismatch {
-        provided: String,
-        computed: String,
-    },
+    HashMismatch { provided: String, computed: String },
 
     /// Invalid APQ version
     #[error("PersistedQueryNotSupported: version {0} is not supported, use version 1")]
@@ -348,13 +345,13 @@ mod tests {
     fn test_hash_query() {
         let query = "{ hello }";
         let hash = PersistedQueryStore::hash_query(query);
-        
+
         // SHA-256 produces a 64-character hex string
         assert_eq!(hash.len(), 64);
-        
+
         // Same query should produce same hash
         assert_eq!(hash, PersistedQueryStore::hash_query(query));
-        
+
         // Different query should produce different hash
         assert_ne!(hash, PersistedQueryStore::hash_query("{ world }"));
     }
@@ -385,7 +382,10 @@ mod tests {
         let wrong_hash = "deadbeef".repeat(8); // 64 chars
 
         let result = store.put(&wrong_hash, query);
-        assert!(matches!(result, Err(PersistedQueryError::HashMismatch { .. })));
+        assert!(matches!(
+            result,
+            Err(PersistedQueryError::HashMismatch { .. })
+        ));
     }
 
     #[test]
@@ -450,7 +450,7 @@ mod tests {
     fn test_process_apq_request_cache_miss() {
         let store = PersistedQueryStore::new(PersistedQueryConfig::default());
         let hash = "a".repeat(64);
-        
+
         let extensions = serde_json::json!({
             "persistedQuery": {
                 "version": 1,
@@ -467,7 +467,7 @@ mod tests {
         let store = PersistedQueryStore::new(PersistedQueryConfig::default());
         let query = "{ users { id } }";
         let hash = PersistedQueryStore::hash_query(query);
-        
+
         let extensions = serde_json::json!({
             "persistedQuery": {
                 "version": 1,
@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn test_unsupported_version() {
         let store = PersistedQueryStore::new(PersistedQueryConfig::default());
-        
+
         let extensions = serde_json::json!({
             "persistedQuery": {
                 "version": 2,
@@ -496,7 +496,10 @@ mod tests {
         });
 
         let result = process_apq_request(&store, None, Some(&extensions));
-        assert!(matches!(result, Err(PersistedQueryError::UnsupportedVersion(2))));
+        assert!(matches!(
+            result,
+            Err(PersistedQueryError::UnsupportedVersion(2))
+        ));
     }
 
     #[test]
@@ -504,7 +507,7 @@ mod tests {
         let store = PersistedQueryStore::new(PersistedQueryConfig::default());
         let query = "{ test }";
         let hash = PersistedQueryStore::hash_query(query);
-        
+
         store.put(&hash, query).unwrap();
         assert_eq!(store.len(), 1);
 

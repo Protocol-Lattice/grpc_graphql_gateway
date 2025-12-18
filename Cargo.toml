@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.5.4"
+version = "0.5.5"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -181,3 +181,7 @@ path = "examples/subgraphs/subgraph-users.rs"
 [[bin]]
 name = "subgraph-products"
 path = "examples/subgraphs/subgraph-products.rs"
+
+[[bin]]
+name = "subgraph-reviews"
+path = "examples/subgraphs/subgraph-reviews.rs"

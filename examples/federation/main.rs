@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_graphql::{Name, Value as GqlValue};
 use grpc_graphql_gateway::{EntityResolver, Gateway, GrpcClient, HighPerfConfig};
+use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::info;
@@ -108,7 +109,7 @@ async fn run_user_gateway(entity_resolver: Arc<dyn EntityResolver>) -> Result<()
         USER_GRAPH_ADDR
     );
 
-    Gateway::builder()
+    let gateway = Gateway::builder()
         .with_descriptor_set_bytes(DESCRIPTORS)
         .enable_federation()
         .enable_health_checks()
@@ -117,8 +118,11 @@ async fn run_user_gateway(entity_resolver: Arc<dyn EntityResolver>) -> Result<()
         .add_grpc_clients([("federation_example.UserService".to_string(), user_client)])
         .with_services(["federation_example.UserService"])
         .with_high_performance(HighPerfConfig::ultra_fast())
-        .serve(USER_GRAPH_ADDR)
-        .await?;
+        .build()?;
+
+    let app = gateway.into_router();
+    let listener = TcpListener::bind(USER_GRAPH_ADDR).await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }
@@ -132,7 +136,7 @@ async fn run_product_gateway(entity_resolver: Arc<dyn EntityResolver>) -> Result
         PRODUCT_GRAPH_ADDR
     );
 
-    Gateway::builder()
+    let gateway = Gateway::builder()
         .with_descriptor_set_bytes(DESCRIPTORS)
         .enable_federation()
         .enable_health_checks()
@@ -144,8 +148,11 @@ async fn run_product_gateway(entity_resolver: Arc<dyn EntityResolver>) -> Result
         )])
         .with_services(["federation_example.ProductService"])
         .with_high_performance(HighPerfConfig::ultra_fast())
-        .serve(PRODUCT_GRAPH_ADDR)
-        .await?;
+        .build()?;
+
+    let app = gateway.into_router();
+    let listener = TcpListener::bind(PRODUCT_GRAPH_ADDR).await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }
@@ -158,7 +165,7 @@ async fn run_review_gateway(entity_resolver: Arc<dyn EntityResolver>) -> Result<
         REVIEW_GRAPH_ADDR
     );
 
-    Gateway::builder()
+    let gateway = Gateway::builder()
         .with_descriptor_set_bytes(DESCRIPTORS)
         .enable_federation()
         .enable_health_checks()
@@ -170,8 +177,11 @@ async fn run_review_gateway(entity_resolver: Arc<dyn EntityResolver>) -> Result<
         )])
         .with_services(["federation_example.ReviewService"])
         .with_high_performance(HighPerfConfig::ultra_fast())
-        .serve(REVIEW_GRAPH_ADDR)
-        .await?;
+        .build()?;
+
+    let app = gateway.into_router();
+    let listener = TcpListener::bind(REVIEW_GRAPH_ADDR).await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }

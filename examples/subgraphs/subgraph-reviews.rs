@@ -4,34 +4,34 @@ use warp::{Filter, Reply};
 
 #[tokio::main]
 async fn main() {
-    let products_route = warp::path("graphql")
+    let reviews_route = warp::path("graphql")
         .and(warp::post())
         .and(warp::header::optional::<String>("accept"))
         .map(|accept: Option<String>| {
-            // Generate some products
-            let products: Vec<_> = (0..50)
+            // Generate some reviews
+            let reviews: Vec<_> = (0..50)
                 .map(|i| {
                     json!({
-                        "id": format!("prod_{}", i),
-                        "name": format!("High Performance Widget v{}", i),
-                        "price": 99.99 + (i as f64),
-                        "stock": 1000 - i,
-                        "tags": ["performance", "rust", "gbp"]
+                        "id": format!("rev_{}", i),
+                        "body": format!("Great product! Review #{}", i),
+                        "rating": (i % 5) + 1,
+                        "author": { "id": format!("user_{}", i % 10) },
+                        "product": { "upc": format!("prod_{}", i % 5) }
                     })
                 })
                 .collect();
 
-            let product_data = json!({
+            let review_data = json!({
                 "data": {
-                    "_service": { "sdl": "extend type Query { products: [Product] }" },
-                    "products": products
+                    "_service": { "sdl": "extend type Query { reviews: [Review] }" },
+                    "reviews": reviews
                 }
             });
-            handle_request(accept, product_data)
+            handle_request(accept, review_data)
         });
 
-    println!("📦 Products Subgraph listening on http://0.0.0.0:4003/graphql");
-    warp::serve(products_route).run(([0, 0, 0, 0], 4003)).await;
+    println!("⭐ Reviews Subgraph listening on http://0.0.0.0:4004/graphql");
+    warp::serve(reviews_route).run(([0, 0, 0, 0], 4004)).await;
 }
 
 fn handle_request(accept: Option<String>, data: serde_json::Value) -> warp::reply::Response {

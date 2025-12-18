@@ -1,6 +1,7 @@
 //! # grpc-graphql-gateway-rs
 //!
 //! A high-performance Rust gateway that bridges gRPC services to GraphQL with full Apollo Federation v2 support.
+#![allow(clippy::result_large_err)]
 //!
 //! ## Features
 //!
@@ -58,17 +59,22 @@ pub mod cache;
 pub mod circuit_breaker;
 pub mod compression;
 pub mod dataloader;
-pub mod headers;
 pub mod error;
 pub mod federation;
 pub mod gateway;
+pub mod gbp;
 pub mod grpc_client;
+pub mod headers;
 pub mod health;
+pub mod high_performance;
+pub mod lz4_compression;
 pub mod metrics;
 pub mod middleware;
+pub mod openapi;
 pub mod persisted_queries;
 pub mod query_cost_analyzer;
 pub mod query_whitelist;
+pub mod request_collapsing;
 pub mod rest_connector;
 pub mod router;
 pub mod runtime;
@@ -76,21 +82,16 @@ pub mod schema;
 pub mod shutdown;
 pub mod smart_ttl;
 pub mod subscription;
-pub mod request_collapsing;
-pub mod openapi;
-pub mod lz4_compression;
 pub mod tracing_otel;
 pub mod types;
-pub mod gbp;
-pub mod high_performance;
 
 pub use analytics::{
-    create_analytics, AnalyticsConfig, AnalyticsGuard, AnalyticsSnapshot, ErrorStats,
-    FieldStats, QueryAnalytics, QueryStats, SharedQueryAnalytics,
+    create_analytics, AnalyticsConfig, AnalyticsGuard, AnalyticsSnapshot, ErrorStats, FieldStats,
+    QueryAnalytics, QueryStats, SharedQueryAnalytics,
 };
 pub use cache::{
-    create_response_cache, is_mutation, CacheConfig, CacheLookupResult, CacheStats,
-    CachedResponse, ResponseCache, SharedResponseCache,
+    create_response_cache, is_mutation, CacheConfig, CacheLookupResult, CacheStats, CachedResponse,
+    ResponseCache, SharedResponseCache,
 };
 pub use circuit_breaker::{
     create_circuit_breaker_registry, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError,
@@ -100,53 +101,44 @@ pub use compression::{
     create_compression_layer, CompressionConfig, CompressionLevel, CompressionStats,
 };
 pub use dataloader::EntityDataLoader;
-pub use headers::{apply_metadata_to_request, HeaderPropagationConfig};
 pub use error::{Error, Result};
 pub use federation::{
     EntityConfig, EntityResolver, EntityResolverMapping, FederationConfig, GrpcEntityResolver,
     GrpcEntityResolverBuilder,
 };
 pub use gateway::{Gateway, GatewayBuilder};
+pub use gbp::GbpEncoder;
 pub use grpc_client::GrpcClient;
+pub use headers::{apply_metadata_to_request, HeaderPropagationConfig};
 pub use health::{ComponentHealth, HealthResponse, HealthState, HealthStatus};
+pub use high_performance::{
+    pin_to_core, recommended_workers, BatchConfig, BatchProcessor, CacheStats as ShardedCacheStats,
+    FastJsonError, FastJsonParser, HighPerfConfig, ObjectPool, OptimizedConnectionConfig,
+    PerfMetrics, ResponseTemplates, ShardedCache,
+};
+pub use lz4_compression::{
+    compress_lz4, decompress_lz4, lz4_compression_middleware, Lz4CacheCompressor,
+};
 pub use metrics::{GatewayMetrics, GrpcTimer, RequestTimer};
 pub use middleware::{
     AuthClaims, AuthConfig, AuthMiddleware, AuthScheme, Context, CorsMiddleware,
-    EnhancedAuthMiddleware, EnhancedLoggingMiddleware, LogLevel, LoggingConfig,
-    LoggingMiddleware, Middleware, MiddlewareChain, RateLimitMiddleware, TokenValidator,
+    EnhancedAuthMiddleware, EnhancedLoggingMiddleware, LogLevel, LoggingConfig, LoggingMiddleware,
+    Middleware, MiddlewareChain, RateLimitMiddleware, TokenValidator,
+};
+pub use openapi::{
+    Components, MediaType, OpenApiInfo, OpenApiParser, OpenApiServer, OpenApiSpec, Operation,
+    OperationInfo, Parameter, PathItem, RequestBody, Response, SchemaObject,
 };
 pub use persisted_queries::{
     create_apq_store, process_apq_request, PersistedQueryConfig, PersistedQueryError,
     PersistedQueryExtension, PersistedQueryStore, SharedPersistedQueryStore,
 };
 pub use query_cost_analyzer::{
-    QueryCostAnalyzer, QueryCostAnalytics, QueryCostConfig, QueryCostResult,
+    QueryCostAnalytics, QueryCostAnalyzer, QueryCostConfig, QueryCostResult,
 };
 pub use query_whitelist::{
-    QueryWhitelist, QueryWhitelistConfig, QueryWhitelistError, SharedQueryWhitelist,
-    WhitelistMode, WhitelistStats,
-};
-pub use runtime::ServeMux;
-pub use schema::SchemaBuilder;
-pub use shutdown::{
-    run_with_graceful_shutdown, os_signal_shutdown, RequestGuard, ShutdownConfig,
-    ShutdownCoordinator, ShutdownState,
-};
-pub use smart_ttl::{
-    parse_cache_hint, SmartTtlAnalytics, SmartTtlConfig, SmartTtlManager, TtlResult,
-    TtlStrategy,
-};
-pub use subscription::{
-    GrpcSubscriptionMapping, GrpcSubscriptionResolver, MultiplexSubscription,
-    MultiplexSubscriptionBuilder, ProtocolMessage, SubscriptionConfig, SubscriptionInfo,
-    SubscriptionPayload, SubscriptionRegistry, SubscriptionResolver, SubscriptionState,
-};
-pub use tracing_otel::{init_tracer, shutdown_tracer, GraphQLSpan, GrpcSpan, TracingConfig};
-pub use rest_connector::{
-    ApiKeyInterceptor, BearerAuthInterceptor, DefaultTransformer, HttpMethod, RequestInterceptor,
-    ResponseTransformer, RestConnector, RestConnectorBuilder, RestConnectorConfig,
-    RestConnectorRegistry, RestEndpoint, RestFieldType, RestGraphQLField, RestRequest,
-    RestResponse, RestResponseField, RestResponseSchema, RetryConfig,
+    QueryWhitelist, QueryWhitelistConfig, QueryWhitelistError, SharedQueryWhitelist, WhitelistMode,
+    WhitelistStats,
 };
 pub use request_collapsing::{
     create_collapsing_metrics, create_request_collapsing_registry, CollapseResult,
@@ -154,16 +146,24 @@ pub use request_collapsing::{
     RequestCollapsingConfig, RequestCollapsingRegistry, RequestKey, RequestReceiver,
     SharedCollapsingMetrics, SharedRequestCollapsingRegistry,
 };
-pub use openapi::{
-    Components, MediaType, OpenApiInfo, OpenApiParser, OpenApiServer, OpenApiSpec,
-    Operation, OperationInfo, Parameter, PathItem, RequestBody, Response, SchemaObject,
+pub use rest_connector::{
+    ApiKeyInterceptor, BearerAuthInterceptor, DefaultTransformer, HttpMethod, RequestInterceptor,
+    ResponseTransformer, RestConnector, RestConnectorBuilder, RestConnectorConfig,
+    RestConnectorRegistry, RestEndpoint, RestFieldType, RestGraphQLField, RestRequest,
+    RestResponse, RestResponseField, RestResponseSchema, RetryConfig,
 };
-pub use high_performance::{
-    FastJsonParser, FastJsonError, ShardedCache, CacheStats as ShardedCacheStats,
-    ObjectPool, BatchProcessor, BatchConfig, HighPerfConfig, OptimizedConnectionConfig,
-    PerfMetrics, ResponseTemplates, recommended_workers, pin_to_core,
+pub use runtime::ServeMux;
+pub use schema::SchemaBuilder;
+pub use shutdown::{
+    os_signal_shutdown, run_with_graceful_shutdown, RequestGuard, ShutdownConfig,
+    ShutdownCoordinator, ShutdownState,
 };
-pub use lz4_compression::{
-    lz4_compression_middleware, compress_lz4, decompress_lz4, Lz4CacheCompressor,
+pub use smart_ttl::{
+    parse_cache_hint, SmartTtlAnalytics, SmartTtlConfig, SmartTtlManager, TtlResult, TtlStrategy,
 };
-pub use gbp::{GbpEncoder};
+pub use subscription::{
+    GrpcSubscriptionMapping, GrpcSubscriptionResolver, MultiplexSubscription,
+    MultiplexSubscriptionBuilder, ProtocolMessage, SubscriptionConfig, SubscriptionInfo,
+    SubscriptionPayload, SubscriptionRegistry, SubscriptionResolver, SubscriptionState,
+};
+pub use tracing_otel::{init_tracer, shutdown_tracer, GraphQLSpan, GrpcSpan, TracingConfig};

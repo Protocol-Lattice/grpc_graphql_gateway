@@ -7,28 +7,41 @@
 use async_graphql::{Name, Value as GqlValue};
 use grpc_graphql_gateway::{Gateway, GatewayBuilder, GrpcClient, Result as GatewayResult};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
+use tokio::net::TcpListener;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing_subscriber::prelude::*;
 
 type ServiceResult<T> = std::result::Result<T, Status>;
 
-const DESCRIPTOR_SET: &[u8] = include_bytes!("./federation_example_descriptor.bin");
+const DESCRIPTOR_SET: &[u8] =
+    include_bytes!("../../src/generated/federation_example_descriptor.bin");
 
 const DEFAULT_GRPC_ADDR: &str = "0.0.0.0:50051";
 
 fn describe(list: &[&str]) -> String {
-    if list.is_empty() { "none".to_string() } else { list.join(", ") }
+    if list.is_empty() {
+        "none".to_string()
+    } else {
+        list.join(", ")
+    }
 }
 
 fn describe_resolvers(list: &[&str]) -> String {
-    if list.is_empty() { "none".to_string() } else { list.join(", ") }
+    if list.is_empty() {
+        "none".to_string()
+    } else {
+        list.join(", ")
+    }
 }
 
 fn listen_addr(endpoint: &str, fallback: &str) -> GatewayResult<SocketAddr> {
     let mut addr = endpoint.trim();
-    if let Some(stripped) = addr.strip_prefix("http://").or_else(|| addr.strip_prefix("https://")) {
+    if let Some(stripped) = addr
+        .strip_prefix("http://")
+        .or_else(|| addr.strip_prefix("https://"))
+    {
         addr = stripped;
     }
     if let Some((host, _rest)) = addr.split_once('/') {
@@ -51,8 +64,7 @@ fn describe_key_sets(keys: &[&[&str]]) -> String {
     if keys.is_empty() {
         "none".to_string()
     } else {
-        keys
-            .iter()
+        keys.iter()
             .map(|set| set.join(" "))
             .collect::<Vec<_>>()
             .join(" | ")
@@ -112,9 +124,8 @@ pub const ENTITY_CONFIGS: &[EntityConfigInfo] = &[
     },
 ];
 
-
 pub mod federation_example {
-    include!("./federation_example.rs");
+    include!("../../src/generated/federation_example.rs");
 }
 
 use federation_example::product_service_server::{ProductService, ProductServiceServer};
@@ -289,21 +300,34 @@ impl Default for ServiceImpl {
 
 #[tonic::async_trait]
 impl ProductService for ServiceImpl {
-    async fn get_product(&self, request: Request<federation_example::GetProductRequest>) -> ServiceResult<Response<federation_example::GetProductResponse>> {
+    async fn get_product(
+        &self,
+        request: Request<federation_example::GetProductRequest>,
+    ) -> ServiceResult<Response<federation_example::GetProductResponse>> {
         let upc = request.into_inner().upc;
         let product = self.data.products.get(&upc).cloned();
-        Ok(Response::new(federation_example::GetProductResponse { product }))
+        Ok(Response::new(federation_example::GetProductResponse {
+            product,
+        }))
     }
 }
 
 #[tonic::async_trait]
 impl ReviewService for ServiceImpl {
-    async fn get_review(&self, request: Request<federation_example::GetReviewRequest>) -> ServiceResult<Response<federation_example::GetReviewResponse>> {
+    async fn get_review(
+        &self,
+        request: Request<federation_example::GetReviewRequest>,
+    ) -> ServiceResult<Response<federation_example::GetReviewResponse>> {
         let id = request.into_inner().id;
         let review = self.data.reviews.get(&id).cloned();
-        Ok(Response::new(federation_example::GetReviewResponse { review }))
+        Ok(Response::new(federation_example::GetReviewResponse {
+            review,
+        }))
     }
-    async fn get_user_reviews(&self, request: Request<federation_example::GetUserReviewsRequest>) -> ServiceResult<Response<federation_example::GetUserReviewsResponse>> {
+    async fn get_user_reviews(
+        &self,
+        request: Request<federation_example::GetUserReviewsRequest>,
+    ) -> ServiceResult<Response<federation_example::GetUserReviewsResponse>> {
         let user_id = request.into_inner().user_id;
         let reviews = self
             .data
@@ -319,13 +343,18 @@ impl ReviewService for ServiceImpl {
             .cloned()
             .collect();
 
-        Ok(Response::new(federation_example::GetUserReviewsResponse { reviews }))
+        Ok(Response::new(federation_example::GetUserReviewsResponse {
+            reviews,
+        }))
     }
 }
 
 #[tonic::async_trait]
 impl UserService for ServiceImpl {
-    async fn get_user(&self, request: Request<federation_example::GetUserRequest>) -> ServiceResult<Response<federation_example::GetUserResponse>> {
+    async fn get_user(
+        &self,
+        request: Request<federation_example::GetUserRequest>,
+    ) -> ServiceResult<Response<federation_example::GetUserResponse>> {
         let id = request.into_inner().id;
         let user = self.data.users.get(&id).cloned();
         Ok(Response::new(federation_example::GetUserResponse { user }))
@@ -337,7 +366,10 @@ pub async fn run_services() -> GatewayResult<()> {
     {
         let addr: SocketAddr = listen_addr("localhost:50052", DEFAULT_GRPC_ADDR)?;
         let service = ServiceImpl::default();
-        tracing::info!("gRPC service federation_example.ProductService listening on {}", addr);
+        tracing::info!(
+            "gRPC service federation_example.ProductService listening on {}",
+            addr
+        );
         let handle = tokio::spawn(async move {
             Server::builder()
                 .add_service(ProductServiceServer::new(service.clone()))
@@ -350,7 +382,10 @@ pub async fn run_services() -> GatewayResult<()> {
     {
         let addr: SocketAddr = listen_addr("localhost:50053", DEFAULT_GRPC_ADDR)?;
         let service = ServiceImpl::default();
-        tracing::info!("gRPC service federation_example.ReviewService listening on {}", addr);
+        tracing::info!(
+            "gRPC service federation_example.ReviewService listening on {}",
+            addr
+        );
         let handle = tokio::spawn(async move {
             Server::builder()
                 .add_service(ReviewServiceServer::new(service.clone()))
@@ -363,7 +398,10 @@ pub async fn run_services() -> GatewayResult<()> {
     {
         let addr: SocketAddr = listen_addr("localhost:50051", DEFAULT_GRPC_ADDR)?;
         let service = ServiceImpl::default();
-        tracing::info!("gRPC service federation_example.UserService listening on {}", addr);
+        tracing::info!(
+            "gRPC service federation_example.UserService listening on {}",
+            addr
+        );
         let handle = tokio::spawn(async move {
             Server::builder()
                 .add_service(UserServiceServer::new(service.clone()))
@@ -389,11 +427,13 @@ pub async fn run_services() -> GatewayResult<()> {
 
 pub fn gateway_builder() -> GatewayResult<GatewayBuilder> {
     // The descriptor set is produced by your build.rs using tonic-build.
-    let mut builder = Gateway::builder()
-        .with_descriptor_set_bytes(DESCRIPTOR_SET);
+    let mut builder = Gateway::builder().with_descriptor_set_bytes(DESCRIPTOR_SET);
 
     if FEDERATION_ENABLED {
-        tracing::info!("Federation enabled (entities: {entities})", entities = describe_entities());
+        tracing::info!(
+            "Federation enabled (entities: {entities})",
+            entities = describe_entities()
+        );
         builder = builder
             .enable_federation()
             .with_entity_resolver(default_entity_resolver());
@@ -425,8 +465,7 @@ pub fn gateway_builder() -> GatewayResult<GatewayBuilder> {
 }
 
 pub fn gateway_builder_for_service(svc: &ServiceConfig) -> GatewayResult<GatewayBuilder> {
-    let mut builder = Gateway::builder()
-        .with_descriptor_set_bytes(DESCRIPTOR_SET);
+    let mut builder = Gateway::builder().with_descriptor_set_bytes(DESCRIPTOR_SET);
 
     tracing::info!(
         "{svc} -> {endpoint} (queries: {queries}; mutations: {mutations}; subscriptions: {subscriptions}; resolvers: {resolvers})",
@@ -466,21 +505,39 @@ pub fn gateway_builder_for(name: &str) -> GatewayResult<Option<GatewayBuilder>> 
 }
 
 pub async fn run_federation_example_productservice_gateway() -> GatewayResult<()> {
-    gateway_builder_for_service(&services::FEDERATION_EXAMPLE_PRODUCTSERVICE)?
-        .serve("0.0.0.0:9000")
+    let gateway =
+        gateway_builder_for_service(&services::FEDERATION_EXAMPLE_PRODUCTSERVICE)?.build()?;
+    let app = gateway.into_router();
+    let listener = TcpListener::bind("0.0.0.0:9000")
         .await
+        .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))?;
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))
 }
 
 pub async fn run_federation_example_reviewservice_gateway() -> GatewayResult<()> {
-    gateway_builder_for_service(&services::FEDERATION_EXAMPLE_REVIEWSERVICE)?
-        .serve("0.0.0.0:9001")
+    let gateway =
+        gateway_builder_for_service(&services::FEDERATION_EXAMPLE_REVIEWSERVICE)?.build()?;
+    let app = gateway.into_router();
+    let listener = TcpListener::bind("0.0.0.0:9001")
         .await
+        .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))?;
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))
 }
 
 pub async fn run_federation_example_userservice_gateway() -> GatewayResult<()> {
-    gateway_builder_for_service(&services::FEDERATION_EXAMPLE_USERSERVICE)?
-        .serve("0.0.0.0:9002")
+    let gateway =
+        gateway_builder_for_service(&services::FEDERATION_EXAMPLE_USERSERVICE)?.build()?;
+    let app = gateway.into_router();
+    let listener = TcpListener::bind("0.0.0.0:9002")
         .await
+        .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))?;
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))
 }
 
 #[tokio::main]
@@ -499,7 +556,10 @@ async fn main() -> GatewayResult<()> {
     );
 
     if FEDERATION_ENABLED {
-        tracing::info!("Federation entities -> {entities}", entities = describe_entities());
+        tracing::info!(
+            "Federation entities -> {entities}",
+            entities = describe_entities()
+        );
     }
 
     // NOTE: Resolver entries are listed above; the runtime currently warns that they are not implemented.

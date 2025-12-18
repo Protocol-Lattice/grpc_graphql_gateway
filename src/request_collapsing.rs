@@ -36,10 +36,10 @@
 //! ```
 
 use async_graphql::Value as GqlValue;
+use parking_lot::RwLock; // SECURITY: Non-poisoning locks
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;  // SECURITY: Non-poisoning locks
 use std::time::{Duration, Instant};
 use tokio::sync::{watch, Mutex as TokioMutex};
 
@@ -222,7 +222,7 @@ impl RequestReceiver {
             if let Some(result) = &*self.receiver.borrow() {
                 return (**result).clone();
             }
-            
+
             // Wait for update
             if self.receiver.changed().await.is_err() {
                 return Err("Request leader dropped without sending result".to_string());
@@ -333,7 +333,10 @@ impl RequestCollapsingRegistry {
     }
 
     /// Evict stale entries from the in-flight cache.
-    fn evict_stale_entries(&self, in_flight: &mut HashMap<RequestKey, Arc<TokioMutex<InFlightRequest>>>) {
+    fn evict_stale_entries(
+        &self,
+        in_flight: &mut HashMap<RequestKey, Arc<TokioMutex<InFlightRequest>>>,
+    ) {
         let stale_threshold = self.config.coalesce_window * 10;
         let now = Instant::now();
 
@@ -370,7 +373,9 @@ impl RequestCollapsingRegistry {
 pub type SharedRequestCollapsingRegistry = Arc<RequestCollapsingRegistry>;
 
 /// Create a shared request collapsing registry.
-pub fn create_request_collapsing_registry(config: RequestCollapsingConfig) -> SharedRequestCollapsingRegistry {
+pub fn create_request_collapsing_registry(
+    config: RequestCollapsingConfig,
+) -> SharedRequestCollapsingRegistry {
     Arc::new(RequestCollapsingRegistry::new(config))
 }
 
@@ -606,8 +611,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_expired_requests_create_new_leader() {
-        let config = RequestCollapsingConfig::new()
-            .coalesce_window(Duration::from_millis(10));
+        let config = RequestCollapsingConfig::new().coalesce_window(Duration::from_millis(10));
         let registry = Arc::new(RequestCollapsingRegistry::new(config));
 
         let key = RequestKey::new("service", "/path", b"request");
@@ -670,19 +674,19 @@ mod proptest_checks {
                 let config = RequestCollapsingConfig::new()
                     .coalesce_window(Duration::from_millis(20)); // Short window
                 let registry = Arc::new(RequestCollapsingRegistry::new(config));
-                
+
                 let mut handles = vec![];
-                
+
                 for (suffix, delay_ms) in requests {
                     let registry = registry.clone();
                     let key = RequestKey::new("svc", &format!("path_{}", suffix), b"data");
-                    
+
                     // Simulate random arrival
                     // We can't await sleep here easily without delaying loop.
                     // But we can spawn and sleep inside.
                     handles.push(tokio::spawn(async move {
                         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                        
+
                         match registry.try_collapse(key).await {
                            CollapseResult::Leader(broadcaster) => {
                                // Simulate execution work
@@ -699,7 +703,7 @@ mod proptest_checks {
                         }
                     }));
                 }
-                
+
                 for h in handles {
                      let _ = h.await;
                 }

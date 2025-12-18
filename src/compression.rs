@@ -151,7 +151,12 @@ impl Default for CompressionConfig {
             enabled: true,
             level: CompressionLevel::Default,
             min_size_bytes: 1024,
-            algorithms: vec!["gbp-lz4".into(), "br".into(), "gzip".into(), "deflate".into()],
+            algorithms: vec![
+                "gbp-lz4".into(),
+                "br".into(),
+                "gzip".into(),
+                "deflate".into(),
+            ],
         }
     }
 }
@@ -271,7 +276,7 @@ impl CompressionConfig {
         Self {
             enabled: true,
             level: CompressionLevel::Fast,
-            min_size_bytes: 128,  // Even smaller threshold for GBP
+            min_size_bytes: 128, // Even smaller threshold for GBP
             algorithms: vec!["gbp-lz4".into(), "lz4".into()],
         }
     }

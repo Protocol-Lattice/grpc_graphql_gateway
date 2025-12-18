@@ -1,8 +1,8 @@
-use serde_json::{Value, Map};
-use lz4::EncoderBuilder;
-use std::io::{Read, Write, Cursor};
 use ahash::{AHashMap, AHasher};
+use lz4::EncoderBuilder;
+use serde_json::{Map, Value};
 use std::hash::{Hash, Hasher};
+use std::io::{Cursor, Read, Write};
 
 /// GraphQL Binary Protocol (GBP) - ULTRA v8
 #[derive(Default)]
@@ -28,7 +28,7 @@ impl GbpEncoder {
 
         let mut buf = Vec::new();
         buf.extend_from_slice(b"GBP\x08");
-        
+
         write_varint(self.string_pool.len() as u32, &mut buf);
         for s in &self.string_pool {
             let bytes = s.as_bytes();
@@ -65,7 +65,9 @@ impl GbpEncoder {
                 *self.string_frequencies.entry(s.clone()).or_insert(0) += 1;
             }
             Value::Array(arr) => {
-                for v in arr { self.analyze_frequencies(v); }
+                for v in arr {
+                    self.analyze_frequencies(v);
+                }
             }
             Value::Object(obj) => {
                 for (k, v) in obj {
@@ -119,7 +121,9 @@ impl GbpEncoder {
                 } else {
                     buf.push(0x06);
                     write_varint(arr.len() as u32, buf);
-                    for v in arr { self.encode_recursive(v, buf); }
+                    for v in arr {
+                        self.encode_recursive(v, buf);
+                    }
                 }
             }
             Value::Object(obj) => {
@@ -127,16 +131,19 @@ impl GbpEncoder {
                 keys.sort_unstable();
                 let key_indices: Vec<u32> = keys.iter().map(|k| self.get_string_idx(k)).collect();
                 let shape_id = self.get_shape_id(key_indices);
-                
+
                 buf.push(0x07);
                 write_varint(shape_id, buf);
-                for k in keys { self.encode_recursive(&obj[k], buf); }
+                for k in keys {
+                    self.encode_recursive(&obj[k], buf);
+                }
             }
         }
 
         // Add to value_map AFTER encoding children (Post-Order)
-        if (value.is_object() && value.as_object().unwrap().len() > 1) || 
-           (value.is_array() && value.as_array().unwrap().len() > 1) {
+        if (value.is_object() && value.as_object().unwrap().len() > 1)
+            || (value.is_array() && value.as_array().unwrap().len() > 1)
+        {
             let hash = hash_json_value(value);
             self.value_map.insert(hash, self.value_counter);
             self.value_counter += 1;
@@ -144,13 +151,19 @@ impl GbpEncoder {
     }
 
     fn try_encode_columnar(&mut self, arr: &[Value], buf: &mut Vec<u8>) -> bool {
-        if arr.len() < 5 { return false; }
+        if arr.len() < 5 {
+            return false;
+        }
         let first = &arr[0];
-        if !first.is_object() { return false; }
+        if !first.is_object() {
+            return false;
+        }
         let mut keys: Vec<&String> = first.as_object().unwrap().keys().collect();
         keys.sort_unstable();
         for item in arr {
-            if !item.is_object() || item.as_object().unwrap().len() != keys.len() { return false; }
+            if !item.is_object() || item.as_object().unwrap().len() != keys.len() {
+                return false;
+            }
         }
         buf.push(0x09);
         write_varint(arr.len() as u32, buf);
@@ -158,13 +171,17 @@ impl GbpEncoder {
         let shape_id = self.get_shape_id(key_indices);
         write_varint(shape_id, buf);
         for &k in &keys {
-            for item in arr { self.encode_recursive(&item[k], buf); }
+            for item in arr {
+                self.encode_recursive(&item[k], buf);
+            }
         }
         true
     }
 
     fn get_string_idx(&mut self, s: &str) -> u32 {
-        if let Some(&idx) = self.string_map.get(s) { idx } else {
+        if let Some(&idx) = self.string_map.get(s) {
+            idx
+        } else {
             let idx = self.string_pool.len() as u32;
             self.string_pool.push(s.to_string());
             self.string_map.insert(s.to_string(), idx);
@@ -173,7 +190,9 @@ impl GbpEncoder {
     }
 
     fn get_shape_id(&mut self, keys: Vec<u32>) -> u32 {
-        if let Some(&id) = self.shape_map.get(&keys) { id } else {
+        if let Some(&id) = self.shape_map.get(&keys) {
+            id
+        } else {
             let id = self.shape_pool.len() as u32;
             self.shape_pool.push(keys.clone());
             self.shape_map.insert(keys, id);
@@ -186,6 +205,12 @@ pub struct GbpDecoder {
     string_pool: Vec<String>,
     shape_pool: Vec<Vec<u32>>,
     value_pool: Vec<Value>,
+}
+
+impl Default for GbpDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GbpDecoder {
@@ -210,7 +235,8 @@ impl GbpDecoder {
             let len = read_varint(&mut cursor)?;
             let mut buf = vec![0u8; len as usize];
             cursor.read_exact(&mut buf).map_err(|e| e.to_string())?;
-            self.string_pool.push(String::from_utf8(buf).map_err(|e| e.to_string())?);
+            self.string_pool
+                .push(String::from_utf8(buf).map_err(|e| e.to_string())?);
         }
 
         let shape_pool_len = read_varint(&mut cursor)?;
@@ -229,17 +255,23 @@ impl GbpDecoder {
     pub fn decode_lz4(&mut self, data: &[u8]) -> Result<Value, String> {
         let mut decoder = lz4::Decoder::new(data).map_err(|e| e.to_string())?;
         let mut decoded = Vec::new();
-        decoder.read_to_end(&mut decoded).map_err(|e| e.to_string())?;
+        decoder
+            .read_to_end(&mut decoded)
+            .map_err(|e| e.to_string())?;
         self.decode(&decoded)
     }
 
     fn decode_recursive(&mut self, cursor: &mut Cursor<&[u8]>) -> Result<Value, String> {
         let mut tag = [0u8; 1];
         cursor.read_exact(&mut tag).map_err(|e| e.to_string())?;
-        
+
         if tag[0] == 0x08 {
             let idx = read_varint(cursor)?;
-            return self.value_pool.get(idx as usize).cloned().ok_or("Invalid value reference".to_string());
+            return self
+                .value_pool
+                .get(idx as usize)
+                .cloned()
+                .ok_or("Invalid value reference".to_string());
         }
 
         let value = match tag[0] {
@@ -257,7 +289,12 @@ impl GbpDecoder {
             }
             0x05 => {
                 let idx = read_varint(cursor)?;
-                Value::String(self.string_pool.get(idx as usize).cloned().ok_or("Invalid string index")?)
+                Value::String(
+                    self.string_pool
+                        .get(idx as usize)
+                        .cloned()
+                        .ok_or("Invalid string index")?,
+                )
             }
             0x06 => {
                 let len = read_varint(cursor)?;
@@ -269,10 +306,18 @@ impl GbpDecoder {
             }
             0x07 => {
                 let shape_id = read_varint(cursor)?;
-                let shape = self.shape_pool.get(shape_id as usize).ok_or("Invalid shape id")?.clone();
+                let shape = self
+                    .shape_pool
+                    .get(shape_id as usize)
+                    .ok_or("Invalid shape id")?
+                    .clone();
                 let mut obj = Map::new();
                 for key_idx in shape {
-                    let key = self.string_pool.get(key_idx as usize).ok_or("Invalid key index")?.clone();
+                    let key = self
+                        .string_pool
+                        .get(key_idx as usize)
+                        .ok_or("Invalid key index")?
+                        .clone();
                     let val = self.decode_recursive(cursor)?;
                     obj.insert(key, val);
                 }
@@ -281,10 +326,18 @@ impl GbpDecoder {
             0x09 => {
                 let len = read_varint(cursor)?;
                 let shape_id = read_varint(cursor)?;
-                let shape = self.shape_pool.get(shape_id as usize).ok_or("Invalid shape id")?.clone();
+                let shape = self
+                    .shape_pool
+                    .get(shape_id as usize)
+                    .ok_or("Invalid shape id")?
+                    .clone();
                 let mut arr = vec![Map::new(); len as usize];
                 for key_idx in shape {
-                    let key = self.string_pool.get(key_idx as usize).ok_or("Invalid key index")?.clone();
+                    let key = self
+                        .string_pool
+                        .get(key_idx as usize)
+                        .ok_or("Invalid key index")?
+                        .clone();
                     for i in 0..len {
                         let val = self.decode_recursive(cursor)?;
                         arr[i as usize].insert(key.clone(), val);
@@ -302,8 +355,9 @@ impl GbpDecoder {
         };
 
         // Sync with encoder's value_map logic: only pool complex structures
-        if (value.is_object() && value.as_object().unwrap().len() > 1) || 
-           (value.is_array() && value.as_array().unwrap().len() > 1) {
+        if (value.is_object() && value.as_object().unwrap().len() > 1)
+            || (value.is_array() && value.as_array().unwrap().len() > 1)
+        {
             self.value_pool.push(value.clone());
         }
 
@@ -313,14 +367,18 @@ impl GbpDecoder {
 
 fn write_varint(n: u32, buf: &mut Vec<u8>) {
     let mut val = n;
-    while val >= 0x80 { buf.push((val & 0x7F) as u8 | 0x80); val >>= 7; }
+    while val >= 0x80 {
+        buf.push((val & 0x7F) as u8 | 0x80);
+        val >>= 7;
+    }
     buf.push(val as u8);
 }
 
 fn read_varint(cursor: &mut Cursor<&[u8]>) -> Result<u32, String> {
     let mut res = 0u32;
     let mut shift = 0;
-    for _ in 0..5 { // Max 5 bytes for u32
+    for _ in 0..5 {
+        // Max 5 bytes for u32
         let mut b = [0u8; 1];
         cursor.read_exact(&mut b).map_err(|e| e.to_string())?;
         res |= ((b[0] & 0x7F) as u32) << shift;
@@ -335,14 +393,18 @@ fn read_varint(cursor: &mut Cursor<&[u8]>) -> Result<u32, String> {
 fn write_varint_i64(n: i64, buf: &mut Vec<u8>) {
     let val = ((n << 1) ^ (n >> 63)) as u64;
     let mut val = val;
-    while val >= 0x80 { buf.push((val & 0x7F) as u8 | 0x80); val >>= 7; }
+    while val >= 0x80 {
+        buf.push((val & 0x7F) as u8 | 0x80);
+        val >>= 7;
+    }
     buf.push(val as u8);
 }
 
 fn read_varint_i64(cursor: &mut Cursor<&[u8]>) -> Result<i64, String> {
     let mut val = 0u64;
     let mut shift = 0;
-    for _ in 0..10 { // Max 10 bytes for u64
+    for _ in 0..10 {
+        // Max 10 bytes for u64
         let mut b = [0u8; 1];
         cursor.read_exact(&mut b).map_err(|e| e.to_string())?;
         val |= ((b[0] & 0x7F) as u64) << shift;
@@ -413,10 +475,10 @@ mod tests {
 
         let mut encoder = GbpEncoder::new();
         let encoded = encoder.encode(&original);
-        
+
         let mut decoder = GbpDecoder::new();
         let decoded = decoder.decode(&encoded).unwrap();
-        
+
         assert_eq!(original, decoded);
     }
 
@@ -439,9 +501,9 @@ mod tests {
                     "profile": {
                         "verified": true,
                         "tier": "GOLD",
-                        "metadata": { 
-                            "region": "EU", 
-                            "shard": 7, 
+                        "metadata": {
+                            "region": "EU",
+                            "shard": 7,
                             "cluster": "alpha-1",
                             "tags": ["premium", "early-adopter", "verified"]
                         }
@@ -453,20 +515,20 @@ mod tests {
 
         let json_bytes = serde_json::to_vec(&data).unwrap();
         let encoded = encoder.encode_lz4(&data).unwrap();
-        
+
         let ratio = encoded.len() as f64 / json_bytes.len() as f64;
         let reduction = (1.0 - ratio) * 100.0;
-        
+
         println!("\n--- GBP Ultra Miracle Test ---");
         println!("JSON size:       {} bytes", json_bytes.len());
         println!("GBP Ultra size:  {} bytes", encoded.len());
         println!("Reduction:       {:.2}%", reduction);
-        
+
         // Data Integrity Check for large payload
         let mut decoder = GbpDecoder::new();
         let decoded = decoder.decode_lz4(&encoded).unwrap();
         assert_eq!(data, decoded);
-        
+
         assert!(reduction >= 99.0, "Reduction was only {:.2}%", reduction);
     }
 
@@ -492,7 +554,10 @@ mod tests {
         });
 
         let json_bytes = serde_json::to_vec(&data).unwrap();
-        println!("\n--- GBP Typical Payload Test ({} bytes) ---", json_bytes.len());
+        println!(
+            "\n--- GBP Typical Payload Test ({} bytes) ---",
+            json_bytes.len()
+        );
 
         let start = std::time::Instant::now();
         let encoded = encoder.encode_lz4(&data).unwrap();
@@ -500,15 +565,19 @@ mod tests {
 
         println!("Encoding Time:   {:.3}ms", duration.as_secs_f64() * 1000.0);
         println!("Size:            {} bytes", encoded.len());
-        
+
         // Assert speed < 20ms (relaxed for debug/CI)
-        assert!(duration.as_millis() <= 20, "Encoding took too long: {:.3}ms", duration.as_secs_f64() * 1000.0);
+        assert!(
+            duration.as_millis() <= 20,
+            "Encoding took too long: {:.3}ms",
+            duration.as_secs_f64() * 1000.0
+        );
     }
 
     #[test]
     fn test_gbp_ultra_100mb_behemoth() {
         let mut encoder = GbpEncoder::new();
-        
+
         // Generate ~100MB of JSON data (200,000 users)
         println!("\nGenerating 100MB Behemoth payload...");
         let data = json!({
@@ -527,9 +596,9 @@ mod tests {
                     "profile": {
                         "verified": true,
                         "tier": "GOLD",
-                        "metadata": { 
-                            "region": "EU", 
-                            "shard": 7, 
+                        "metadata": {
+                            "region": "EU",
+                            "shard": 7,
                             "cluster": "alpha-1",
                             "tags": ["premium", "early-adopter", "verified"]
                         }
@@ -544,23 +613,29 @@ mod tests {
         let start = std::time::Instant::now();
         let encoded = encoder.encode_lz4(&data).unwrap();
         let duration = start.elapsed();
-        
+
         let ratio = encoded.len() as f64 / json_bytes.len() as f64;
         let reduction = (1.0 - ratio) * 100.0;
-        
+
         println!("\n--- GBP Ultra Behemoth Test (100MB+) ---");
         println!("Original JSON size:  {:>12} bytes", json_bytes.len());
         println!("GBP Ultra size:      {:>12} bytes", encoded.len());
         println!("Reduction Rate:      {:>12.2}%", reduction);
-        println!("Encoding Time:       {:>12.2}ms", duration.as_secs_f64() * 1000.0);
-        println!("Throughput:          {:>12.2} MB/s", (json_bytes.len() as f64 / 1024.0 / 1024.0) / duration.as_secs_f64());
-        
+        println!(
+            "Encoding Time:       {:>12.2}ms",
+            duration.as_secs_f64() * 1000.0
+        );
+        println!(
+            "Throughput:          {:>12.2} MB/s",
+            (json_bytes.len() as f64 / 1024.0 / 1024.0) / duration.as_secs_f64()
+        );
+
         // Data Integrity Check
         println!("Verifying data integrity for Behemoth...");
         let mut decoder = GbpDecoder::new();
         let decoded = decoder.decode_lz4(&encoded).unwrap();
         assert_eq!(data, decoded);
-        
+
         assert!(reduction >= 99.0, "Reduction was only {:.2}%", reduction);
     }
 }

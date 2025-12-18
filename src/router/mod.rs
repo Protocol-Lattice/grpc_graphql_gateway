@@ -70,9 +70,9 @@ pub struct DdosConfig {
 impl Default for DdosConfig {
     fn default() -> Self {
         Self {
-            global_rps: 10_000,  // 10k global RPS
-            per_ip_rps: 100,     // 100 per-IP RPS
-            per_ip_burst: 200,   // Allow burst of 200
+            global_rps: 10_000, // 10k global RPS
+            per_ip_rps: 100,    // 100 per-IP RPS
+            per_ip_burst: 200,  // Allow burst of 200
         }
     }
 }
@@ -118,10 +118,29 @@ impl DdosConfig {
 #[derive(Clone)]
 pub struct DdosProtection {
     /// Global rate limiter (prevents total system overload)
-    global_limiter: Arc<RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+    global_limiter: Arc<
+        RateLimiter<
+            governor::state::NotKeyed,
+            governor::state::InMemoryState,
+            governor::clock::DefaultClock,
+        >,
+    >,
     /// Per-IP rate limiters (prevents single-source attacks)
     /// Uses RwLock for async-safe, lock-free reads
-    ip_limiters: Arc<RwLock<HashMap<IpAddr, Arc<RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>>>>,
+    ip_limiters: Arc<
+        RwLock<
+            HashMap<
+                IpAddr,
+                Arc<
+                    RateLimiter<
+                        governor::state::NotKeyed,
+                        governor::state::InMemoryState,
+                        governor::clock::DefaultClock,
+                    >,
+                >,
+            >,
+        >,
+    >,
     /// Configuration
     config: DdosConfig,
 }
@@ -164,7 +183,7 @@ impl DdosProtection {
                 let quota = Quota::per_second(NonZeroU32::new(self.config.per_ip_rps).unwrap())
                     .allow_burst(NonZeroU32::new(self.config.per_ip_burst).unwrap());
                 let new_limiter = Arc::new(RateLimiter::direct(quota));
-                
+
                 let mut limiters = self.ip_limiters.write().await;
                 limiters.insert(ip, new_limiter.clone());
                 new_limiter
@@ -186,7 +205,7 @@ impl DdosProtection {
 
     /// Clean up stale IP limiters (call periodically)
     pub async fn cleanup_stale_limiters(&self) {
-        let mut limiters = self.ip_limiters.write().await;
+        let limiters = self.ip_limiters.write().await;
         let before = limiters.len();
         // In production, you'd track last access time and remove old entries
         // For now, we just log the count
@@ -271,14 +290,17 @@ impl GbpRouter {
                 );
             }
 
-            clients.insert(subgraph.name.clone(), builder.build().expect("invalid connector config"));
+            clients.insert(
+                subgraph.name.clone(),
+                builder.build().expect("invalid connector config"),
+            );
         }
 
         Self {
             config,
             clients,
             cache: Arc::new(ShardedCache::<Bytes>::new(128, 10_000)), // 128 shards, 10K entries per shard
-            json_parser: Arc::new(FastJsonParser::new(64)), // 64 buffer pool
+            json_parser: Arc::new(FastJsonParser::new(64)),           // 64 buffer pool
             request_count: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
             cache_ttl,
@@ -315,18 +337,20 @@ impl GbpRouter {
                 "⚡ Cache HIT"
             );
             // Parse cached bytes back to JSON (cached is Bytes)
-            return self.json_parser.parse_bytes(&cached)
+            return self
+                .json_parser
+                .parse_bytes(&cached)
                 .map_err(|e| crate::Error::Internal(format!("Cache parse error: {}", e)));
         }
 
         // 2. SCATTER: Fire requests using FuturesUnordered for true parallelism
         let mut futures = FuturesUnordered::new();
-        
+
         for (name, client) in &self.clients {
             let name = name.clone();
             let client = client.clone();
             let force_gbp = self.config.force_gbp;
-            
+
             futures.push(async move {
                 let mut args = HashMap::with_capacity(1);
                 args.insert("query".to_string(), serde_json::json!(query));
@@ -342,7 +366,7 @@ impl GbpRouter {
         // 3. GATHER: Stream results as they complete (first-to-finish ordering)
         let mut results = HashMap::with_capacity(self.clients.len());
         let mut errors = Vec::new();
-        
+
         while let Some((name, res, duration, force_gbp)) = futures.next().await {
             match res {
                 Ok(val) => {
@@ -371,7 +395,8 @@ impl GbpRouter {
         // 5. CACHE STORE: Store for future requests
         if errors.is_empty() {
             if let Ok(bytes) = serde_json::to_vec(&response) {
-                self.cache.insert(&cache_key, Bytes::from(bytes), self.cache_ttl);
+                self.cache
+                    .insert(&cache_key, Bytes::from(bytes), self.cache_ttl);
             }
         }
 
@@ -390,21 +415,23 @@ impl GbpRouter {
     /// Execute with early return on first error (fail-fast mode)
     pub async fn execute_fail_fast(&self, query: &str) -> Result<JsonValue> {
         self.request_count.fetch_add(1, Ordering::Relaxed);
-        
+
         // Cache check
         let cache_key = self.compute_cache_key(query);
         if let Some(cached) = self.cache.get(&cache_key) {
             self.cache_hits.fetch_add(1, Ordering::Relaxed);
-            return self.json_parser.parse_bytes(&cached[..])
+            return self
+                .json_parser
+                .parse_bytes(&cached[..])
                 .map_err(|e| crate::Error::Internal(format!("Cache parse error: {}", e)));
         }
 
         let mut futures = FuturesUnordered::new();
-        
+
         for (name, client) in &self.clients {
             let name = name.clone();
             let client = client.clone();
-            
+
             futures.push(async move {
                 let mut args = HashMap::with_capacity(1);
                 args.insert("query".to_string(), serde_json::json!(query));
@@ -413,20 +440,26 @@ impl GbpRouter {
         }
 
         let mut results = HashMap::with_capacity(self.clients.len());
-        
+
         while let Some((name, res)) = futures.next().await {
             match res {
-                Ok(val) => { results.insert(name, val); }
+                Ok(val) => {
+                    results.insert(name, val);
+                }
                 Err(e) => {
                     // Fail fast: return error immediately
-                    return Err(crate::Error::Internal(format!("Subgraph {} failed: {}", name, e)));
+                    return Err(crate::Error::Internal(format!(
+                        "Subgraph {} failed: {}",
+                        name, e
+                    )));
                 }
             }
         }
 
         let response = serde_json::to_value(&results).unwrap();
         if let Ok(bytes) = serde_json::to_vec(&response) {
-            self.cache.insert(&cache_key, Bytes::from(bytes), self.cache_ttl);
+            self.cache
+                .insert(&cache_key, Bytes::from(bytes), self.cache_ttl);
         }
 
         Ok(response)
@@ -460,7 +493,11 @@ impl GbpRouter {
         RouterStats {
             total_requests: total,
             cache_hits: hits,
-            cache_hit_rate: if total > 0 { hits as f64 / total as f64 } else { 0.0 },
+            cache_hit_rate: if total > 0 {
+                hits as f64 / total as f64
+            } else {
+                0.0
+            },
             subgraph_count: self.clients.len(),
             gbp_enabled: self.config.force_gbp,
         }
@@ -506,9 +543,10 @@ mod tests {
     fn test_router_config() {
         let config = RouterConfig {
             port: 4000,
-            subgraphs: vec![
-                SubgraphConfig { name: "users".into(), url: "http://localhost:4002".into() },
-            ],
+            subgraphs: vec![SubgraphConfig {
+                name: "users".into(),
+                url: "http://localhost:4002".into(),
+            }],
             force_gbp: true,
         };
         assert_eq!(config.subgraphs.len(), 1);
@@ -546,7 +584,11 @@ mod tests {
         }
 
         // Should have allowed ~20 (burst) and blocked some
-        assert!(allowed >= 15 && allowed <= 22, "Expected ~20 allowed, got {}", allowed);
+        assert!(
+            allowed >= 15 && allowed <= 22,
+            "Expected ~20 allowed, got {}",
+            allowed
+        );
     }
 
     #[tokio::test]
@@ -557,7 +599,7 @@ mod tests {
             per_ip_burst: 10,
         };
         let ddos = DdosProtection::new(config);
-        
+
         let ip1: IpAddr = "1.1.1.1".parse().unwrap();
         let ip2: IpAddr = "2.2.2.2".parse().unwrap();
 
@@ -567,6 +609,9 @@ mod tests {
         }
 
         // IP2 should still be able to make requests
-        assert!(ddos.check(ip2).await, "IP2 should not be affected by IP1's usage");
+        assert!(
+            ddos.check(ip2).await,
+            "IP2 should not be affected by IP1's usage"
+        );
     }
 }

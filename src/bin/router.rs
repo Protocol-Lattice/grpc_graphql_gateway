@@ -26,7 +26,6 @@ use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tower_http::compression::CompressionLayer;
 
-
 #[derive(Debug, Deserialize)]
 struct GraphQlQuery {
     query: String,
@@ -40,8 +39,27 @@ struct GraphQlQuery {
 /// DDoS Protection with lock-free fast path
 #[derive(Clone)]
 pub struct DdosProtection {
-    global_limiter: Arc<RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
-    ip_limiters: Arc<RwLock<HashMap<IpAddr, Arc<RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>>>>,
+    global_limiter: Arc<
+        RateLimiter<
+            governor::state::NotKeyed,
+            governor::state::InMemoryState,
+            governor::clock::DefaultClock,
+        >,
+    >,
+    ip_limiters: Arc<
+        RwLock<
+            HashMap<
+                IpAddr,
+                Arc<
+                    RateLimiter<
+                        governor::state::NotKeyed,
+                        governor::state::InMemoryState,
+                        governor::clock::DefaultClock,
+                    >,
+                >,
+            >,
+        >,
+    >,
     per_ip_rps: u32,
     per_ip_burst: u32,
 }
@@ -109,7 +127,8 @@ impl AppState {
 
     async fn get_encoder(&self) -> grpc_graphql_gateway::gbp::GbpEncoder {
         let mut pool = self.encoder_pool.write().await;
-        pool.pop().unwrap_or_else(grpc_graphql_gateway::gbp::GbpEncoder::new)
+        pool.pop()
+            .unwrap_or_else(grpc_graphql_gateway::gbp::GbpEncoder::new)
     }
 
     async fn return_encoder(&self, encoder: grpc_graphql_gateway::gbp::GbpEncoder) {
@@ -140,6 +159,10 @@ async fn main() {
                 name: "products".to_string(),
                 url: "http://localhost:4003/graphql".to_string(),
             },
+            SubgraphConfig {
+                name: "reviews".to_string(),
+                url: "http://localhost:4004/graphql".to_string(),
+            },
         ],
         force_gbp: true,
     };
@@ -160,27 +183,32 @@ async fn main() {
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", config.port);
-    
-    println!("");
+
+    println!();
     println!("  ╔═══════════════════════════════════════════════════════════╗");
     println!("  ║                     Router                                ║");
     println!("  ╠═══════════════════════════════════════════════════════════╣");
-    println!("  ║  Listening:     http://{}                       ║", addr);
+    println!(
+        "  ║  Listening:     http://{}                       ║",
+        addr
+    );
     println!("  ║  Subgraphs:     2 (users, products)                       ║");
     println!("  ║  GBP Enabled:   ✅ (99% compression)                      ║");
     println!("  ║  DDoS Shield:   100k global RPS, 1k per-IP                ║");
     println!("  ║  Allocator:     mimalloc                                  ║");
     println!("  ║  Workers:       16 threads                                ║");
     println!("  ╚═══════════════════════════════════════════════════════════╝");
-    println!("");
+    println!();
 
     let listener = TcpListener::bind(&addr).await.unwrap();
-    
+
     // Use hyper's high-performance server configuration
     axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<SocketAddr>()
-    ).await.unwrap();
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 #[inline(always)]
@@ -221,7 +249,7 @@ async fn graphql_handler(
     match state.router.execute_scatter_gather(&payload.query).await {
         Ok(data) => {
             let duration = start.elapsed();
-            
+
             let response_data = json!({
                 "data": data,
                 "extensions": {
@@ -238,8 +266,9 @@ async fn graphql_handler(
                         state.return_encoder(encoder).await;
                         return (
                             [(axum::http::header::CONTENT_TYPE, "application/x-gbp")],
-                            bytes
-                        ).into_response();
+                            bytes,
+                        )
+                            .into_response();
                     }
                     Err(_) => {
                         state.return_encoder(encoder).await;
@@ -249,11 +278,10 @@ async fn graphql_handler(
 
             Json(response_data).into_response()
         }
-        Err(e) => {
-            Json(json!({
-                "errors": [{"message": e.to_string()}]
-            })).into_response()
-        }
+        Err(e) => Json(json!({
+            "errors": [{"message": e.to_string()}]
+        }))
+        .into_response(),
     }
 }
 

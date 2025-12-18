@@ -179,9 +179,7 @@ pub async fn health_handler() -> HealthResponse {
 /// Returns 200 OK if the server is ready to accept traffic.
 /// This checks that gRPC backends are configured (but doesn't actively ping them
 /// to avoid adding latency to the probe).
-pub async fn readiness_handler(
-    State(state): State<Arc<HealthState>>,
-) -> HealthResponse {
+pub async fn readiness_handler(State(state): State<Arc<HealthState>>) -> HealthResponse {
     let mut response = HealthResponse::healthy();
 
     // Check gRPC client pool
@@ -215,13 +213,11 @@ pub async fn readiness_handler(
 ///
 /// Performs actual connectivity checks to gRPC backends.
 /// This is more expensive but provides accurate health status.
-pub async fn deep_readiness_handler(
-    State(state): State<Arc<HealthState>>,
-) -> HealthResponse {
+pub async fn deep_readiness_handler(State(state): State<Arc<HealthState>>) -> HealthResponse {
     let mut response = HealthResponse::healthy();
 
     let client_names = state.client_pool.names();
-    
+
     if client_names.is_empty() {
         return HealthResponse::degraded("No gRPC clients configured");
     }

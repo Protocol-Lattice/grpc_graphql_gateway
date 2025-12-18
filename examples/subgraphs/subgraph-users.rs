@@ -1,6 +1,5 @@
 use grpc_graphql_gateway::gbp::GbpEncoder;
 use serde_json::json;
-use tokio::net::TcpListener;
 use warp::{Filter, Reply};
 
 #[tokio::main]
@@ -37,11 +36,8 @@ fn handle_request(accept: Option<String>, data: serde_json::Value) -> warp::repl
             let mut encoder = GbpEncoder::new();
             if let Ok(compressed) = encoder.encode_lz4(&data) {
                 // Return GBP
-                return warp::reply::with_header(
-                    compressed,
-                    "content-type",
-                    "application/x-gbp"
-                ).into_response();
+                return warp::reply::with_header(compressed, "content-type", "application/x-gbp")
+                    .into_response();
             }
         }
     }

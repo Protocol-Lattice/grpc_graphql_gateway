@@ -100,7 +100,7 @@ impl TracingConfig {
 }
 
 /// Initialize the OpenTelemetry tracer with the given configuration
-/// 
+///
 /// Returns the TracerProvider which should be kept alive for the duration of the application.
 pub fn init_tracer(config: &TracingConfig) -> TracerProvider {
     let provider = TracerProvider::builder()
@@ -135,8 +135,14 @@ impl GraphQLSpan {
             .with_kind(SpanKind::Server)
             .start(&tracer);
 
-        span.set_attribute(KeyValue::new("graphql.operation.name", operation_name.to_string()));
-        span.set_attribute(KeyValue::new("graphql.operation.type", operation_type.to_string()));
+        span.set_attribute(KeyValue::new(
+            "graphql.operation.name",
+            operation_name.to_string(),
+        ));
+        span.set_attribute(KeyValue::new(
+            "graphql.operation.type",
+            operation_type.to_string(),
+        ));
         span.set_attribute(KeyValue::new("graphql.document", query.to_string()));
 
         Self { span }
@@ -152,13 +158,15 @@ impl GraphQLSpan {
     pub fn error(mut self, message: &str) {
         self.span.set_status(Status::error(message.to_string()));
         self.span.set_attribute(KeyValue::new("error", true));
-        self.span.set_attribute(KeyValue::new("error.message", message.to_string()));
+        self.span
+            .set_attribute(KeyValue::new("error.message", message.to_string()));
         self.span.end();
     }
 
     /// Add a custom attribute
     pub fn set_attribute(&mut self, key: &str, value: impl Into<opentelemetry::Value>) {
-        self.span.set_attribute(KeyValue::new(key.to_string(), value.into()));
+        self.span
+            .set_attribute(KeyValue::new(key.to_string(), value.into()));
     }
 }
 
@@ -186,22 +194,26 @@ impl GrpcSpan {
     /// Record a successful completion
     pub fn ok(mut self) {
         self.span.set_status(Status::Ok);
-        self.span.set_attribute(KeyValue::new("rpc.grpc.status_code", 0i64));
+        self.span
+            .set_attribute(KeyValue::new("rpc.grpc.status_code", 0i64));
         self.span.end();
     }
 
     /// Record an error with gRPC status code
     pub fn error(mut self, code: i32, message: &str) {
         self.span.set_status(Status::error(message.to_string()));
-        self.span.set_attribute(KeyValue::new("rpc.grpc.status_code", code as i64));
+        self.span
+            .set_attribute(KeyValue::new("rpc.grpc.status_code", code as i64));
         self.span.set_attribute(KeyValue::new("error", true));
-        self.span.set_attribute(KeyValue::new("error.message", message.to_string()));
+        self.span
+            .set_attribute(KeyValue::new("error.message", message.to_string()));
         self.span.end();
     }
 
     /// Add a custom attribute
     pub fn set_attribute(&mut self, key: &str, value: impl Into<opentelemetry::Value>) {
-        self.span.set_attribute(KeyValue::new(key.to_string(), value.into()));
+        self.span
+            .set_attribute(KeyValue::new(key.to_string(), value.into()));
     }
 }
 

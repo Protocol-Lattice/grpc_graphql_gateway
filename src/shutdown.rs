@@ -151,10 +151,7 @@ impl ShutdownCoordinator {
     /// 2. Wait for in-flight requests to complete (up to timeout)
     /// 3. Force shutdown if timeout is exceeded
     pub async fn shutdown(&self) {
-        if self
-            .is_shutting_down
-            .swap(true, Ordering::SeqCst)
-        {
+        if self.is_shutting_down.swap(true, Ordering::SeqCst) {
             debug!("Shutdown already in progress");
             return;
         }
@@ -182,8 +179,7 @@ impl ShutdownCoordinator {
             if start.elapsed() >= timeout {
                 warn!(
                     active_count = active,
-                    "Shutdown timeout reached, {} requests still active",
-                    active
+                    "Shutdown timeout reached, {} requests still active", active
                 );
                 break;
             }
@@ -270,10 +266,8 @@ pub async fn signal_shutdown() {
 }
 
 /// Create a combined shutdown signal that triggers on OS signals.
-pub fn os_signal_shutdown() -> impl Future<Output = ()> + Send + 'static {
-    async {
-        signal_shutdown().await;
-    }
+pub async fn os_signal_shutdown() {
+    signal_shutdown().await;
 }
 
 /// Helper to run a server with graceful shutdown.

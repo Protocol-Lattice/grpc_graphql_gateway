@@ -24,8 +24,6 @@
 
 use crate::error::{Error, Result};
 use crate::grpc_client::GrpcClientPool;
-use prost::bytes::Buf;
-use prost_reflect::ReflectMessage;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -37,14 +35,12 @@ use futures::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
+use prost::bytes::Buf;
 use prost::Message as ProstMessage;
+use prost_reflect::ReflectMessage;
 use prost_reflect::{DynamicMessage, MessageDescriptor};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
     sync::{mpsc, RwLock},
     time::timeout,
@@ -186,10 +182,8 @@ impl SubscriptionRegistry {
     }
 
     pub fn add(&mut self, id: String, cancel_tx: mpsc::Sender<()>) {
-        self.subscriptions.insert(
-            id.clone(),
-            ActiveSubscription { id, cancel_tx },
-        );
+        self.subscriptions
+            .insert(id.clone(), ActiveSubscription { id, cancel_tx });
     }
 
     pub fn remove(&mut self, id: &str) -> Option<ActiveSubscription> {
@@ -332,7 +326,11 @@ impl Encoder for ReflectEncoder {
     type Item = DynamicMessage;
     type Error = tonic::Status;
 
-    fn encode(&mut self, item: Self::Item, dst: &mut EncodeBuf<'_>) -> std::result::Result<(), Self::Error> {
+    fn encode(
+        &mut self,
+        item: Self::Item,
+        dst: &mut EncodeBuf<'_>,
+    ) -> std::result::Result<(), Self::Error> {
         item.encode(dst)
             .map_err(|e| tonic::Status::internal(format!("encode error: {e}")))?;
         Ok(())
@@ -347,7 +345,10 @@ impl Decoder for ReflectDecoder {
     type Item = DynamicMessage;
     type Error = tonic::Status;
 
-    fn decode(&mut self, src: &mut DecodeBuf<'_>) -> std::result::Result<Option<Self::Item>, Self::Error> {
+    fn decode(
+        &mut self,
+        src: &mut DecodeBuf<'_>,
+    ) -> std::result::Result<Option<Self::Item>, Self::Error> {
         let buf = src.chunk();
         if buf.is_empty() {
             return Ok(None);
@@ -369,14 +370,16 @@ impl SubscriptionResolver for GrpcSubscriptionResolver {
         mut cancel_rx: mpsc::Receiver<()>,
     ) -> Result<()> {
         let info = self.parse_subscription(&payload.query)?;
-        
+
         let mapping = self
             .subscription_mappings
             .get(&info.field_name)
-            .ok_or_else(|| Error::Schema(format!(
-                "No mapping found for subscription field: {}",
-                info.field_name
-            )))?;
+            .ok_or_else(|| {
+                Error::Schema(format!(
+                    "No mapping found for subscription field: {}",
+                    info.field_name
+                ))
+            })?;
 
         let client = self.client_pool.get(&mapping.service_name).ok_or_else(|| {
             Error::Connection(format!("gRPC client {} not found", mapping.service_name))
@@ -454,9 +457,9 @@ impl SubscriptionResolver for GrpcSubscriptionResolver {
         // Simple parser for subscription queries
         // Expected format: subscription { fieldName(arg1: val1) { ... } }
         // or: subscription Name { fieldName(arg1: val1) { ... } }
-        
+
         let query = query.trim();
-        
+
         // Check if it starts with "subscription"
         if !query.starts_with("subscription") {
             return Err(Error::InvalidRequest(
@@ -470,13 +473,13 @@ impl SubscriptionResolver for GrpcSubscriptionResolver {
         })?;
 
         let body = &query[body_start + 1..];
-        
+
         // Find the field name (first word after the brace)
         let field_part = body.trim_start();
         let field_end = field_part
             .find(|c: char| c == '(' || c == '{' || c.is_whitespace())
             .unwrap_or(field_part.len());
-        
+
         let field_name = field_part[..field_end].trim().to_string();
 
         if field_name.is_empty() || field_name == "}" {
@@ -506,7 +509,7 @@ impl SubscriptionResolver for GrpcSubscriptionResolver {
 /// Parse GraphQL arguments from a string like "name: \"value\", count: 5"
 fn parse_arguments(args_str: &str) -> Result<HashMap<String, serde_json::Value>> {
     let mut arguments = HashMap::new();
-    
+
     if args_str.trim().is_empty() {
         return Ok(arguments);
     }
@@ -521,11 +524,11 @@ fn parse_arguments(args_str: &str) -> Result<HashMap<String, serde_json::Value>>
         if let Some((name, value)) = arg.split_once(':') {
             let name = name.trim().to_string();
             let value = value.trim();
-            
+
             // Parse the value
             let parsed_value = if value.starts_with('"') && value.ends_with('"') {
                 // String value
-                serde_json::Value::String(value[1..value.len()-1].to_string())
+                serde_json::Value::String(value[1..value.len() - 1].to_string())
             } else if value == "true" {
                 serde_json::Value::Bool(true)
             } else if value == "false" {
@@ -540,7 +543,7 @@ fn parse_arguments(args_str: &str) -> Result<HashMap<String, serde_json::Value>>
                 // Treat as string (e.g., enum values)
                 serde_json::Value::String(value.to_string())
             };
-            
+
             arguments.insert(name, parsed_value);
         }
     }
@@ -585,9 +588,9 @@ fn json_to_prost_value(
     use prost_reflect::{Kind, Value};
 
     match (json, field.kind()) {
-        (serde_json::Value::Null, Kind::Message(msg_desc)) => Ok(Value::Message(DynamicMessage::new(
-            msg_desc.clone(),
-        ))),
+        (serde_json::Value::Null, Kind::Message(msg_desc)) => {
+            Ok(Value::Message(DynamicMessage::new(msg_desc.clone())))
+        }
         (serde_json::Value::Null, _) => Ok(Value::String(String::new())), // for non-messages, use default
         (serde_json::Value::Bool(b), Kind::Bool) => Ok(Value::Bool(*b)),
         (serde_json::Value::Number(n), Kind::Int32 | Kind::Sint32 | Kind::Sfixed32) => {
@@ -605,9 +608,7 @@ fn json_to_prost_value(
         (serde_json::Value::Number(n), Kind::Float) => {
             Ok(Value::F32(n.as_f64().unwrap_or(0.0) as f32))
         }
-        (serde_json::Value::Number(n), Kind::Double) => {
-            Ok(Value::F64(n.as_f64().unwrap_or(0.0)))
-        }
+        (serde_json::Value::Number(n), Kind::Double) => Ok(Value::F64(n.as_f64().unwrap_or(0.0))),
         (serde_json::Value::String(s), Kind::String) => Ok(Value::String(s.clone())),
         (serde_json::Value::String(s), Kind::Bytes) => {
             Ok(Value::Bytes(prost::bytes::Bytes::from(s.clone())))
@@ -630,15 +631,14 @@ fn json_to_prost_value(
             Ok(Value::Message(msg))
         }
         (serde_json::Value::Array(arr), _) if field.is_list() => {
-            let values: std::result::Result<Vec<_>, _> = arr
-                .iter()
-                .map(|v| json_to_prost_value(v, field))
-                .collect();
+            let values: std::result::Result<Vec<_>, _> =
+                arr.iter().map(|v| json_to_prost_value(v, field)).collect();
             Ok(Value::List(values?))
         }
         _ => Err(Error::InvalidRequest(format!(
             "Cannot convert {:?} to {:?}",
-            json, field.kind()
+            json,
+            field.kind()
         ))),
     }
 }
@@ -646,13 +646,13 @@ fn json_to_prost_value(
 /// Convert DynamicMessage to JSON value
 fn dynamic_message_to_json(msg: &DynamicMessage) -> Result<serde_json::Value> {
     let mut obj = serde_json::Map::new();
-    
+
     for field in msg.descriptor().fields() {
         let value = msg.get_field(&field);
         let json_value = prost_value_to_json(&value, &field)?;
         obj.insert(field.json_name().to_string(), json_value);
     }
-    
+
     Ok(serde_json::Value::Object(obj))
 }
 
@@ -672,12 +672,10 @@ fn prost_value_to_json(
         Value::F32(n) => Ok(serde_json::json!(*n)),
         Value::F64(n) => Ok(serde_json::json!(*n)),
         Value::String(s) => Ok(serde_json::Value::String(s.clone())),
-        Value::Bytes(b) => {
-            Ok(serde_json::Value::String(base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                b,
-            )))
-        }
+        Value::Bytes(b) => Ok(serde_json::Value::String(base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            b,
+        ))),
         Value::EnumNumber(n) => Ok(serde_json::json!(*n)),
         Value::Message(msg) => dynamic_message_to_json(msg),
         Value::List(list) => {
@@ -755,11 +753,15 @@ async fn handle_socket<R: SubscriptionResolver + Clone + 'static>(
 
     // Handle incoming messages
     let connection_initialized = Arc::new(RwLock::new(!config.require_connection_init));
-    
+
     let init_result = if config.require_connection_init {
         timeout(
             config.connection_init_timeout,
-            wait_for_init(receiver, outbound_tx.clone(), connection_initialized.clone()),
+            wait_for_init(
+                receiver,
+                outbound_tx.clone(),
+                connection_initialized.clone(),
+            ),
         )
         .await
     } else {
@@ -769,14 +771,7 @@ async fn handle_socket<R: SubscriptionResolver + Clone + 'static>(
     match init_result {
         Ok(Some(receiver)) => {
             // Connection initialized, process messages
-            process_messages(
-                receiver,
-                outbound_tx,
-                registry,
-                resolver,
-                config.clone(),
-            )
-            .await;
+            process_messages(receiver, outbound_tx, registry, resolver, config.clone()).await;
         }
         Ok(None) => {
             warn!("Client disconnected before completing initialization");
@@ -958,7 +953,10 @@ async fn handle_subscribe<R: SubscriptionResolver + Clone + 'static>(
     let registry_clone = registry.clone();
 
     tokio::spawn(async move {
-        match resolver.resolve(id_clone.clone(), payload, outbound_tx_clone, cancel_rx).await {
+        match resolver
+            .resolve(id_clone.clone(), payload, outbound_tx_clone, cancel_rx)
+            .await
+        {
             Ok(_) => {
                 debug!(subscription_id = %id_clone, "Subscription completed successfully");
             }
@@ -1066,11 +1064,11 @@ mod tests {
     fn test_subscription_registry() {
         let mut registry = SubscriptionRegistry::new();
         let (tx, _rx) = mpsc::channel::<()>(1);
-        
+
         registry.add("sub1".into(), tx);
         assert!(registry.contains("sub1"));
         assert_eq!(registry.len(), 1);
-        
+
         let removed = registry.remove("sub1");
         assert!(removed.is_some());
         assert!(!registry.contains("sub1"));

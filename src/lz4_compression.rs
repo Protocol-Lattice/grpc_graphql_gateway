@@ -1,24 +1,20 @@
+use crate::gbp::GbpEncoder;
+use axum::body::to_bytes;
 /// LZ4 compression middleware for Axum
 ///
 /// This module provides LZ4 compression support as middleware for Axum applications.
 /// LZ4 is an extremely fast compression algorithm ideal for high-throughput scenarios.
-
 use axum::{
     body::Body,
-    http::{Request, Response, header},
+    http::{header, Request, Response},
     middleware::Next,
 };
 use std::io::{Read, Write};
-use crate::gbp::GbpEncoder;
-use axum::body::to_bytes;
 
 /// LZ4 compression middleware
 ///
 /// Compresses response bodies using LZ4 if the client accepts it.
-pub async fn lz4_compression_middleware(
-    request: Request<Body>,
-    next: Next,
-) -> Response<Body> {
+pub async fn lz4_compression_middleware(request: Request<Body>, next: Next) -> Response<Body> {
     let headers = request.headers().clone();
     let accept_encoding = headers
         .get(header::ACCEPT_ENCODING)
@@ -39,7 +35,8 @@ pub async fn lz4_compression_middleware(
     let (mut parts, body) = response.into_parts();
 
     // Collect body bytes
-    let bytes = match to_bytes(body, 10 * 1024 * 1024).await { // 10MB limit
+    let bytes = match to_bytes(body, 10 * 1024 * 1024).await {
+        // 10MB limit
         Ok(b) => b,
         Err(_) => return Response::from_parts(parts, Body::empty()),
     };
@@ -49,8 +46,14 @@ pub async fn lz4_compression_middleware(
         if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
             let mut encoder = GbpEncoder::new();
             if let Ok(compressed) = encoder.encode_lz4(&json_val) {
-                parts.headers.insert(header::CONTENT_ENCODING, header::HeaderValue::from_static("gbp-lz4"));
-                parts.headers.insert(header::CONTENT_TYPE, header::HeaderValue::from_static("application/graphql-response+gbp"));
+                parts.headers.insert(
+                    header::CONTENT_ENCODING,
+                    header::HeaderValue::from_static("gbp-lz4"),
+                );
+                parts.headers.insert(
+                    header::CONTENT_TYPE,
+                    header::HeaderValue::from_static("application/graphql-response+gbp"),
+                );
                 return Response::from_parts(parts, Body::from(compressed));
             }
         }
@@ -58,7 +61,10 @@ pub async fn lz4_compression_middleware(
 
     if accepts_lz4 {
         if let Ok(compressed) = compress_lz4(&bytes) {
-            parts.headers.insert(header::CONTENT_ENCODING, header::HeaderValue::from_static("lz4"));
+            parts.headers.insert(
+                header::CONTENT_ENCODING,
+                header::HeaderValue::from_static("lz4"),
+            );
             return Response::from_parts(parts, Body::from(compressed));
         }
     }
@@ -69,7 +75,7 @@ pub async fn lz4_compression_middleware(
 /// Compress data using LZ4
 pub fn compress_lz4(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
     let mut encoder = lz4::EncoderBuilder::new()
-        .level(1)  // Fast compression
+        .level(1) // Fast compression
         .build(Vec::new())?;
     encoder.write_all(data)?;
     let (compressed, result) = encoder.finish();
@@ -111,10 +117,10 @@ mod tests {
     fn test_lz4_compression() {
         let data = b"Hello, World! ".repeat(100);
         let compressed = compress_lz4(&data).unwrap();
-        
+
         // Compressed should be smaller for repetitive data
         assert!(compressed.len() < data.len());
-        
+
         // Decompress and verify
         let decompressed = decompress_lz4(&compressed).unwrap();
         assert_eq!(data.to_vec(), decompressed);
@@ -123,28 +129,30 @@ mod tests {
     #[test]
     fn test_lz4_json_compression() {
         let json = r#"{"data":{"users":[{"id":"1","name":"Alice"},{"id":"2","name":"Bob"}]}}"#;
-        
+
         let compressed = Lz4CacheCompressor::compress(json).unwrap();
         let decompressed = Lz4CacheCompressor::decompress(&compressed).unwrap();
-        
+
         assert_eq!(json, decompressed);
     }
 
     #[test]
     fn test_lz4_large_json() {
         // Simulate a large GraphQL response
-        let data = format!(r#"{{"data":{{"items":[{}]}}}}"#, 
-            (0..1000).map(|i| format!(r#"{{"id":"{}","name":"Item {}"}}"#, i, i))
+        let data = format!(
+            r#"{{"data":{{"items":[{}]}}}}"#,
+            (0..1000)
+                .map(|i| format!(r#"{{"id":"{}","name":"Item {}"}}"#, i, i))
                 .collect::<Vec<_>>()
                 .join(",")
         );
-        
+
         let compressed = Lz4CacheCompressor::compress(&data).unwrap();
-        
+
         // Should achieve good compression on repetitive JSON
         let ratio = compressed.len() as f64 / data.len() as f64;
         println!("LZ4 compression ratio: {:.1}%", ratio * 100.0);
-        
+
         // Verify decompression
         let decompressed = Lz4CacheCompressor::decompress(&compressed).unwrap();
         assert_eq!(data, decompressed);
@@ -164,7 +172,8 @@ mod tests {
                     })
                 }).collect::<Vec<_>>()
             }
-        }).to_string();
+        })
+        .to_string();
 
         let start = Instant::now();
         let compressed = compress_lz4(data.as_bytes()).unwrap();
@@ -174,7 +183,13 @@ mod tests {
         let _decompressed = decompress_lz4(&compressed).unwrap();
         let decompress_time = start.elapsed();
 
-        println!("LZ4 compress: {:?}, decompress: {:?}", compress_time, decompress_time);
-        println!("Ratio: {:.1}%", compressed.len() as f64 / data.len() as f64 * 100.0);
+        println!(
+            "LZ4 compress: {:?}, decompress: {:?}",
+            compress_time, decompress_time
+        );
+        println!(
+            "Ratio: {:.1}%",
+            compressed.len() as f64 / data.len() as f64 * 100.0
+        );
     }
 }

@@ -36,8 +36,7 @@
 //! ```
 
 use crate::rest_connector::{
-    HttpMethod, RestConnector, RestEndpoint, RestFieldType,
-    RestResponseField, RestResponseSchema,
+    HttpMethod, RestConnector, RestEndpoint, RestFieldType, RestResponseField, RestResponseSchema,
 };
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -65,7 +64,10 @@ impl std::fmt::Debug for OpenApiParser {
             .field("spec", &self.spec.info.title)
             .field("base_url_override", &self.base_url_override)
             .field("timeout", &self.timeout)
-            .field("operation_filter", &self.operation_filter.as_ref().map(|_| "<filter>"))
+            .field(
+                "operation_filter",
+                &self.operation_filter.as_ref().map(|_| "<filter>"),
+            )
             .field("tag_filter", &self.tag_filter)
             .field("prefix", &self.prefix)
             .finish()
@@ -365,7 +367,8 @@ impl OpenApiParser {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
 
-        let is_yaml = content_type.contains("yaml") || url.ends_with(".yaml") || url.ends_with(".yml");
+        let is_yaml =
+            content_type.contains("yaml") || url.ends_with(".yaml") || url.ends_with(".yml");
 
         let content = response
             .text()
@@ -437,27 +440,37 @@ impl OpenApiParser {
 
             // Process each HTTP method
             if let Some(ref op) = path_item.get {
-                if let Some(endpoint) = self.create_endpoint(path, HttpMethod::GET, op, path_params, &schemas)? {
+                if let Some(endpoint) =
+                    self.create_endpoint(path, HttpMethod::GET, op, path_params, &schemas)?
+                {
                     builder = builder.add_endpoint(endpoint);
                 }
             }
             if let Some(ref op) = path_item.post {
-                if let Some(endpoint) = self.create_endpoint(path, HttpMethod::POST, op, path_params, &schemas)? {
+                if let Some(endpoint) =
+                    self.create_endpoint(path, HttpMethod::POST, op, path_params, &schemas)?
+                {
                     builder = builder.add_endpoint(endpoint);
                 }
             }
             if let Some(ref op) = path_item.put {
-                if let Some(endpoint) = self.create_endpoint(path, HttpMethod::PUT, op, path_params, &schemas)? {
+                if let Some(endpoint) =
+                    self.create_endpoint(path, HttpMethod::PUT, op, path_params, &schemas)?
+                {
                     builder = builder.add_endpoint(endpoint);
                 }
             }
             if let Some(ref op) = path_item.patch {
-                if let Some(endpoint) = self.create_endpoint(path, HttpMethod::PATCH, op, path_params, &schemas)? {
+                if let Some(endpoint) =
+                    self.create_endpoint(path, HttpMethod::PATCH, op, path_params, &schemas)?
+                {
                     builder = builder.add_endpoint(endpoint);
                 }
             }
             if let Some(ref op) = path_item.delete {
-                if let Some(endpoint) = self.create_endpoint(path, HttpMethod::DELETE, op, path_params, &schemas)? {
+                if let Some(endpoint) =
+                    self.create_endpoint(path, HttpMethod::DELETE, op, path_params, &schemas)?
+                {
                     builder = builder.add_endpoint(endpoint);
                 }
             }
@@ -479,7 +492,12 @@ impl OpenApiParser {
 
         // Swagger 2.0 uses host + basePath + schemes
         if let Some(ref host) = self.spec.host {
-            let scheme = self.spec.schemes.first().map(|s| s.as_str()).unwrap_or("https");
+            let scheme = self
+                .spec
+                .schemes
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("https");
             let base_path = self.spec.base_path.as_deref().unwrap_or("");
             return Ok(format!("{}://{}{}", scheme, host, base_path));
         }
@@ -587,18 +605,26 @@ impl OpenApiParser {
         }
 
         // Process response schema
-        if let Some(response) = operation.responses.get("200").or(operation.responses.get("201")) {
+        if let Some(response) = operation
+            .responses
+            .get("200")
+            .or(operation.responses.get("201"))
+        {
             // OpenAPI 3.0+ style
             if let Some(content) = response.content.get("application/json") {
                 if let Some(ref schema) = content.schema {
-                    if let Some(response_schema) = self.schema_to_response_schema(schema, schemas, &operation_id) {
+                    if let Some(response_schema) =
+                        self.schema_to_response_schema(schema, schemas, &operation_id)
+                    {
                         endpoint = endpoint.with_response_schema(response_schema);
                     }
                 }
             }
             // Swagger 2.0 style
             else if let Some(ref schema) = response.schema {
-                if let Some(response_schema) = self.schema_to_response_schema(schema, schemas, &operation_id) {
+                if let Some(response_schema) =
+                    self.schema_to_response_schema(schema, schemas, &operation_id)
+                {
                     endpoint = endpoint.with_response_schema(response_schema);
                 }
             }
@@ -642,13 +668,13 @@ impl OpenApiParser {
         schemas: &HashMap<String, SchemaObject>,
     ) -> Option<String> {
         let resolved = self.resolve_schema(schema, schemas)?;
-        
+
         if resolved.schema_type.as_deref() != Some("object") {
             return None;
         }
 
         let mut fields = Vec::new();
-        for (name, _prop) in &resolved.properties {
+        for name in resolved.properties.keys() {
             fields.push(format!("\"{}\": \"{{{}}}\"", name, name));
         }
 
@@ -684,7 +710,7 @@ impl OpenApiParser {
         let type_name = schema
             .reference
             .as_ref()
-            .and_then(|r| r.split('/').last())
+            .and_then(|r| r.split('/').next_back())
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("{}Response", capitalize(operation_id)));
 
@@ -723,19 +749,17 @@ impl OpenApiParser {
     ) -> RestFieldType {
         // Handle references
         if let Some(ref reference) = schema.reference {
-            if let Some(type_name) = reference.split('/').last() {
+            if let Some(type_name) = reference.split('/').next_back() {
                 return RestFieldType::Object(type_name.to_string());
             }
         }
 
         match schema.schema_type.as_deref() {
             Some("string") => RestFieldType::String,
-            Some("integer") | Some("number") => {
-                match schema.format.as_deref() {
-                    Some("float") | Some("double") => RestFieldType::Float,
-                    _ => RestFieldType::Int,
-                }
-            }
+            Some("integer") | Some("number") => match schema.format.as_deref() {
+                Some("float") | Some("double") => RestFieldType::Float,
+                _ => RestFieldType::Int,
+            },
             Some("boolean") => RestFieldType::Boolean,
             Some("array") => {
                 if let Some(ref items) = schema.items {
@@ -761,7 +785,7 @@ impl OpenApiParser {
     ) -> Option<&'a SchemaObject> {
         if let Some(ref reference) = schema.reference {
             // Extract type name from reference like "#/components/schemas/User"
-            let type_name = reference.split('/').last()?;
+            let type_name = reference.split('/').next_back()?;
             schemas.get(type_name)
         } else {
             Some(schema)
@@ -779,7 +803,7 @@ impl OpenApiParser {
                         .operation_id
                         .clone()
                         .unwrap_or_else(|| self.generate_operation_id(path, method));
-                    
+
                     operations.push(OperationInfo {
                         operation_id,
                         path: path.clone(),
@@ -928,9 +952,9 @@ mod tests {
     fn test_list_operations() {
         let parser = OpenApiParser::from_string(PETSTORE_JSON, false).unwrap();
         let operations = parser.list_operations();
-        
+
         assert_eq!(operations.len(), 3);
-        
+
         let op_ids: Vec<_> = operations.iter().map(|o| &o.operation_id).collect();
         assert!(op_ids.contains(&&"listPets".to_string()));
         assert!(op_ids.contains(&&"createPet".to_string()));
@@ -943,7 +967,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        
+
         assert_eq!(connector.base_url(), "https://petstore.example.com/v1");
         assert!(connector.get_endpoint("listPets").is_some());
         assert!(connector.get_endpoint("createPet").is_some());
@@ -957,17 +981,17 @@ mod tests {
             .with_base_url("https://api.custom.com")
             .build()
             .unwrap();
-        
+
         assert_eq!(connector.base_url(), "https://api.custom.com");
     }
 
     #[test]
     fn test_generate_operation_id() {
         let parser = OpenApiParser::from_string(PETSTORE_JSON, false).unwrap();
-        
+
         let id = parser.generate_operation_id("/users/{id}/posts", HttpMethod::GET);
         assert_eq!(id, "getUsersIdPosts");
-        
+
         let id = parser.generate_operation_id("/products", HttpMethod::POST);
         assert_eq!(id, "createProducts");
     }
@@ -979,12 +1003,16 @@ mod tests {
             .with_prefix("petstore_")
             .build()
             .unwrap();
-        
+
         // All endpoints should have the prefix
         for (name, _endpoint) in connector.endpoints() {
-            assert!(name.starts_with("petstore_"), "Expected prefix, got: {}", name);
+            assert!(
+                name.starts_with("petstore_"),
+                "Expected prefix, got: {}",
+                name
+            );
         }
-        
+
         assert!(connector.get_endpoint("petstore_listPets").is_some());
         assert!(connector.get_endpoint("petstore_createPet").is_some());
         assert!(connector.get_endpoint("petstore_getPet").is_some());

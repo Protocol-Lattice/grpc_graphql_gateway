@@ -113,9 +113,7 @@ impl GatewayMetrics {
 
     /// Record a GraphQL request
     pub fn record_graphql_request(&self, operation: &str) {
-        self.graphql_requests
-            .with_label_values(&[operation])
-            .inc();
+        self.graphql_requests.with_label_values(&[operation]).inc();
     }
 
     /// Record GraphQL request duration
@@ -127,9 +125,7 @@ impl GatewayMetrics {
 
     /// Record a GraphQL error
     pub fn record_graphql_error(&self, error_type: &str) {
-        self.graphql_errors
-            .with_label_values(&[error_type])
-            .inc();
+        self.graphql_errors.with_label_values(&[error_type]).inc();
     }
 
     /// Record a gRPC backend request
@@ -157,9 +153,7 @@ impl GatewayMetrics {
     pub fn requests_total(&self) -> u64 {
         let mut total = 0;
         for operation in &["query", "mutation", "subscription"] {
-            total += self.graphql_requests
-                .with_label_values(&[operation])
-                .get();
+            total += self.graphql_requests.with_label_values(&[operation]).get();
         }
         total
     }
@@ -211,7 +205,8 @@ impl RequestTimer {
 impl Drop for RequestTimer {
     fn drop(&mut self) {
         let duration = self.start.elapsed().as_secs_f64();
-        self.metrics.record_graphql_duration(&self.operation, duration);
+        self.metrics
+            .record_graphql_duration(&self.operation, duration);
     }
 }
 
@@ -240,14 +235,16 @@ impl GrpcTimer {
 
     /// Record an error for this gRPC call
     pub fn record_error(&self, code: &str) {
-        self.metrics.record_grpc_error(&self.service, &self.method, code);
+        self.metrics
+            .record_grpc_error(&self.service, &self.method, code);
     }
 }
 
 impl Drop for GrpcTimer {
     fn drop(&mut self) {
         let duration = self.start.elapsed().as_secs_f64();
-        self.metrics.record_grpc_duration(&self.service, &self.method, duration);
+        self.metrics
+            .record_grpc_duration(&self.service, &self.method, duration);
     }
 }
 
@@ -259,12 +256,12 @@ mod tests {
     fn test_metrics_creation() {
         // This will use the global metrics
         let metrics = GatewayMetrics::global();
-        
+
         // Record some requests
         metrics.record_graphql_request("query");
         metrics.record_graphql_request("query");
         metrics.record_graphql_request("mutation");
-        
+
         // Verify counts
         assert!(metrics.requests_total() >= 3);
     }
@@ -273,7 +270,7 @@ mod tests {
     fn test_metrics_render() {
         let metrics = GatewayMetrics::global();
         metrics.record_graphql_request("query");
-        
+
         let output = metrics.render();
         assert!(output.contains("graphql_requests_total"));
     }

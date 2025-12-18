@@ -34,13 +34,13 @@
 //! # }
 //! ```
 
+use crate::smart_ttl::SmartTtlManager;
+use parking_lot::RwLock; // SECURITY: Use parking_lot for non-poisoning locks
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use parking_lot::RwLock;  // SECURITY: Use parking_lot for non-poisoning locks
 use std::time::{Duration, SystemTime};
-use serde::{Serialize, Deserialize};
-use crate::smart_ttl::SmartTtlManager;
 
 /// Cache key prefix for Redis to enable safe deletion without FLUSHDB
 const REDIS_CACHE_PREFIX: &str = "gqlcache:";
@@ -118,17 +118,14 @@ pub struct CachedResponse {
 }
 
 mod serde_millis {
-    use std::time::{SystemTime, UNIX_EPOCH};
     use serde::{Deserialize, Deserializer, Serializer};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     pub fn serialize<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let millis = time
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let millis = time.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
         serializer.serialize_u64(millis)
     }
 
@@ -193,9 +190,7 @@ impl ResponseCache {
     pub fn new(config: CacheConfig) -> Self {
         let backend = if let Some(url) = &config.redis_url {
             match redis::Client::open(url.as_str()) {
-                Ok(client) => CacheBackend::Redis {
-                    client,
-                },
+                Ok(client) => CacheBackend::Redis { client },
                 Err(e) => {
                     tracing::error!("Failed to create Redis client: {}", e);
                     // Fallback to memory
@@ -219,7 +214,6 @@ impl ResponseCache {
         }
     }
 
-
     /// Generate a cache key from query components
     ///
     /// The key is a SHA-256 hash of:
@@ -235,10 +229,7 @@ impl ResponseCache {
         let mut hasher = Sha256::new();
 
         // Normalize query: remove extra whitespace
-        let normalized_query: String = query
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
+        let normalized_query: String = query.split_whitespace().collect::<Vec<_>>().join(" ");
         hasher.update(normalized_query.as_bytes());
 
         // Add sorted variables if present
@@ -273,17 +264,17 @@ impl ResponseCache {
         match &self.backend {
             CacheBackend::Memory { cache, .. } => {
                 let cache = cache.read();
-        
+
                 let Some(entry) = cache.get(cache_key) else {
                     return CacheLookupResult::Miss;
                 };
-        
+
                 // Check if fresh
                 if !entry.is_expired() {
                     tracing::debug!(cache_key = %cache_key, "Response cache hit (Memory)");
                     return CacheLookupResult::Hit(entry.clone());
                 }
-        
+
                 // Check if stale but usable
                 if let Some(stale_window) = self.config.stale_while_revalidate {
                     if entry.is_stale_but_usable(stale_window) {
@@ -291,13 +282,13 @@ impl ResponseCache {
                         return CacheLookupResult::Stale(entry.clone());
                     }
                 }
-        
+
                 // Expired and past stale window
                 tracing::debug!(cache_key = %cache_key, "Response cache miss (expired) (Memory)");
                 CacheLookupResult::Miss
             }
             CacheBackend::Redis { client, .. } => {
-                 let mut conn = match client.get_multiplexed_async_connection().await {
+                let mut conn = match client.get_multiplexed_async_connection().await {
                     Ok(c) => c,
                     Err(e) => {
                         tracing::error!("Redis connection error: {}", e);
@@ -305,7 +296,11 @@ impl ResponseCache {
                     }
                 };
 
-                let data: Option<String> = match redis::cmd("GET").arg(cache_key).query_async(&mut conn).await {
+                let data: Option<String> = match redis::cmd("GET")
+                    .arg(cache_key)
+                    .query_async(&mut conn)
+                    .await
+                {
                     Ok(d) => d,
                     Err(e) => {
                         tracing::error!("Redis GET error: {}", e);
@@ -315,13 +310,13 @@ impl ResponseCache {
 
                 if let Some(json) = data {
                     if let Ok(entry) = serde_json::from_str::<CachedResponse>(&json) {
-                         // Check if fresh
+                        // Check if fresh
                         if !entry.is_expired() {
                             tracing::debug!(cache_key = %cache_key, "Response cache hit (Redis)");
                             return CacheLookupResult::Hit(entry);
                         }
-                        
-                         // Check if stale
+
+                        // Check if stale
                         if let Some(stale_window) = self.config.stale_while_revalidate {
                             if entry.is_stale_but_usable(stale_window) {
                                 tracing::debug!(cache_key = %cache_key, "Response cache stale hit (revalidating) (Redis)");
@@ -330,7 +325,7 @@ impl ResponseCache {
                         }
                     }
                 }
-                
+
                 CacheLookupResult::Miss
             }
         }
@@ -346,7 +341,7 @@ impl ResponseCache {
     }
 
     /// Store a response in the cache with Smart TTL calculation
-    /// 
+    ///
     /// If Smart TTL is enabled, this will calculate the optimal TTL based on query type and patterns.
     /// Otherwise, falls back to default TTL.
     pub async fn put_with_query(
@@ -375,7 +370,14 @@ impl ResponseCache {
             self.config.default_ttl.as_secs()
         };
 
-        self.put_with_ttl(cache_key, response, referenced_types, referenced_entities, ttl_secs).await;
+        self.put_with_ttl(
+            cache_key,
+            response,
+            referenced_types,
+            referenced_entities,
+            ttl_secs,
+        )
+        .await;
     }
 
     /// Store a response in the cache with explicit TTL
@@ -388,7 +390,13 @@ impl ResponseCache {
         ttl_secs: u64,
     ) {
         match &self.backend {
-            CacheBackend::Memory { cache, insertion_order, type_index, entity_index, .. } => {
+            CacheBackend::Memory {
+                cache,
+                insertion_order,
+                type_index,
+                entity_index,
+                ..
+            } => {
                 // Evict if needed
                 self.evict_if_needed();
 
@@ -438,51 +446,51 @@ impl ResponseCache {
             }
             CacheBackend::Redis { client, .. } => {
                 let mut conn = match client.get_multiplexed_async_connection().await {
-                   Ok(c) => c,
-                   Err(e) => {
-                       tracing::error!("Redis connection error: {}", e);
-                       return;
-                   }
-               };
-               
-               let entry = CachedResponse {
-                   data: response,
-                   created_at: SystemTime::now(),
-                   ttl_secs,
-                   referenced_types: referenced_types.clone(),
-                   referenced_entities: referenced_entities.clone(),
-               };
-               
-               let json = match serde_json::to_string(&entry) {
-                   Ok(j) => j,
-                   Err(e) => {
-                       tracing::error!("Serialization error: {}", e);
-                       return;
-                   }
-               };
-               
-               // Pipeline the commands
-               let mut pipe = redis::pipe();
-               pipe.atomic();
-               
-               // SETEX cache_key ttl json
-               pipe.set_ex(&cache_key, json, ttl_secs);
-               
-               // Add to type indexes
-               for type_name in &referenced_types {
-                   pipe.sadd(format!("type:{}", type_name), &cache_key);
-               }
-               
-               // Add to entity indexes
-               for entity_key in &referenced_entities {
-                   pipe.sadd(format!("entity:{}", entity_key), &cache_key);
-               }
-               
-               if let Err(e) = pipe.query_async::<()>(&mut conn).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("Redis connection error: {}", e);
+                        return;
+                    }
+                };
+
+                let entry = CachedResponse {
+                    data: response,
+                    created_at: SystemTime::now(),
+                    ttl_secs,
+                    referenced_types: referenced_types.clone(),
+                    referenced_entities: referenced_entities.clone(),
+                };
+
+                let json = match serde_json::to_string(&entry) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        tracing::error!("Serialization error: {}", e);
+                        return;
+                    }
+                };
+
+                // Pipeline the commands
+                let mut pipe = redis::pipe();
+                pipe.atomic();
+
+                // SETEX cache_key ttl json
+                pipe.set_ex(&cache_key, json, ttl_secs);
+
+                // Add to type indexes
+                for type_name in &referenced_types {
+                    pipe.sadd(format!("type:{}", type_name), &cache_key);
+                }
+
+                // Add to entity indexes
+                for entity_key in &referenced_entities {
+                    pipe.sadd(format!("entity:{}", entity_key), &cache_key);
+                }
+
+                if let Err(e) = pipe.query_async::<()>(&mut conn).await {
                     tracing::error!("Redis PUT error: {}", e);
-               } else {
+                } else {
                     tracing::debug!(cache_key = %cache_key, ttl_secs = ttl_secs, "Response cached (Redis)");
-               }
+                }
             }
         }
     }
@@ -496,18 +504,23 @@ impl ResponseCache {
         referenced_entities: HashSet<String>,
     ) {
         let ttl_secs = self.config.default_ttl.as_secs();
-        self.put_with_ttl(cache_key, response, referenced_types, referenced_entities, ttl_secs).await;
+        self.put_with_ttl(
+            cache_key,
+            response,
+            referenced_types,
+            referenced_entities,
+            ttl_secs,
+        )
+        .await;
     }
 
     /// Explicitly cache individual entities found in a response
     /// This allows different queries to share the same cached "nodes"
-    pub async fn put_all_entities(
-        &self,
-        response: &serde_json::Value,
-        ttl: Option<Duration>,
-    ) {
+    pub async fn put_all_entities(&self, response: &serde_json::Value, ttl: Option<Duration>) {
         let entities = extract_entities_with_data(response);
-        let ttl_secs = ttl.map(|t| t.as_secs()).unwrap_or(self.config.default_ttl.as_secs());
+        let ttl_secs = ttl
+            .map(|t| t.as_secs())
+            .unwrap_or(self.config.default_ttl.as_secs());
 
         for (entity_key, data) in entities {
             match &self.backend {
@@ -519,7 +532,9 @@ impl ResponseCache {
                         referenced_types: HashSet::new(),
                         referenced_entities: HashSet::new(),
                     };
-                    cache.write().insert(format!("entity:{}", entity_key), entry);
+                    cache
+                        .write()
+                        .insert(format!("entity:{}", entity_key), entry);
                 }
                 CacheBackend::Redis { client } => {
                     let mut conn = match client.get_multiplexed_async_connection().await {
@@ -531,7 +546,9 @@ impl ResponseCache {
                             .arg(format!("entity:{}", entity_key))
                             .arg(ttl_secs)
                             .arg(json)
-                            .query_async(&mut conn).await.unwrap_or(());
+                            .query_async(&mut conn)
+                            .await
+                            .unwrap_or(());
                     }
                 }
             }
@@ -554,40 +571,44 @@ impl ResponseCache {
                 }
                 count
             }
-             CacheBackend::Redis { client, .. } => {
+            CacheBackend::Redis { client, .. } => {
                 let mut conn = match client.get_multiplexed_async_connection().await {
                     Ok(c) => c,
                     Err(_) => return 0,
                 };
-                
+
                 let index_key = format!("type:{}", type_name);
-                let keys: Vec<String> = match redis::cmd("SMEMBERS").arg(&index_key).query_async(&mut conn).await {
+                let keys: Vec<String> = match redis::cmd("SMEMBERS")
+                    .arg(&index_key)
+                    .query_async(&mut conn)
+                    .await
+                {
                     Ok(k) => k,
                     Err(_) => return 0,
                 };
-                
+
                 if keys.is_empty() {
                     return 0;
                 }
-                
+
                 let mut pipe = redis::pipe();
                 pipe.atomic();
                 for key in &keys {
                     pipe.del(key);
                 }
                 pipe.del(&index_key);
-                
+
                 let _: () = pipe.query_async(&mut conn).await.unwrap_or(());
-                 tracing::debug!(type_name = %type_name, count = keys.len(), "Invalidated cache by type (Redis)");
+                tracing::debug!(type_name = %type_name, count = keys.len(), "Invalidated cache by type (Redis)");
                 keys.len()
-             }
+            }
         }
     }
 
     /// Invalidate all cache entries that reference a specific entity
     pub async fn invalidate_by_entity(&self, entity_key: &str) -> usize {
-         match &self.backend {
-             CacheBackend::Memory { entity_index, .. } => {
+        match &self.backend {
+            CacheBackend::Memory { entity_index, .. } => {
                 let cache_keys = {
                     let entity_idx = entity_index.read();
                     entity_idx.get(entity_key).cloned().unwrap_or_default()
@@ -599,35 +620,39 @@ impl ResponseCache {
                     tracing::debug!(entity_key = %entity_key, count = count, "Invalidated cache by entity (Memory)");
                 }
                 count
-             }
-             CacheBackend::Redis { client, .. } => {
+            }
+            CacheBackend::Redis { client, .. } => {
                 let mut conn = match client.get_multiplexed_async_connection().await {
                     Ok(c) => c,
                     Err(_) => return 0,
                 };
-                
+
                 let index_key = format!("entity:{}", entity_key);
-                let keys: Vec<String> = match redis::cmd("SMEMBERS").arg(&index_key).query_async(&mut conn).await {
+                let keys: Vec<String> = match redis::cmd("SMEMBERS")
+                    .arg(&index_key)
+                    .query_async(&mut conn)
+                    .await
+                {
                     Ok(k) => k,
                     Err(_) => return 0,
                 };
-                
+
                 if keys.is_empty() {
                     return 0;
                 }
-                
+
                 let mut pipe = redis::pipe();
                 pipe.atomic();
                 for key in &keys {
                     pipe.del(key);
                 }
                 pipe.del(&index_key);
-                
+
                 let _: () = pipe.query_async(&mut conn).await.unwrap_or(());
-                 tracing::debug!(entity_key = %entity_key, count = keys.len(), "Invalidated cache by entity (Redis)");
+                tracing::debug!(entity_key = %entity_key, count = keys.len(), "Invalidated cache by entity (Redis)");
                 keys.len()
-             }
-         }
+            }
+        }
     }
 
     /// Invalidate cache entries based on a mutation result
@@ -651,7 +676,10 @@ impl ResponseCache {
         }
 
         if total_invalidated > 0 {
-            tracing::info!(count = total_invalidated, "Cache invalidated after mutation");
+            tracing::info!(
+                count = total_invalidated,
+                "Cache invalidated after mutation"
+            );
         }
 
         total_invalidated
@@ -665,7 +693,13 @@ impl ResponseCache {
     /// to avoid destroying data from other applications sharing the same Redis instance.
     pub async fn clear(&self) {
         match &self.backend {
-            CacheBackend::Memory { cache, insertion_order, type_index, entity_index, .. } => {
+            CacheBackend::Memory {
+                cache,
+                insertion_order,
+                type_index,
+                entity_index,
+                ..
+            } => {
                 cache.write().clear();
                 insertion_order.write().clear();
                 type_index.write().clear();
@@ -677,12 +711,12 @@ impl ResponseCache {
                     Ok(c) => c,
                     Err(_) => return,
                 };
-                
+
                 // SECURITY: Use SCAN with prefix instead of FLUSHDB
                 // This protects other applications sharing the same Redis instance
                 let mut cursor: u64 = 0;
                 let mut total_deleted = 0;
-                
+
                 loop {
                     // Scan for cache keys with our prefix
                     let (next_cursor, keys): (u64, Vec<String>) = match redis::cmd("SCAN")
@@ -700,7 +734,7 @@ impl ResponseCache {
                             break;
                         }
                     };
-                    
+
                     if !keys.is_empty() {
                         let _: () = redis::cmd("DEL")
                             .arg(&keys)
@@ -709,13 +743,13 @@ impl ResponseCache {
                             .unwrap_or(());
                         total_deleted += keys.len();
                     }
-                    
+
                     cursor = next_cursor;
                     if cursor == 0 {
                         break;
                     }
                 }
-                
+
                 // Also clean up type and entity indexes
                 for prefix in [REDIS_TYPE_PREFIX, REDIS_ENTITY_PREFIX] {
                     cursor = 0;
@@ -732,7 +766,7 @@ impl ResponseCache {
                             Ok(result) => result,
                             Err(_) => break,
                         };
-                        
+
                         if !keys.is_empty() {
                             let _: () = redis::cmd("DEL")
                                 .arg(&keys)
@@ -741,15 +775,18 @@ impl ResponseCache {
                                 .unwrap_or(());
                             total_deleted += keys.len();
                         }
-                        
+
                         cursor = next_cursor;
                         if cursor == 0 {
                             break;
                         }
                     }
                 }
-                
-                tracing::debug!("Response cache cleared - {} keys deleted (Redis SCAN)", total_deleted);
+
+                tracing::debug!(
+                    "Response cache cleared - {} keys deleted (Redis SCAN)",
+                    total_deleted
+                );
             }
         }
     }
@@ -757,10 +794,8 @@ impl ResponseCache {
     /// Get the current number of cached responses
     pub fn len(&self) -> usize {
         match &self.backend {
-             CacheBackend::Memory { cache, .. } => {
-                cache.read().len()
-             }
-             CacheBackend::Redis { .. } => 0, // Not easily available without SCAN, return 0
+            CacheBackend::Memory { cache, .. } => cache.read().len(),
+            CacheBackend::Redis { .. } => 0, // Not easily available without SCAN, return 0
         }
     }
 
@@ -775,12 +810,12 @@ impl ResponseCache {
             size: self.len(),
             max_size: self.config.max_size,
             type_index_size: match &self.backend {
-                 CacheBackend::Memory { type_index, .. } => type_index.read().len(),
-                 _ => 0,
+                CacheBackend::Memory { type_index, .. } => type_index.read().len(),
+                _ => 0,
             },
             entity_index_size: match &self.backend {
-                 CacheBackend::Memory { entity_index, .. } => entity_index.read().len(),
-                 _ => 0,
+                CacheBackend::Memory { entity_index, .. } => entity_index.read().len(),
+                _ => 0,
             },
         }
     }
@@ -792,7 +827,10 @@ impl ResponseCache {
                 if current_len >= self.config.max_size {
                     // Logic continues below...
                     let to_remove = current_len - self.config.max_size + 1;
-                    if let CacheBackend::Memory { insertion_order, .. } = &self.backend {
+                    if let CacheBackend::Memory {
+                        insertion_order, ..
+                    } = &self.backend
+                    {
                         let mut order = insertion_order.write();
                         let drain_count = to_remove.min(order.len());
                         let keys_to_remove: Vec<String> = order.drain(..drain_count).collect();
@@ -806,51 +844,55 @@ impl ResponseCache {
     }
 
     fn remove_entries(&self, cache_keys: &HashSet<String>) {
-         match &self.backend {
-            CacheBackend::Memory { insertion_order, .. } => {
+        match &self.backend {
+            CacheBackend::Memory {
+                insertion_order, ..
+            } => {
                 let keys_vec: Vec<String> = cache_keys.iter().cloned().collect();
                 self.remove_entries_internal(&keys_vec);
-        
+
                 // Update insertion order
                 let mut order = insertion_order.write();
                 order.retain(|k| !cache_keys.contains(k));
             }
-             _ => {} // Handled elsewhere for Redis
-         }
+            _ => {} // Handled elsewhere for Redis
+        }
     }
 
     fn remove_entries_internal(&self, cache_keys: &[String]) {
-        match &self.backend {
-             CacheBackend::Memory { cache, type_index, entity_index, .. } => {
-                let mut c = cache.write();
-                for key in cache_keys {
-                    if let Some(entry) = c.remove(key) {
-                        // Clean up type index
-                        let mut type_idx = type_index.write();
-                        for type_name in &entry.referenced_types {
-                            if let Some(keys) = type_idx.get_mut(type_name) {
-                                keys.remove(key);
-                                if keys.is_empty() {
-                                    type_idx.remove(type_name);
-                                }
+        if let CacheBackend::Memory {
+                cache,
+                type_index,
+                entity_index,
+                ..
+            } = &self.backend {
+            let mut c = cache.write();
+            for key in cache_keys {
+                if let Some(entry) = c.remove(key) {
+                    // Clean up type index
+                    let mut type_idx = type_index.write();
+                    for type_name in &entry.referenced_types {
+                        if let Some(keys) = type_idx.get_mut(type_name) {
+                            keys.remove(key);
+                            if keys.is_empty() {
+                                type_idx.remove(type_name);
                             }
                         }
-                        drop(type_idx);
-                        
-                        // Clean up entity index
-                        let mut entity_idx = entity_index.write();
-                        for entity_key in &entry.referenced_entities {
-                            if let Some(keys) = entity_idx.get_mut(entity_key) {
-                                keys.remove(key);
-                                if keys.is_empty() {
-                                    entity_idx.remove(entity_key);
-                                }
+                    }
+                    drop(type_idx);
+
+                    // Clean up entity index
+                    let mut entity_idx = entity_index.write();
+                    for entity_key in &entry.referenced_entities {
+                        if let Some(keys) = entity_idx.get_mut(entity_key) {
+                            keys.remove(key);
+                            if keys.is_empty() {
+                                entity_idx.remove(entity_key);
                             }
                         }
                     }
                 }
-             }
-             _ => {}
+            }
         }
     }
 }
@@ -860,8 +902,13 @@ impl Clone for ResponseCache {
         Self {
             config: self.config.clone(),
             backend: match &self.backend {
-                CacheBackend::Memory { cache, insertion_order, type_index, entity_index } => {
-                     let cache = cache.read().clone();
+                CacheBackend::Memory {
+                    cache,
+                    insertion_order,
+                    type_index,
+                    entity_index,
+                } => {
+                    let cache = cache.read().clone();
                     let order = insertion_order.read().clone();
                     let type_idx = type_index.read().clone();
                     let entity_idx = entity_index.read().clone();
@@ -874,8 +921,8 @@ impl Clone for ResponseCache {
                 }
                 CacheBackend::Redis { client } => CacheBackend::Redis {
                     client: client.clone(),
-                }
-            }
+                },
+            },
         }
     }
 }
@@ -988,7 +1035,10 @@ fn extract_entities_with_data(response: &serde_json::Value) -> Vec<(String, serd
     entities
 }
 
-fn extract_entities_data_recursive(value: &serde_json::Value, entities: &mut Vec<(String, serde_json::Value)>) {
+fn extract_entities_data_recursive(
+    value: &serde_json::Value,
+    entities: &mut Vec<(String, serde_json::Value)>,
+) {
     match value {
         serde_json::Value::Object(map) => {
             let type_name = map.get("__typename").and_then(|t| t.as_str());
@@ -1043,7 +1093,10 @@ mod tests {
         let key1 = ResponseCache::generate_cache_key(query, None, None, &[]);
 
         // Same query should produce same key
-        assert_eq!(key1, ResponseCache::generate_cache_key(query, None, None, &[]));
+        assert_eq!(
+            key1,
+            ResponseCache::generate_cache_key(query, None, None, &[])
+        );
 
         // Different query should produce different key
         let key2 = ResponseCache::generate_cache_key("{ products { id } }", None, None, &[]);
@@ -1069,21 +1122,21 @@ mod tests {
     #[test]
     fn test_cache_key_with_vary_headers() {
         let query = "{ users { id name } }";
-        
+
         // Simulating headers: "HeaderName:HeaderValue"
         let headers1 = vec!["Authorization:Bearer TokenA".to_string()];
         let headers2 = vec!["Authorization:Bearer TokenB".to_string()];
-        
+
         let key1 = ResponseCache::generate_cache_key(query, None, None, &headers1);
         let key2 = ResponseCache::generate_cache_key(query, None, None, &headers2);
         let key3 = ResponseCache::generate_cache_key(query, None, None, &[]);
 
         // Different auth tokens should produce different keys
         assert_ne!(key1, key2);
-        
+
         // Auth token vs no auth token should produce different keys
         assert_ne!(key1, key3);
-        
+
         // Same auth token should produce same key
         let key1_again = ResponseCache::generate_cache_key(query, None, None, &headers1);
         assert_eq!(key1, key1_again);
@@ -1095,12 +1148,14 @@ mod tests {
         let cache_key = "test_key".to_string();
         let response = serde_json::json!({"data": {"user": {"id": "1", "name": "Alice"}}});
 
-        cache.put(
-            cache_key.clone(),
-            response.clone(),
-            HashSet::from(["User".to_string()]),
-            HashSet::from(["User#1".to_string()]),
-        ).await;
+        cache
+            .put(
+                cache_key.clone(),
+                response.clone(),
+                HashSet::from(["User".to_string()]),
+                HashSet::from(["User#1".to_string()]),
+            )
+            .await;
 
         match cache.get(&cache_key).await {
             CacheLookupResult::Hit(entry) => {
@@ -1133,29 +1188,37 @@ mod tests {
         let cache = ResponseCache::new(config);
         let cache_key = "expiring".to_string();
 
-        cache.put(
-            cache_key.clone(),
-            serde_json::json!({"test": true}),
-            HashSet::new(),
-            HashSet::new(),
-        ).await;
+        cache
+            .put(
+                cache_key.clone(),
+                serde_json::json!({"test": true}),
+                HashSet::new(),
+                HashSet::new(),
+            )
+            .await;
 
         // Should be a hit immediately
-        assert!(matches!(cache.get(&cache_key).await, CacheLookupResult::Hit(_)));
+        assert!(matches!(
+            cache.get(&cache_key).await,
+            CacheLookupResult::Hit(_)
+        ));
 
         // Wait for TTL
         std::thread::sleep(Duration::from_millis(1100));
 
         // Should be a miss now
-        assert!(matches!(cache.get(&cache_key).await, CacheLookupResult::Miss));
+        assert!(matches!(
+            cache.get(&cache_key).await,
+            CacheLookupResult::Miss
+        ));
     }
 
     #[tokio::test]
     async fn test_stale_while_revalidate() {
         let config = CacheConfig {
             max_size: 100,
-            default_ttl: Duration::from_secs(60),
-            stale_while_revalidate: Some(Duration::from_secs(30)),
+            default_ttl: Duration::from_millis(10),
+            stale_while_revalidate: Some(Duration::from_millis(100)),
             invalidate_on_mutation: true,
             redis_url: None,
             vary_headers: vec![],
@@ -1164,24 +1227,32 @@ mod tests {
         let cache = ResponseCache::new(config);
         let cache_key = "stale_test".to_string();
 
-        cache.put(
-            cache_key.clone(),
-            serde_json::json!({"test": true}),
-            HashSet::new(),
-            HashSet::new(),
-        ).await;
+        cache
+            .put(
+                cache_key.clone(),
+                serde_json::json!({"test": true}),
+                HashSet::new(),
+                HashSet::new(),
+            )
+            .await;
 
         // Wait past TTL but within stale window
-        std::thread::sleep(Duration::from_millis(15));
+        std::thread::sleep(Duration::from_millis(20));
 
         // Should be a stale hit
-        assert!(matches!(cache.get(&cache_key).await, CacheLookupResult::Stale(_)));
+        assert!(matches!(
+            cache.get(&cache_key).await,
+            CacheLookupResult::Stale(_)
+        ));
 
         // Wait past stale window
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(200));
 
         // Should be a miss now
-        assert!(matches!(cache.get(&cache_key).await, CacheLookupResult::Miss));
+        assert!(matches!(
+            cache.get(&cache_key).await,
+            CacheLookupResult::Miss
+        ));
     }
 
     #[tokio::test]
@@ -1189,24 +1260,30 @@ mod tests {
         let cache = ResponseCache::new(CacheConfig::default());
 
         // Add entries with type references
-        cache.put(
-            "key1".to_string(),
-            serde_json::json!({}),
-            HashSet::from(["User".to_string()]),
-            HashSet::new(),
-        ).await;
-        cache.put(
-            "key2".to_string(),
-            serde_json::json!({}),
-            HashSet::from(["User".to_string()]),
-            HashSet::new(),
-        ).await;
-        cache.put(
-            "key3".to_string(),
-            serde_json::json!({}),
-            HashSet::from(["Product".to_string()]),
-            HashSet::new(),
-        ).await;
+        cache
+            .put(
+                "key1".to_string(),
+                serde_json::json!({}),
+                HashSet::from(["User".to_string()]),
+                HashSet::new(),
+            )
+            .await;
+        cache
+            .put(
+                "key2".to_string(),
+                serde_json::json!({}),
+                HashSet::from(["User".to_string()]),
+                HashSet::new(),
+            )
+            .await;
+        cache
+            .put(
+                "key3".to_string(),
+                serde_json::json!({}),
+                HashSet::from(["Product".to_string()]),
+                HashSet::new(),
+            )
+            .await;
 
         assert_eq!(cache.len(), 3);
 
@@ -1223,18 +1300,22 @@ mod tests {
     async fn test_invalidate_by_entity() {
         let cache = ResponseCache::new(CacheConfig::default());
 
-        cache.put(
-            "key1".to_string(),
-            serde_json::json!({}),
-            HashSet::new(),
-            HashSet::from(["User#123".to_string()]),
-        ).await;
-        cache.put(
-            "key2".to_string(),
-            serde_json::json!({}),
-            HashSet::new(),
-            HashSet::from(["User#456".to_string()]),
-        ).await;
+        cache
+            .put(
+                "key1".to_string(),
+                serde_json::json!({}),
+                HashSet::new(),
+                HashSet::from(["User#123".to_string()]),
+            )
+            .await;
+        cache
+            .put(
+                "key2".to_string(),
+                serde_json::json!({}),
+                HashSet::new(),
+                HashSet::from(["User#456".to_string()]),
+            )
+            .await;
 
         assert_eq!(cache.len(), 2);
 
@@ -1247,7 +1328,7 @@ mod tests {
     #[tokio::test]
     async fn test_lru_eviction() {
         let config = CacheConfig {
-            max_size: 10,
+            max_size: 3,
             default_ttl: Duration::from_secs(60),
             stale_while_revalidate: None,
             invalidate_on_mutation: true,
@@ -1259,12 +1340,14 @@ mod tests {
 
         // Add 4 entries (exceeds capacity)
         for i in 0..4 {
-            cache.put(
-                format!("key{}", i),
-                serde_json::json!({"num": i}),
-                HashSet::new(),
-                HashSet::new(),
-            ).await;
+            cache
+                .put(
+                    format!("key{}", i),
+                    serde_json::json!({"num": i}),
+                    HashSet::new(),
+                    HashSet::new(),
+                )
+                .await;
         }
 
         // First entry should be evicted
@@ -1330,12 +1413,14 @@ mod tests {
     #[tokio::test]
     async fn test_clear_cache() {
         let cache = ResponseCache::new(CacheConfig::default());
-        cache.put(
-            "key1".to_string(),
-            serde_json::json!({}),
-            HashSet::from(["User".to_string()]),
-            HashSet::from(["User#1".to_string()]),
-        ).await;
+        cache
+            .put(
+                "key1".to_string(),
+                serde_json::json!({}),
+                HashSet::from(["User".to_string()]),
+                HashSet::from(["User#1".to_string()]),
+            )
+            .await;
 
         assert_eq!(cache.len(), 1);
         cache.clear().await;
@@ -1364,11 +1449,17 @@ mod tests {
         cache.put_all_entities(&response, None).await;
 
         // Verify "Alice" is cached by field/ID
-        let alice = cache.get_entity("User", "123").await.expect("Alice should be cached");
+        let alice = cache
+            .get_entity("User", "123")
+            .await
+            .expect("Alice should be cached");
         assert_eq!(alice["name"], "Alice");
 
         // Verify nested "Bob" is also cached by field/ID
-        let bob = cache.get_entity("User", "456").await.expect("Bob should be cached");
+        let bob = cache
+            .get_entity("User", "456")
+            .await
+            .expect("Bob should be cached");
         assert_eq!(bob["name"], "Bob");
     }
 }

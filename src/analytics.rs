@@ -21,12 +21,12 @@
 //! # }
 //! ```
 
+use parking_lot::RwLock; // SECURITY: Non-poisoning locks
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;  // SECURITY: Non-poisoning locks
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use sha2::{Digest, Sha256};  // SECURITY: Use cryptographic hash
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH}; // SECURITY: Use cryptographic hash
 
 /// Configuration for query analytics
 #[derive(Debug, Clone)]
@@ -177,7 +177,7 @@ impl QueryStats {
         self.avg_time_ms = self.total_time_ms as f64 / self.execution_count as f64;
         self.min_time_ms = self.min_time_ms.min(duration_ms);
         self.max_time_ms = self.max_time_ms.max(duration_ms);
-        
+
         // Approximate P95 using exponential moving average
         if self.execution_count == 1 {
             self.p95_time_ms = duration_ms as f64;
@@ -187,11 +187,11 @@ impl QueryStats {
                 self.p95_time_ms = self.p95_time_ms * (1.0 - alpha) + duration_ms as f64 * alpha;
             }
         }
-        
+
         if had_error {
             self.error_count += 1;
         }
-        
+
         self.last_execution = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -356,34 +356,34 @@ impl QueryAnalytics {
     ) {
         let duration_ms = duration.as_millis() as u64;
         let query_hash = self.hash_query(query);
-        
+
         let mut state = self.state.write();
-        
+
         // Update totals
         state.total_requests += 1;
         state.total_latency_ms += duration_ms;
         if had_error {
             state.total_errors += 1;
         }
-        
+
         // Track request timestamp for rate calculation
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
         state.requests_in_window.push(now);
-        
+
         // Prune old timestamps (keep last minute)
         let cutoff = now.saturating_sub(60);
         state.requests_in_window.retain(|&t| t > cutoff);
-        
+
         // Update query stats
         let query_text = if self.config.track_query_text {
             Some(Self::truncate_query(query, 500))
         } else {
             None
         };
-        
+
         let query_stats = state.queries.entry(query_hash.clone()).or_insert_with(|| {
             QueryStats::new(
                 query_hash.clone(),
@@ -393,22 +393,23 @@ impl QueryAnalytics {
             )
         });
         query_stats.record_execution(duration_ms, had_error);
-        
+
         // Track error if present
         if let Some((code, message)) = error_details {
             let error_key = code.to_string();
-            let error_stats = state.errors.entry(error_key.clone()).or_insert_with(|| {
-                ErrorStats::new(code.to_string(), message.to_string())
-            });
+            let error_stats = state
+                .errors
+                .entry(error_key.clone())
+                .or_insert_with(|| ErrorStats::new(code.to_string(), message.to_string()));
             error_stats.occurrence_count += 1;
             error_stats.last_occurrence = now;
-            if !error_stats.affected_queries.contains(&query_hash) 
-                && error_stats.affected_queries.len() < 10 
+            if !error_stats.affected_queries.contains(&query_hash)
+                && error_stats.affected_queries.len() < 10
             {
                 error_stats.affected_queries.push(query_hash.clone());
             }
         }
-        
+
         // Prune if over limits
         if state.queries.len() > self.config.max_queries {
             self.prune_queries(&mut state);
@@ -422,24 +423,25 @@ impl QueryAnalytics {
     pub fn record_field(&self, parent_type: &str, field_name: &str, duration: Option<Duration>) {
         let key = format!("{}.{}", parent_type, field_name);
         let duration_ms = duration.map(|d| d.as_millis() as f64).unwrap_or(0.0);
-        
+
         let mut state = self.state.write();
-        let field_stats = state.fields.entry(key.clone()).or_insert_with(|| {
-            FieldStats::new(field_name.to_string(), parent_type.to_string())
-        });
-        
+        let field_stats = state
+            .fields
+            .entry(key.clone())
+            .or_insert_with(|| FieldStats::new(field_name.to_string(), parent_type.to_string()));
+
         field_stats.request_count += 1;
         if duration_ms > 0.0 {
             // Running average
-            field_stats.avg_time_ms = 
+            field_stats.avg_time_ms =
                 (field_stats.avg_time_ms * (field_stats.request_count - 1) as f64 + duration_ms)
-                / field_stats.request_count as f64;
+                    / field_stats.request_count as f64;
         }
         field_stats.last_requested = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Prune if over limit
         if state.fields.len() > self.config.max_fields {
             self.prune_fields(&mut state);
@@ -459,29 +461,29 @@ impl QueryAnalytics {
     /// Get current analytics snapshot
     pub fn get_snapshot(&self) -> AnalyticsSnapshot {
         let state = self.state.read();
-        
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         // Calculate requests per minute
         let requests_per_minute = state.requests_in_window.len() as f64;
-        
+
         // Calculate error rate
         let error_rate = if state.total_requests > 0 {
             (state.total_errors as f64 / state.total_requests as f64) * 100.0
         } else {
             0.0
         };
-        
+
         // Calculate average latency
         let avg_latency_ms = if state.total_requests > 0 {
             state.total_latency_ms as f64 / state.total_requests as f64
         } else {
             0.0
         };
-        
+
         // Calculate cache hit rate
         let cache_hit_rate = {
             let total_cache = state.cache_hits + state.cache_misses;
@@ -491,34 +493,38 @@ impl QueryAnalytics {
                 None
             }
         };
-        
+
         // Get top queries by count
         let mut top_queries: Vec<_> = state.queries.values().cloned().collect();
         top_queries.sort_by(|a, b| b.execution_count.cmp(&a.execution_count));
         top_queries.truncate(20);
-        
+
         // Get slowest queries by average time
         let mut slowest_queries: Vec<_> = state.queries.values().cloned().collect();
         slowest_queries.sort_by(|a, b| {
-            b.avg_time_ms.partial_cmp(&a.avg_time_ms).unwrap_or(std::cmp::Ordering::Equal)
+            b.avg_time_ms
+                .partial_cmp(&a.avg_time_ms)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         slowest_queries.truncate(20);
-        
+
         // Get top fields
         let mut top_fields: Vec<_> = state.fields.values().cloned().collect();
         top_fields.sort_by(|a, b| b.request_count.cmp(&a.request_count));
         top_fields.truncate(50);
-        
+
         // Get error patterns
         let mut error_patterns: Vec<_> = state.errors.values().cloned().collect();
         error_patterns.sort_by(|a, b| b.occurrence_count.cmp(&a.occurrence_count));
-        
+
         // Requests by type
         let mut requests_by_type: HashMap<String, u64> = HashMap::new();
         for query in state.queries.values() {
-            *requests_by_type.entry(query.operation_type.clone()).or_insert(0) += query.execution_count;
+            *requests_by_type
+                .entry(query.operation_type.clone())
+                .or_insert(0) += query.execution_count;
         }
-        
+
         AnalyticsSnapshot {
             timestamp: now,
             total_requests: state.total_requests,
@@ -556,7 +562,7 @@ impl QueryAnalytics {
     fn hash_query(&self, query: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(query.as_bytes());
-        hex::encode(hasher.finalize())[..16].to_string()  // First 16 chars for reasonable length
+        hex::encode(hasher.finalize())[..16].to_string() // First 16 chars for reasonable length
     }
 
     fn truncate_query(query: &str, max_len: usize) -> String {
@@ -570,11 +576,13 @@ impl QueryAnalytics {
     fn prune_queries(&self, state: &mut AnalyticsState) {
         // Remove least recently used queries
         let cutoff = state.queries.len() - self.config.max_queries + 100;
-        let mut entries: Vec<_> = state.queries.iter()
+        let mut entries: Vec<_> = state
+            .queries
+            .iter()
             .map(|(k, v)| (k.clone(), v.last_execution))
             .collect();
         entries.sort_by_key(|(_, t)| *t);
-        
+
         for (key, _) in entries.into_iter().take(cutoff) {
             state.queries.remove(&key);
         }
@@ -582,11 +590,13 @@ impl QueryAnalytics {
 
     fn prune_fields(&self, state: &mut AnalyticsState) {
         let cutoff = state.fields.len() - self.config.max_fields + 50;
-        let mut entries: Vec<_> = state.fields.iter()
+        let mut entries: Vec<_> = state
+            .fields
+            .iter()
             .map(|(k, v)| (k.clone(), v.last_requested))
             .collect();
         entries.sort_by_key(|(_, t)| *t);
-        
+
         for (key, _) in entries.into_iter().take(cutoff) {
             state.fields.remove(&key);
         }
@@ -594,11 +604,13 @@ impl QueryAnalytics {
 
     fn prune_errors(&self, state: &mut AnalyticsState) {
         let cutoff = state.errors.len() - self.config.max_errors + 20;
-        let mut entries: Vec<_> = state.errors.iter()
+        let mut entries: Vec<_> = state
+            .errors
+            .iter()
             .map(|(k, v)| (k.clone(), v.last_occurrence))
             .collect();
         entries.sort_by_key(|(_, t)| *t);
-        
+
         for (key, _) in entries.into_iter().take(cutoff) {
             state.errors.remove(&key);
         }
@@ -653,9 +665,11 @@ impl AnalyticsGuard {
 impl Drop for AnalyticsGuard {
     fn drop(&mut self) {
         let duration = self.start.elapsed();
-        let error_details = self.error_details.as_ref()
+        let error_details = self
+            .error_details
+            .as_ref()
             .map(|(c, m)| (c.as_str(), m.as_str()));
-        
+
         self.analytics.record_query(
             &self.query,
             self.operation_name.as_deref(),
@@ -687,7 +701,7 @@ mod tests {
     #[test]
     fn test_record_query() {
         let analytics = QueryAnalytics::new(AnalyticsConfig::default());
-        
+
         analytics.record_query(
             "query { user { id } }",
             Some("GetUser"),
@@ -696,7 +710,7 @@ mod tests {
             false,
             None,
         );
-        
+
         let snapshot = analytics.get_snapshot();
         assert_eq!(snapshot.total_requests, 1);
         assert_eq!(snapshot.total_errors, 0);
@@ -706,7 +720,7 @@ mod tests {
     #[test]
     fn test_record_error() {
         let analytics = QueryAnalytics::new(AnalyticsConfig::default());
-        
+
         analytics.record_query(
             "query { invalid }",
             None,
@@ -715,7 +729,7 @@ mod tests {
             true,
             Some(("GRAPHQL_VALIDATION_ERROR", "Unknown field 'invalid'")),
         );
-        
+
         let snapshot = analytics.get_snapshot();
         assert_eq!(snapshot.total_errors, 1);
         assert!(!snapshot.error_patterns.is_empty());
@@ -724,10 +738,10 @@ mod tests {
     #[test]
     fn test_record_field() {
         let analytics = QueryAnalytics::new(AnalyticsConfig::default());
-        
+
         analytics.record_field("User", "email", Some(Duration::from_millis(5)));
         analytics.record_field("User", "email", Some(Duration::from_millis(10)));
-        
+
         let snapshot = analytics.get_snapshot();
         assert!(!snapshot.top_fields.is_empty());
         assert_eq!(snapshot.top_fields[0].request_count, 2);
@@ -736,11 +750,11 @@ mod tests {
     #[test]
     fn test_cache_tracking() {
         let analytics = QueryAnalytics::new(AnalyticsConfig::default());
-        
+
         analytics.record_cache_access(true);
         analytics.record_cache_access(true);
         analytics.record_cache_access(false);
-        
+
         let snapshot = analytics.get_snapshot();
         let hit_rate = snapshot.cache_hit_rate.unwrap();
         assert!((hit_rate - 66.67).abs() < 1.0);
@@ -750,7 +764,7 @@ mod tests {
     fn test_concurrent_access() {
         let analytics = Arc::new(QueryAnalytics::new(AnalyticsConfig::default()));
         let mut handles = vec![];
-        
+
         for i in 0..10 {
             let analytics = Arc::clone(&analytics);
             handles.push(thread::spawn(move || {
@@ -766,11 +780,11 @@ mod tests {
                 }
             }));
         }
-        
+
         for handle in handles {
             handle.join().unwrap();
         }
-        
+
         let snapshot = analytics.get_snapshot();
         assert_eq!(snapshot.total_requests, 1000);
     }

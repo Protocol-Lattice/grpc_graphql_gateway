@@ -7,9 +7,8 @@ use std::time::Duration;
 use anyhow::Result;
 use futures::StreamExt;
 use grpc_graphql_gateway::{
-    Gateway, GrpcClient, HeaderPropagationConfig, RateLimitMiddleware,
-    EnhancedLoggingMiddleware, LoggingConfig, LogLevel, AnalyticsConfig,
-    HighPerfConfig,
+    Gateway, GrpcClient, HeaderPropagationConfig,
+    HighPerfConfig, RateLimitMiddleware,
 };
 use tokio::fs;
 use tokio::sync::RwLock;
@@ -85,11 +84,11 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
     // This demonstrates the OpenAPI integration feature
     // We embed the YAML at compile time to avoid path issues
     const OPENAPI_YAML: &str = include_str!("jsonplaceholder.yaml");
-    
+
     let jsonplaceholder_api = grpc_graphql_gateway::OpenApiParser::from_string(OPENAPI_YAML, true)
         .expect("Failed to parse OpenAPI YAML")
-        .with_prefix("jp_")  // Prefix all operations with jp_ to namespace them
-        .with_tags(vec!["posts".to_string(), "users".to_string()])  // Only posts and users
+        .with_prefix("jp_") // Prefix all operations with jp_ to namespace them
+        .with_tags(vec!["posts".to_string(), "users".to_string()]) // Only posts and users
         .build()
         .expect("Failed to build REST connector from OpenAPI spec");
 
@@ -107,7 +106,6 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         // Add a rate limiter: 10 req/s with burst of 5
         .add_middleware(RateLimitMiddleware::new(10, 5))
         .with_high_performance(HighPerfConfig::ultra_fast())
-
         // Add enhanced structured logging middleware
         /*
         .add_middleware(EnhancedLoggingMiddleware::new(
@@ -124,41 +122,47 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         })
         // Enable Circuit Breaker for resilience
         .with_circuit_breaker(grpc_graphql_gateway::CircuitBreakerConfig {
-            failure_threshold: 3,                              // Open after 3 failures
-            recovery_timeout: Duration::from_secs(10),         // Test recovery after 10s
-            half_open_max_requests: 2,                         // Allow 2 test requests
+            failure_threshold: 3,                      // Open after 3 failures
+            recovery_timeout: Duration::from_secs(10), // Test recovery after 10s
+            half_open_max_requests: 2,                 // Allow 2 test requests
         })
         // Enable Response Caching for performance
         .with_response_cache(grpc_graphql_gateway::CacheConfig {
-            max_size: 10000,                                   // Increase max size for benchmark
-            default_ttl: Duration::from_secs(3600),            // Longer TTL for benchmark
+            max_size: 10000,                        // Increase max size for benchmark
+            default_ttl: Duration::from_secs(3600), // Longer TTL for benchmark
             stale_while_revalidate: Some(Duration::from_secs(30)),
             invalidate_on_mutation: true,
-            redis_url: None,                                   // Use in-memory ShardedCache for max speed
+            redis_url: None, // Use in-memory ShardedCache for max speed
             vary_headers: vec!["Authorization".to_string()],
-            smart_ttl_manager: None,                           // Optional: Add SmartTtlManager for intelligent TTL
+            smart_ttl_manager: None, // Optional: Add SmartTtlManager for intelligent TTL
         })
         // Enable Response Compression for bandwidth savings
         .with_compression(grpc_graphql_gateway::CompressionConfig::default())
         // Enable Header Propagation for auth and tracing
-        .with_header_propagation(HeaderPropagationConfig::new()
-            .propagate("authorization")
-            .propagate("x-request-id")
-            .propagate("x-tenant-id")
-            .propagate_with_prefix("x-custom-"))
+        .with_header_propagation(
+            HeaderPropagationConfig::new()
+                .propagate("authorization")
+                .propagate("x-request-id")
+                .propagate("x-tenant-id")
+                .propagate_with_prefix("x-custom-"),
+        )
         // Enable Query Whitelisting for production security
         .with_query_whitelist(
             grpc_graphql_gateway::QueryWhitelistConfig::from_json_file(
                 "examples/allowed_queries.json",
-                grpc_graphql_gateway::WhitelistMode::Warn
+                grpc_graphql_gateway::WhitelistMode::Warn,
             )
             .map(|mut c| {
                 c.allow_introspection = true;
                 c
-            }).unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to load query whitelist: {}. Using empty whitelist.", e);
-                grpc_graphql_gateway::QueryWhitelistConfig::warn()
             })
+            .unwrap_or_else(|e| {
+                eprintln!(
+                    "Warning: Failed to load query whitelist: {}. Using empty whitelist.",
+                    e
+                );
+                grpc_graphql_gateway::QueryWhitelistConfig::warn()
+            }),
         )
         // Enable Query Analytics Dashboard
         // .enable_analytics(AnalyticsConfig::development())
@@ -224,7 +228,10 @@ fn print_examples(addr: SocketAddr) {
     println!("=== Query Analytics Dashboard ===");
     println!("  Dashboard UI: http://{}/analytics", addr);
     println!("  JSON API:     http://{}/analytics/api", addr);
-    println!("  Reset:        curl -X POST http://{}/analytics/reset", addr);
+    println!(
+        "  Reset:        curl -X POST http://{}/analytics/reset",
+        addr
+    );
 }
 
 #[derive(Clone)]
@@ -277,7 +284,7 @@ impl Greeter for ExampleGreeter {
         if let Some(tenant) = metadata.get("x-tenant-id") {
             info!("Received X-Tenant-ID: {:?}", tenant);
         }
-        
+
         let req = request.into_inner();
         let reply = self.build_reply(normalize_name(req.name), "query").await;
         Ok(Response::new(reply))

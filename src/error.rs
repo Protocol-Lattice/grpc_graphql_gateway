@@ -84,7 +84,7 @@ impl Error {
         let is_production = std::env::var("ENV")
             .map(|e| e == "production" || e == "prod")
             .unwrap_or(false);
-        
+
         let message = if is_production {
             // SECURITY: Sanitize internal errors for production
             match self {
@@ -109,7 +109,7 @@ impl Error {
             // In development, show full error details
             self.to_string()
         };
-        
+
         GraphQLError {
             message,
             extensions: self.extensions(),
