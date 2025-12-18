@@ -1,4 +1,5 @@
 use std::env;
+use std::error::Error;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -145,14 +146,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tcp_nodelay(true)
         .build()?;
 
+    let mut warmup_handles = Vec::with_capacity(concurrency);
     for _ in 0..concurrency {
-        let _ = warmup_client
-            .post(&url)
-            .json(&serde_json::json!({
-                "query": "{ __typename }"
-            }))
-            .send()
-            .await;
+        let client = warmup_client.clone();
+        let url = url.clone();
+        warmup_handles.push(tokio::spawn(async move {
+            let _ = client
+                .post(&url)
+                .json(&serde_json::json!({
+                    "query": "{ __typename }"
+                }))
+                .send()
+                .await;
+        }));
+    }
+    for handle in warmup_handles {
+        let _ = handle.await;
     }
     println!("✓ Warmup complete\n");
 
@@ -160,17 +169,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::builder()
         .pool_max_idle_per_host(concurrency * 2)
         .pool_idle_timeout(Duration::from_secs(90))
-        .http2_prior_knowledge() // Force HTTP/2 for better multiplexing
-        .http2_initial_stream_window_size(65535 * 16)
-        .http2_initial_connection_window_size(65535 * 16)
-        .http2_adaptive_window(true)
         .tcp_nodelay(true)
         .tcp_keepalive(Duration::from_secs(30))
         .timeout(Duration::from_secs(30))
         .build()?;
 
-    let start_time = Instant::now();
-    let end_time = start_time + Duration::from_secs(duration);
+    // We'll set start_time after the barrier to measure actual benchmark duration
+    let start_time = Arc::new(tokio::sync::OnceCell::new());
+    let end_time_arc = Arc::new(tokio::sync::OnceCell::new());
 
     // Atomic counters for thread-safe metrics
     let successful = Arc::new(AtomicU64::new(0));
@@ -191,16 +197,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let min_latency = min_latency.clone();
         let max_latency = max_latency.clone();
         let barrier = barrier.clone();
+        let start_time = start_time.clone();
+        let end_time_arc = end_time_arc.clone();
 
         handles.push(tokio::spawn(async move {
             // Wait for all workers to be ready
             barrier.wait().await;
+            
+            // Set global start time if not already set
+            let _ = start_time.set(Instant::now());
+            let end_time = *start_time.get().unwrap() + Duration::from_secs(duration);
+            let _ = end_time_arc.set(end_time);
 
-            let mut local_successful = 0u64;
-            let mut local_errors = 0u64;
-            let mut local_latency = 0u64;
             let mut local_min = u64::MAX;
             let mut local_max = 0u64;
+            let mut local_errors = 0u64;
 
             while Instant::now() < end_time {
                 let query = match mode {
@@ -252,26 +263,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let latency_us = req_start.elapsed().as_micros() as u64;
                         
                         if resp.status().is_success() {
-                            local_successful += 1;
-                            local_latency += latency_us;
+                            successful.fetch_add(1, Ordering::Relaxed);
+                            total_latency.fetch_add(latency_us, Ordering::Relaxed);
                             local_min = local_min.min(latency_us);
                             local_max = local_max.max(latency_us);
                         } else {
+                            errors.fetch_add(1, Ordering::Relaxed);
+                            if local_errors < 5 {
+                                eprintln!("  ⚠️ Worker {} received error: HTTP {}", worker_id, resp.status());
+                            }
                             local_errors += 1;
                         }
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        errors.fetch_add(1, Ordering::Relaxed);
+                        if local_errors < 5 {
+                            let mut msg = format!("  ⚠️ Worker {} request error: {}", worker_id, e);
+                            if let Some(source) = e.source() {
+                                msg.push_str(&format!(" (Source: {})", source));
+                            }
+                            eprintln!("{}", msg);
+                        }
                         local_errors += 1;
                     }
                 }
             }
 
-            // Update global counters
-            successful.fetch_add(local_successful, Ordering::Relaxed);
-            errors.fetch_add(local_errors, Ordering::Relaxed);
-            total_latency.fetch_add(local_latency, Ordering::Relaxed);
-
-            // Update min/max with CAS loops
+            // Update min/max with CAS loops at the end of the worker's run
             let mut current_min = min_latency.load(Ordering::Relaxed);
             while local_min < current_min {
                 match min_latency.compare_exchange_weak(
@@ -304,15 +322,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let progress_handle = {
         let successful = successful.clone();
         let errors = errors.clone();
+        let end_time_arc = end_time_arc.clone();
         tokio::spawn(async move {
+            // Wait for end_time to be set
+            while end_time_arc.get().is_none() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let end_time = *end_time_arc.get().unwrap();
+            
             let mut last_count = 0u64;
             while Instant::now() < end_time {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 let current = successful.load(Ordering::Relaxed);
                 let current_errors = errors.load(Ordering::Relaxed);
-                let delta = current - last_count;
+                let delta = if current >= last_count { current - last_count } else { 0 };
                 println!(
-                    "  📊 {} requests/sec | Total: {} | Errors: {}",
+                    "  📊 {:>7} requests/sec | Total: {:>8} | Errors: {:>6}",
                     delta, current, current_errors
                 );
                 last_count = current;
@@ -326,7 +351,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     progress_handle.abort();
 
-    let actual_duration = start_time.elapsed();
+    let actual_start = *start_time.get().unwrap_or(&Instant::now());
+    let actual_duration = actual_start.elapsed();
     let total_successful = successful.load(Ordering::Relaxed);
     let total_errors = errors.load(Ordering::Relaxed);
     let total_latency_us = total_latency.load(Ordering::Relaxed);

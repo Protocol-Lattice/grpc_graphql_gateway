@@ -84,7 +84,7 @@ impl HighPerfConfig {
     pub fn ultra_fast() -> Self {
         Self {
             cache_shards: 128,
-            max_entries_per_shard: 50_000,
+            max_entries_per_shard: 100_000,
             buffer_pool_size: 4096,
             simd_json_enabled: true,
             connections_per_backend: 200,

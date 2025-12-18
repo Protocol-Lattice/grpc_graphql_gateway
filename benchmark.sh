@@ -25,14 +25,14 @@ lsof -ti:8888 | xargs kill -9 2>/dev/null || true
 sleep 1
 
 echo "Starting Gateway Server..."
-# Using release binary directly
-./target/release/greeter > server.log 2>&1 &
+# Using release binary directly with increased worker threads
+RUST_LOG=error TOKIO_WORKER_THREADS=16 ./target/release/greeter > server.log 2>&1 &
 SERVER_PID=$!
 
 echo "Waiting for server..."
 STARTED=false
 for i in {1..30}; do
-    if grep -q "Gateway server listening" server.log; then STARTED=true; break; fi
+    if grep -q "GraphQL endpoint:" server.log; then STARTED=true; break; fi
     sleep 1
 done
 
@@ -48,13 +48,13 @@ echo "--------------------------------------------------------"
 echo "Running Benchmark 1: Cached Requests (Gateway Overhead)"
 echo "--------------------------------------------------------"
 # Run the benchmark binary (Default = Cached)
-./target/release/benchmark
+./target/release/benchmark --concurrency=100 --duration=30
 
 echo ""
 echo "--------------------------------------------------------"
 echo "Running Benchmark 2: Uncached Requests (Full Integration)"
 echo "--------------------------------------------------------"
 # Run the benchmark binary with cache busting
-./target/release/benchmark --disable-cache
+./target/release/benchmark --uncached --concurrency=100 --duration=30
 
 echo -e "${GREEN}Benchmark Suite Complete.${NC}"

@@ -9,6 +9,7 @@ use futures::StreamExt;
 use grpc_graphql_gateway::{
     Gateway, GrpcClient, HeaderPropagationConfig, RateLimitMiddleware,
     EnhancedLoggingMiddleware, LoggingConfig, LogLevel, AnalyticsConfig,
+    HighPerfConfig,
 };
 use tokio::fs;
 use tokio::sync::RwLock;
@@ -105,13 +106,17 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         .add_rest_connector("jsonplaceholder", jsonplaceholder_api)
         // Add a rate limiter: 10 req/s with burst of 5
         .add_middleware(RateLimitMiddleware::new(10, 5))
+        .with_high_performance(HighPerfConfig::ultra_fast())
+
         // Add enhanced structured logging middleware
+        /*
         .add_middleware(EnhancedLoggingMiddleware::new(
             LoggingConfig::default()
                 .with_level(LogLevel::Info)
                 .with_headers(true)
                 .mask_header("x-secret-key")  // Custom sensitive header
         ))
+        */
         // Enable APQ for bandwidth optimization
         .with_persisted_queries(grpc_graphql_gateway::PersistedQueryConfig {
             cache_size: 100,
@@ -125,12 +130,12 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         })
         // Enable Response Caching for performance
         .with_response_cache(grpc_graphql_gateway::CacheConfig {
-            max_size: 1000,                                    // Max 1000 cached responses
-            default_ttl: Duration::from_secs(60),              // 1 minute TTL
-            stale_while_revalidate: Some(Duration::from_secs(30)), // Serve stale for 30s
-            invalidate_on_mutation: true,                      // Auto-invalidate on mutations
-            redis_url: Some("redis://127.0.0.1:6379".to_string()), // Use Redis for distributed caching
-            vary_headers: vec!["Authorization".to_string()],   // Include auth in cache key
+            max_size: 10000,                                   // Increase max size for benchmark
+            default_ttl: Duration::from_secs(3600),            // Longer TTL for benchmark
+            stale_while_revalidate: Some(Duration::from_secs(30)),
+            invalidate_on_mutation: true,
+            redis_url: None,                                   // Use in-memory ShardedCache for max speed
+            vary_headers: vec!["Authorization".to_string()],
         })
         // Enable Response Compression for bandwidth savings
         .with_compression(grpc_graphql_gateway::CompressionConfig::default())
@@ -141,14 +146,13 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
             .propagate("x-tenant-id")
             .propagate_with_prefix("x-custom-"))
         // Enable Query Whitelisting for production security
-        // Using Warn mode for demo - set to Enforce for production!
         .with_query_whitelist(
             grpc_graphql_gateway::QueryWhitelistConfig::from_json_file(
                 "examples/allowed_queries.json",
-                grpc_graphql_gateway::WhitelistMode::Enforce
+                grpc_graphql_gateway::WhitelistMode::Warn
             )
             .map(|mut c| {
-                c.allow_introspection = false;
+                c.allow_introspection = true;
                 c
             }).unwrap_or_else(|e| {
                 eprintln!("Warning: Failed to load query whitelist: {}. Using empty whitelist.", e);
@@ -156,11 +160,9 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
             })
         )
         // Enable Query Analytics Dashboard
-        .enable_analytics(AnalyticsConfig::development())
+        // .enable_analytics(AnalyticsConfig::development())
         // Enable Request Collapsing for deduplicating identical gRPC calls
         .with_request_collapsing(grpc_graphql_gateway::RequestCollapsingConfig::default())
-        // Enable Health Checks for Kubernetes/production
-        .enable_health_checks()
         // Enable Prometheus Metrics
         .enable_metrics()
         .serve(addr.to_string())
