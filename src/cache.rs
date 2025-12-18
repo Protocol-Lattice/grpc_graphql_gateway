@@ -40,6 +40,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;  // SECURITY: Use parking_lot for non-poisoning locks
 use std::time::{Duration, SystemTime};
 use serde::{Serialize, Deserialize};
+use crate::smart_ttl::SmartTtlManager;
 
 /// Cache key prefix for Redis to enable safe deletion without FLUSHDB
 const REDIS_CACHE_PREFIX: &str = "gqlcache:";
@@ -61,13 +62,14 @@ const REDIS_ENTITY_PREFIX: &str = "gqlentity:";
 ///     invalidate_on_mutation: true,
 ///     redis_url: None, // Use in-memory cache
 ///     vary_headers: vec!["Authorization".to_string()],
+///     smart_ttl_manager: None, // Use static TTL
 /// };
 /// ```
 #[derive(Clone, Debug)]
 pub struct CacheConfig {
     /// Maximum number of cached responses (for in-memory cache)
     pub max_size: usize,
-    /// Default TTL for cached responses
+    /// Default TTL for cached responses (used when Smart TTL is disabled)
     pub default_ttl: Duration,
     /// Time to serve stale content while revalidating in background
     /// If None, stale content is never served
@@ -80,6 +82,9 @@ pub struct CacheConfig {
     /// Headers that should be included in the cache key (e.g. "Authorization", "X-User-Id")
     /// Defaults to ["Authorization"]
     pub vary_headers: Vec<String>,
+    /// Optional Smart TTL Manager for intelligent cache duration optimization
+    /// If provided, TTLs will be automatically adjusted based on query patterns
+    pub smart_ttl_manager: Option<Arc<SmartTtlManager>>,
 }
 
 impl Default for CacheConfig {
@@ -91,6 +96,7 @@ impl Default for CacheConfig {
             invalidate_on_mutation: true,
             redis_url: None,
             vary_headers: vec!["Authorization".to_string()],
+            smart_ttl_manager: None,
         }
     }
 }
@@ -339,13 +345,47 @@ impl ResponseCache {
         }
     }
 
-    /// Store a response in the cache
-    pub async fn put(
+    /// Store a response in the cache with Smart TTL calculation
+    /// 
+    /// If Smart TTL is enabled, this will calculate the optimal TTL based on query type and patterns.
+    /// Otherwise, falls back to default TTL.
+    pub async fn put_with_query(
+        &self,
+        cache_key: String,
+        query: &str,
+        query_type: &str,
+        response: serde_json::Value,
+        referenced_types: HashSet<String>,
+        referenced_entities: HashSet<String>,
+    ) {
+        // Calculate TTL using Smart TTL if available
+        let ttl_secs = if let Some(smart_ttl) = &self.config.smart_ttl_manager {
+            match smart_ttl.calculate_ttl(query, query_type, None).await {
+                ttl_result => {
+                    tracing::debug!(
+                        cache_key = %cache_key,
+                        ttl_secs = ttl_result.ttl.as_secs(),
+                        strategy = ?ttl_result.strategy,
+                        "Smart TTL calculated"
+                    );
+                    ttl_result.ttl.as_secs()
+                }
+            }
+        } else {
+            self.config.default_ttl.as_secs()
+        };
+
+        self.put_with_ttl(cache_key, response, referenced_types, referenced_entities, ttl_secs).await;
+    }
+
+    /// Store a response in the cache with explicit TTL
+    pub async fn put_with_ttl(
         &self,
         cache_key: String,
         response: serde_json::Value,
         referenced_types: HashSet<String>,
         referenced_entities: HashSet<String>,
+        ttl_secs: u64,
     ) {
         match &self.backend {
             CacheBackend::Memory { cache, insertion_order, type_index, entity_index, .. } => {
@@ -355,7 +395,7 @@ impl ResponseCache {
                 let entry = CachedResponse {
                     data: response,
                     created_at: SystemTime::now(),
-                    ttl_secs: self.config.default_ttl.as_secs(),
+                    ttl_secs,
                     referenced_types: referenced_types.clone(),
                     referenced_entities: referenced_entities.clone(),
                 };
@@ -394,7 +434,7 @@ impl ResponseCache {
                             .insert(cache_key.clone());
                     }
                 }
-                 tracing::debug!(cache_key = %cache_key, "Response cached (Memory)");
+                tracing::debug!(cache_key = %cache_key, ttl_secs = ttl_secs, "Response cached (Memory)");
             }
             CacheBackend::Redis { client, .. } => {
                 let mut conn = match client.get_multiplexed_async_connection().await {
@@ -408,7 +448,7 @@ impl ResponseCache {
                let entry = CachedResponse {
                    data: response,
                    created_at: SystemTime::now(),
-                   ttl_secs: self.config.default_ttl.as_secs(),
+                   ttl_secs,
                    referenced_types: referenced_types.clone(),
                    referenced_entities: referenced_entities.clone(),
                };
@@ -426,7 +466,7 @@ impl ResponseCache {
                pipe.atomic();
                
                // SETEX cache_key ttl json
-               pipe.set_ex(&cache_key, json, self.config.default_ttl.as_secs());
+               pipe.set_ex(&cache_key, json, ttl_secs);
                
                // Add to type indexes
                for type_name in &referenced_types {
@@ -441,10 +481,22 @@ impl ResponseCache {
                if let Err(e) = pipe.query_async::<()>(&mut conn).await {
                     tracing::error!("Redis PUT error: {}", e);
                } else {
-                    tracing::debug!(cache_key = %cache_key, "Response cached (Redis)");
+                    tracing::debug!(cache_key = %cache_key, ttl_secs = ttl_secs, "Response cached (Redis)");
                }
             }
         }
+    }
+
+    /// Store a response in the cache with default TTL (legacy method)
+    pub async fn put(
+        &self,
+        cache_key: String,
+        response: serde_json::Value,
+        referenced_types: HashSet<String>,
+        referenced_entities: HashSet<String>,
+    ) {
+        let ttl_secs = self.config.default_ttl.as_secs();
+        self.put_with_ttl(cache_key, response, referenced_types, referenced_entities, ttl_secs).await;
     }
 
     /// Explicitly cache individual entities found in a response

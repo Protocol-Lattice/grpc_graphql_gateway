@@ -42,11 +42,14 @@
 - [Introspection Control](./advanced/introspection.md)
 - [REST API Connectors](./advanced/rest-connectors.md)
 - [OpenAPI Integration](./advanced/openapi.md)
+- [Query Cost Analysis](./advanced/query-cost-analysis.md)
 
 # Performance & Resilience
 
 - [High Performance](./performance/high-performance.md)
 - [Response Caching](./performance/caching.md)
+- [Smart TTL Management](./performance/smart-ttl.md)
+- [Smart TTL Integration Guide](./performance/smart-ttl-integration.md)
 - [Response Compression](./performance/compression.md)
 - [Request Collapsing](./performance/request-collapsing.md)
 - [Automatic Persisted Queries](./performance/apq.md)
@@ -64,6 +67,7 @@
 - [Configuration Reference](./production/configuration.md)
 - [Cost Analysis](./production/cost-analysis.md)
 - [Cost Optimization Strategies](./production/cost-optimization-strategies.md)
+- [Cost Reduction Features](./production/cost-reduction-features.md)
 
 # Reference
 
