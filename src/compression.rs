@@ -136,6 +136,7 @@ pub struct CompressionConfig {
     /// Enabled compression algorithms in preference order (default: ["br", "gzip", "deflate"])
     ///
     /// Supported values:
+    /// - `"gbp-lz4"` - GraphQL Binary Protocol + LZ4 (99% compression)
     /// - `"lz4"` - LZ4 (ultra-fast, great for high-throughput)
     /// - `"br"` - Brotli (recommended, best ratio)
     /// - `"gzip"` - Gzip (widely supported)
@@ -150,7 +151,7 @@ impl Default for CompressionConfig {
             enabled: true,
             level: CompressionLevel::Default,
             min_size_bytes: 1024,
-            algorithms: vec!["br".into(), "gzip".into(), "deflate".into()],
+            algorithms: vec!["gbp-lz4".into(), "br".into(), "gzip".into(), "deflate".into()],
         }
     }
 }
@@ -252,32 +253,26 @@ impl CompressionConfig {
         self.enabled && self.algorithms.iter().any(|a| a == "zstd")
     }
 
+    /// Check if gbp-lz4 compression is enabled.
+    pub fn gbp_lz4_enabled(&self) -> bool {
+        self.enabled && self.algorithms.iter().any(|a| a == "gbp-lz4")
+    }
+
     /// Check if lz4 compression is enabled.
     pub fn lz4_enabled(&self) -> bool {
         self.enabled && self.algorithms.iter().any(|a| a == "lz4")
     }
 
-    /// Create an ultra-fast config using LZ4 compression.
+    /// Create an ultra-fast config using GBP + LZ4 compression.
     ///
-    /// LZ4 is ideal for high-throughput scenarios where CPU time is more
-    /// valuable than bandwidth. It offers:
-    /// - 10-20x faster compression than gzip
-    /// - 5-10x faster decompression
-    /// - ~50-60% compression ratio (vs 70-80% for gzip)
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use grpc_graphql_gateway::CompressionConfig;
-    ///
-    /// let config = CompressionConfig::ultra_fast();
-    /// ```
+    /// GBP uses structural deduplication to achieve up to 99% compression
+    /// on redundant GraphQL responses, then compresses with LZ4.
     pub fn ultra_fast() -> Self {
         Self {
             enabled: true,
             level: CompressionLevel::Fast,
-            min_size_bytes: 256,  // Lower threshold for ultra-fast LZ4
-            algorithms: vec!["lz4".into()],  // LZ4 only for maximum speed
+            min_size_bytes: 128,  // Even smaller threshold for GBP
+            algorithms: vec!["gbp-lz4".into(), "lz4".into()],
         }
     }
 }

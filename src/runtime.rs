@@ -775,7 +775,13 @@ impl ServeMux {
         // Add compression layer if enabled
         if let Some(ref config) = compression_config {
             if config.enabled {
+                // Add standard compression (brotli, gzip, etc.)
                 router = router.layer(create_compression_layer(config));
+                
+                // Add custom ultra-fast compression (LZ4, GBP-LZ4)
+                if config.lz4_enabled() || config.gbp_lz4_enabled() {
+                    router = router.layer(axum::middleware::from_fn(crate::lz4_compression::lz4_compression_middleware));
+                }
             }
         }
 

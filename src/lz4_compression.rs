@@ -10,6 +10,8 @@ use axum::{
 };
 use bytes::{Bytes, BytesMut};
 use std::io::{Read, Write};
+use crate::gbp::GbpEncoder;
+use axum::body::to_bytes;
 
 /// LZ4 compression middleware
 ///
@@ -18,27 +20,51 @@ pub async fn lz4_compression_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Response<Body> {
-    // Check if client accepts LZ4
-    let accepts_lz4 = request
-        .headers()
+    let headers = request.headers().clone();
+    let accept_encoding = headers
         .get(header::ACCEPT_ENCODING)
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.contains("lz4"))
-        .unwrap_or(false);
+        .unwrap_or("");
+
+    let accepts_gbp_lz4 = accept_encoding.contains("gbp-lz4");
+    let accepts_lz4 = accept_encoding.contains("lz4");
 
     let response = next.run(request).await;
 
-    // Only compress if client accepts LZ4
-    if !accepts_lz4 {
+    // Only compress if client accepts LZ4 or GBP-LZ4
+    if !accepts_lz4 && !accepts_gbp_lz4 {
         return response;
     }
 
     // Decompose response
     let (mut parts, body) = response.into_parts();
 
-    // Collect body bytes (simplified for now - in production use streaming)
-    // For now, return uncompressed (middleware is opt-in)
-    Response::from_parts(parts, body)
+    // Collect body bytes
+    let bytes = match to_bytes(body, 10 * 1024 * 1024).await { // 10MB limit
+        Ok(b) => b,
+        Err(_) => return Response::from_parts(parts, Body::empty()),
+    };
+
+    if accepts_gbp_lz4 {
+        // Try to parse as JSON first
+        if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            let mut encoder = GbpEncoder::new();
+            if let Ok(compressed) = encoder.encode_lz4(&json_val) {
+                parts.headers.insert(header::CONTENT_ENCODING, header::HeaderValue::from_static("gbp-lz4"));
+                parts.headers.insert(header::CONTENT_TYPE, header::HeaderValue::from_static("application/graphql-response+gbp"));
+                return Response::from_parts(parts, Body::from(compressed));
+            }
+        }
+    }
+
+    if accepts_lz4 {
+        if let Ok(compressed) = compress_lz4(&bytes) {
+            parts.headers.insert(header::CONTENT_ENCODING, header::HeaderValue::from_static("lz4"));
+            return Response::from_parts(parts, Body::from(compressed));
+        }
+    }
+
+    Response::from_parts(parts, Body::from(bytes))
 }
 
 /// Compress data using LZ4

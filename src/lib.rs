@@ -80,6 +80,7 @@ pub mod openapi;
 pub mod lz4_compression;
 pub mod tracing_otel;
 pub mod types;
+pub mod gbp;
 pub mod high_performance;
 
 pub use analytics::{
@@ -164,3 +165,4 @@ pub use high_performance::{
 pub use lz4_compression::{
     lz4_compression_middleware, compress_lz4, decompress_lz4, Lz4CacheCompressor,
 };
+pub use gbp::{GbpEncoder};
