@@ -120,6 +120,7 @@ fastrand = "2.0"
 
 # LZ4 ultra-fast compression
 lz4 = "1.28"
+warp = { version = "0.4.2", features = ["server"] }
 
 [features]
 default = []
@@ -132,6 +133,7 @@ tonic-build = "0.12"
 [dev-dependencies]
 tokio-test = "0.4"
 proptest = "1.4"
+warp = "0.4.2"
 
 
 [lib]
@@ -167,3 +169,15 @@ path = "src/bin/protoc-gen-graphql-template.rs"
 [[bin]]
 name = "benchmark"
 path = "src/bin/benchmark.rs"
+
+[[bin]]
+name = "router"
+path = "src/bin/router.rs"
+
+[[bin]]
+name = "subgraph-users"
+path = "examples/subgraphs/subgraph-users.rs"
+
+[[bin]]
+name = "subgraph-products"
+path = "examples/subgraphs/subgraph-products.rs"

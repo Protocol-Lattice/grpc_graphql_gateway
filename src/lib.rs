@@ -70,6 +70,7 @@ pub mod persisted_queries;
 pub mod query_cost_analyzer;
 pub mod query_whitelist;
 pub mod rest_connector;
+pub mod router;
 pub mod runtime;
 pub mod schema;
 pub mod shutdown;

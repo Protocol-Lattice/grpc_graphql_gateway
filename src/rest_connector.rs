@@ -812,13 +812,30 @@ impl RestConnector {
             .filter_map(|(k, v)| Some((k.to_string(), v.to_str().ok()?.to_string())))
             .collect();
 
-        let body_text = response.text().await.map_err(|e| {
-            error!("Failed to read REST response: {}", e);
-            Error::Schema(format!("Failed to read REST response: {}", e))
-        })?;
+        // Check if response is GBP-encoded
+        let is_gbp = headers
+            .get("content-type")
+            .map(|v| v.contains("application/x-gbp"))
+            .unwrap_or(false);
 
-        let body: JsonValue =
-            serde_json::from_str(&body_text).unwrap_or(JsonValue::String(body_text));
+        let body: JsonValue = if is_gbp {
+            let bytes = response.bytes().await.map_err(|e| {
+                error!("Failed to read REST response bytes: {}", e);
+                Error::Schema(format!("Failed to read REST response: {}", e))
+            })?;
+            
+            let mut decoder = crate::gbp::GbpDecoder::new();
+            decoder.decode_lz4(&bytes).map_err(|e| {
+                error!("Failed to decode GBP response: {}", e);
+                Error::Schema(format!("Failed to decode GBP response: {}", e))
+            })?
+        } else {
+            let body_text = response.text().await.map_err(|e| {
+                error!("Failed to read REST response: {}", e);
+                Error::Schema(format!("Failed to read REST response: {}", e))
+            })?;
+            serde_json::from_str(&body_text).unwrap_or(JsonValue::String(body_text))
+        };
 
         let duration = start.elapsed();
 
