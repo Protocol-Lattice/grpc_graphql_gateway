@@ -67,11 +67,13 @@ pub mod health;
 pub mod metrics;
 pub mod middleware;
 pub mod persisted_queries;
+pub mod query_cost_analyzer;
 pub mod query_whitelist;
 pub mod rest_connector;
 pub mod runtime;
 pub mod schema;
 pub mod shutdown;
+pub mod smart_ttl;
 pub mod subscription;
 pub mod request_collapsing;
 pub mod openapi;
@@ -114,6 +116,9 @@ pub use persisted_queries::{
     create_apq_store, process_apq_request, PersistedQueryConfig, PersistedQueryError,
     PersistedQueryExtension, PersistedQueryStore, SharedPersistedQueryStore,
 };
+pub use query_cost_analyzer::{
+    QueryCostAnalyzer, QueryCostAnalytics, QueryCostConfig, QueryCostResult,
+};
 pub use query_whitelist::{
     QueryWhitelist, QueryWhitelistConfig, QueryWhitelistError, SharedQueryWhitelist,
     WhitelistMode, WhitelistStats,
@@ -123,6 +128,10 @@ pub use schema::SchemaBuilder;
 pub use shutdown::{
     run_with_graceful_shutdown, os_signal_shutdown, RequestGuard, ShutdownConfig,
     ShutdownCoordinator, ShutdownState,
+};
+pub use smart_ttl::{
+    parse_cache_hint, SmartTtlAnalytics, SmartTtlConfig, SmartTtlManager, TtlResult,
+    TtlStrategy,
 };
 pub use subscription::{
     GrpcSubscriptionMapping, GrpcSubscriptionResolver, MultiplexSubscription,
