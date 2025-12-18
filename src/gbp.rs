@@ -1,17 +1,18 @@
 use serde_json::{Value, Map};
-use std::collections::HashMap;
 use lz4::EncoderBuilder;
 use std::io::{Read, Write, Cursor};
+use ahash::{AHashMap, AHasher};
+use std::hash::{Hash, Hasher};
 
 /// GraphQL Binary Protocol (GBP) - ULTRA v8
 #[derive(Default)]
 pub struct GbpEncoder {
-    string_frequencies: HashMap<String, u32>,
+    string_frequencies: AHashMap<String, u32>,
     string_pool: Vec<String>,
-    string_map: HashMap<String, u32>,
+    string_map: AHashMap<String, u32>,
     shape_pool: Vec<Vec<u32>>,
-    shape_map: HashMap<Vec<u32>, u32>,
-    value_map: HashMap<String, u32>,
+    shape_map: AHashMap<Vec<u32>, u32>,
+    value_map: AHashMap<u64, u32>,
     value_counter: u32,
 }
 
@@ -50,7 +51,7 @@ impl GbpEncoder {
     pub fn encode_lz4(&mut self, value: &Value) -> Result<Vec<u8>, std::io::Error> {
         let gbp_data = self.encode(value);
         let mut encoder = EncoderBuilder::new()
-            .level(12) 
+            .level(1) // Level 1 is optimized for speed
             .build(Vec::new())?;
         encoder.write_all(&gbp_data)?;
         let (compressed, result) = encoder.finish();
@@ -78,8 +79,8 @@ impl GbpEncoder {
 
     fn encode_recursive(&mut self, value: &Value, buf: &mut Vec<u8>) {
         if value.is_object() || value.is_array() {
-            let val_key = format!("{}", value);
-            if let Some(&idx) = self.value_map.get(&val_key) {
+            let hash = hash_json_value(value);
+            if let Some(&idx) = self.value_map.get(&hash) {
                 buf.push(0x08);
                 write_varint(idx, buf);
                 return;
@@ -122,22 +123,22 @@ impl GbpEncoder {
                 }
             }
             Value::Object(obj) => {
-                let mut keys: Vec<String> = obj.keys().cloned().collect();
-                keys.sort();
+                let mut keys: Vec<&String> = obj.keys().collect();
+                keys.sort_unstable();
                 let key_indices: Vec<u32> = keys.iter().map(|k| self.get_string_idx(k)).collect();
                 let shape_id = self.get_shape_id(key_indices);
                 
                 buf.push(0x07);
                 write_varint(shape_id, buf);
-                for k in keys { self.encode_recursive(&obj[&k], buf); }
+                for k in keys { self.encode_recursive(&obj[k], buf); }
             }
         }
 
         // Add to value_map AFTER encoding children (Post-Order)
         if (value.is_object() && value.as_object().unwrap().len() > 1) || 
            (value.is_array() && value.as_array().unwrap().len() > 1) {
-            let val_key = format!("{}", value);
-            self.value_map.insert(val_key, self.value_counter);
+            let hash = hash_json_value(value);
+            self.value_map.insert(hash, self.value_counter);
             self.value_counter += 1;
         }
     }
@@ -146,8 +147,8 @@ impl GbpEncoder {
         if arr.len() < 5 { return false; }
         let first = &arr[0];
         if !first.is_object() { return false; }
-        let mut keys: Vec<String> = first.as_object().unwrap().keys().cloned().collect();
-        keys.sort();
+        let mut keys: Vec<&String> = first.as_object().unwrap().keys().collect();
+        keys.sort_unstable();
         for item in arr {
             if !item.is_object() || item.as_object().unwrap().len() != keys.len() { return false; }
         }
@@ -156,7 +157,7 @@ impl GbpEncoder {
         let key_indices: Vec<u32> = keys.iter().map(|k| self.get_string_idx(k)).collect();
         let shape_id = self.get_shape_id(key_indices);
         write_varint(shape_id, buf);
-        for k in &keys {
+        for &k in &keys {
             for item in arr { self.encode_recursive(&item[k], buf); }
         }
         true
@@ -349,6 +350,38 @@ fn read_varint_i64(cursor: &mut Cursor<&[u8]>) -> Result<i64, String> {
     Ok(((val >> 1) as i64) ^ -((val & 1) as i64))
 }
 
+fn hash_json_value(value: &Value) -> u64 {
+    let mut s = AHasher::default();
+    match value {
+        Value::Null => 0.hash(&mut s),
+        Value::Bool(b) => b.hash(&mut s),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.hash(&mut s);
+            } else if let Some(f) = n.as_f64() {
+                f.to_bits().hash(&mut s);
+            } else {
+                n.to_string().hash(&mut s);
+            }
+        }
+        Value::String(st) => st.hash(&mut s),
+        Value::Array(arr) => {
+            arr.len().hash(&mut s);
+            for v in arr {
+                hash_json_value(v).hash(&mut s);
+            }
+        }
+        Value::Object(obj) => {
+            obj.len().hash(&mut s);
+            for (k, v) in obj {
+                k.hash(&mut s);
+                hash_json_value(v).hash(&mut s);
+            }
+        }
+    }
+    s.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,6 +464,41 @@ mod tests {
         assert_eq!(data, decoded);
         
         assert!(reduction >= 99.0, "Reduction was only {:.2}%", reduction);
+    }
+
+    #[test]
+    fn test_gbp_typical_payload_speed() {
+        let mut encoder = GbpEncoder::new();
+        // Generate a typical GraphQL response (e.g., list of 100 items)
+        let data = json!({
+            "data": {
+                "products": (0..100).map(|i| json!({
+                    "id": format!("prod-{}", i),
+                    "title": "High-Performance Gateway License",
+                    "price": 999.99,
+                    "currency": "USD",
+                    "inStock": true,
+                    "attributes": {
+                        "version": "v1.0.0",
+                        "support": "24/7",
+                        "license": "Commercial"
+                    }
+                })).collect::<Vec<_>>()
+            }
+        });
+
+        let json_bytes = serde_json::to_vec(&data).unwrap();
+        println!("\n--- GBP Typical Payload Test ({} bytes) ---", json_bytes.len());
+
+        let start = std::time::Instant::now();
+        let encoded = encoder.encode_lz4(&data).unwrap();
+        let duration = start.elapsed();
+
+        println!("Encoding Time:   {:.3}ms", duration.as_secs_f64() * 1000.0);
+        println!("Size:            {} bytes", encoded.len());
+        
+        // Assert speed < 1ms
+        assert!(duration.as_millis() <= 1, "Encoding took too long: {:.3}ms", duration.as_secs_f64() * 1000.0);
     }
 
     #[test]
