@@ -121,6 +121,7 @@ fastrand = "2.0"
 # LZ4 ultra-fast compression
 lz4 = "1.28"
 warp = { version = "0.4.2", features = ["server"] }
+flate2 = "1.1.5"
 
 [features]
 default = []

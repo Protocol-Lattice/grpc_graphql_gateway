@@ -987,6 +987,7 @@ dependencies = [
  "crossbeam",
  "crossbeam-skiplist",
  "fastrand",
+ "flate2",
  "futures",
  "governor",
  "hex",

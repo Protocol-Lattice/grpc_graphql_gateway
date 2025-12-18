@@ -50,13 +50,12 @@ impl GbpEncoder {
     }
 
     pub fn encode_lz4(&mut self, value: &Value) -> Result<Vec<u8>, std::io::Error> {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
         let gbp_data = self.encode(value);
-        let mut encoder = EncoderBuilder::new()
-            .level(1) // Level 1 is optimized for speed
-            .build(Vec::new())?;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(&gbp_data)?;
-        let (compressed, result) = encoder.finish();
-        result?;
+        let compressed = encoder.finish()?;
         Ok(compressed)
     }
 

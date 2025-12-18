@@ -1,4 +1,5 @@
 //! GBP Router - Speed of Light Edition
+//! Force recompile with Gzip support
 //!
 //! A GraphQL Federation Router optimized to outperform Apollo Router through:
 //! - Zero-copy GBP compression (99% bandwidth reduction)
@@ -179,7 +180,6 @@ async fn main() {
     let app = Router::new()
         .route("/graphql", post(graphql_handler))
         .route("/health", get(health_handler))
-        .layer(CompressionLayer::new())
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", config.port);
@@ -258,21 +258,15 @@ async fn graphql_handler(
                 }
             });
 
-            // GBP encoding path (pooled encoder)
+            // Real GBP Ultra encoding path
             if accept_gbp {
-                let mut encoder = state.get_encoder().await;
-                match encoder.encode_lz4(&response_data) {
-                    Ok(bytes) => {
-                        state.return_encoder(encoder).await;
-                        return (
-                            [(axum::http::header::CONTENT_TYPE, "application/x-gbp")],
-                            bytes,
-                        )
-                            .into_response();
-                    }
-                    Err(_) => {
-                        state.return_encoder(encoder).await;
-                    }
+                let mut encoder = grpc_graphql_gateway::gbp::GbpEncoder::new();
+                if let Ok(bytes) = encoder.encode_lz4(&response_data) {
+                    return (
+                        [(axum::http::header::CONTENT_TYPE, "application/x-gbp")],
+                        bytes,
+                    )
+                        .into_response();
                 }
             }
 

@@ -1,0 +1,34 @@
+{
+    "name": "@protocol-lattice/gbp-decoder",
+    "version": "1.0.0",
+    "description": "High-performance GraphQL Binary Protocol (GBP) decoder for TypeScript",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsc",
+        "prepublishOnly": "npm run build"
+    },
+    "keywords": [
+        "graphql",
+        "binary",
+        "protocol",
+        "gbp",
+        "compression",
+        "lz4"
+    ],
+    "author": "Protocol Lattice",
+    "license": "MIT",
+    "dependencies": {
+        "lz4js": "^0.2.0",
+        "pako": "^2.1.0"
+    },
+    "devDependencies": {
+        "@types/lz4js": "^0.2.2",
+        "@types/node": "^20.0.0",
+        "@types/pako": "^2.0.4",
+        "typescript": "^5.0.0"
+    }
+}
