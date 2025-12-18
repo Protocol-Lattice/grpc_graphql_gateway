@@ -35,9 +35,10 @@ Apollo Server         ██░░░░░░░░░░░░░░░░░�
 
 | Component | Standard (Node.js) | Optimized (Rust) | Monthly Savings |
 |-----------|-------------------|------------------|-----------------|
+
 | **Compute** | ~$1,200 (25 instances) | ~$300 (3 instances) | **$900** |
-| **Bandwidth** | ~$46,000 (518 TB) | ~$900 (Compressed) | **$45,000+** |
-| **Total** | **~$47,200/mo** | **~$1,200/mo** | **97% Cheaper** |
+| **Bandwidth** | ~$46,000 (518 TB) | ~$460 (GBP Ultra: 99% Compression) | **$45,500+** |
+| **Total** | **~$47,200/mo** | **~$760/mo** | **98.4% Cheaper** |
 
 *See the full [Cost Analysis](https://protocol-lattice.github.io/grpc_graphql_gateway/production/cost-analysis.html).*
 
