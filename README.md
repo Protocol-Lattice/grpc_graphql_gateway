@@ -23,18 +23,6 @@ JSON Payload (100MB)       █████████████████�
 GBP Ultra (800KB)          ▏                    0.8% ⚡ (<1ms latency)
 ```
 
-**Benchmark Results (30s duration, 100 workers):**
-| Mode | Throughput | Avg Latency | Error Rate |
-|:-----|:-----------|:------------|:-----------|
-| **Cached** | **100k+ RPS** ✅ | ~1.0ms | 0.00% |
-| **Uncached** | **~90k RPS** ✅ | ~1.1ms | 0.00% |
-
-**25x faster than Node.js** | **100k+ req/s** | **85-95% cost savings**
-**Complete 100k req/s Stack: ~$120/mo**
-
-## 💰 Cost Efficiency (100k req/s)
-*See the full [Cost Analysis](https://protocol-lattice.github.io/grpc_graphql_gateway/production/cost-analysis.html).*
-
 ## ✨ Features
 
 | Category | Capabilities |
