@@ -13,7 +13,7 @@ Transform gRPC microservices into a unified GraphQL API. Zero GraphQL code requi
 ```
 Performance Rankings (Rust):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. grpc_graphql_gateway    ████████████████████ 103,000 req/s 🚀
+1. grpc_graphql_gateway    ████████████████████ 112,000 req/s 🚀
 2. async-graphql (Actix)   █████████░░░░░░░░░░░  45,000 req/s
 3. Juniper (Actix)         ████████░░░░░░░░░░░░  39,000 req/s
 
@@ -21,6 +21,12 @@ Cross-Language:
 grpc_graphql_gateway  ████████████████████████░ 112,313 req/s
 Apollo Server         ██░░░░░░░░░░░░░░░░░░░░░░░  4,000 req/s
 ```
+
+**Benchmark Results (30s duration, 100 workers):**
+| Mode | Throughput | Avg Latency | Error Rate |
+|:-----|:-----------|:------------|:-----------|
+| **Cached** | **100k+ RPS** ✅ | ~1.0ms | 0.00% |
+| **Uncached** | **~90k RPS** ✅ | ~1.1ms | 0.00% |
 
 **25x faster than Node.js** | **100k+ req/s** | **85-95% cost savings**
 **Complete 100k req/s Stack: ~$120/mo**

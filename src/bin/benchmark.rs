@@ -204,10 +204,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Wait for all workers to be ready
             barrier.wait().await;
             
-            // Set global start time if not already set
-            let _ = start_time.set(Instant::now());
-            let end_time = *start_time.get().unwrap() + Duration::from_secs(duration);
-            let _ = end_time_arc.set(end_time);
+            // Set global start time and end time if not already set
+            let start = *start_time.get_or_init(|| async { Instant::now() }).await;
+            let end_time = start + Duration::from_secs(duration);
+            let _ = end_time_arc.get_or_init(|| async { end_time }).await;
 
             let mut local_min = u64::MAX;
             let mut local_max = 0u64;

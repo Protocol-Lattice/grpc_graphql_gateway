@@ -457,7 +457,10 @@ impl ServeMux {
                             // Extract types and entities for invalidation tracking
                             let types = extract_types_from_response(&resp_json);
                             let entities = extract_entities_from_response(&resp_json);
-                            cache.put(cache_key.clone(), resp_json, types, entities).await;
+                            cache.put(cache_key.clone(), resp_json.clone(), types, entities).await;
+                            
+                            // Explicitly cache entities (Cache by Field result)
+                            cache.put_all_entities(&resp_json, None).await;
                             
                             // Also cache in sharded cache if enabled
                             if let Some(ref sharded) = self.sharded_cache {

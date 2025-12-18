@@ -330,6 +330,15 @@ impl ResponseCache {
         }
     }
 
+    /// Retrieve a specific entity from the cache
+    pub async fn get_entity(&self, type_name: &str, id: &str) -> Option<serde_json::Value> {
+        let entity_key = format!("entity:{}#{}", type_name, id);
+        match self.get(&entity_key).await {
+            CacheLookupResult::Hit(entry) => Some(entry.data),
+            _ => None,
+        }
+    }
+
     /// Store a response in the cache
     pub async fn put(
         &self,
@@ -388,56 +397,90 @@ impl ResponseCache {
                  tracing::debug!(cache_key = %cache_key, "Response cached (Memory)");
             }
             CacheBackend::Redis { client, .. } => {
-                 let mut conn = match client.get_multiplexed_async_connection().await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::error!("Redis connection error: {}", e);
-                        return;
-                    }
-                };
-                
-                let entry = CachedResponse {
-                    data: response,
-                    created_at: SystemTime::now(),
-                    ttl_secs: self.config.default_ttl.as_secs(),
-                    referenced_types: referenced_types.clone(),
-                    referenced_entities: referenced_entities.clone(),
-                };
-                
-                let json = match serde_json::to_string(&entry) {
-                    Ok(j) => j,
-                    Err(e) => {
-                        tracing::error!("Serialization error: {}", e);
-                        return;
-                    }
-                };
-                
-                // Pipeline the commands
-                let mut pipe = redis::pipe();
-                pipe.atomic();
-                
-                // SETEX cache_key ttl json
-                pipe.set_ex(&cache_key, json, self.config.default_ttl.as_secs());
-                
-                // Add to type indexes
-                for type_name in &referenced_types {
-                    pipe.sadd(format!("type:{}", type_name), &cache_key);
-                    // Set expiration on the index set too? No, it's hard to synchronize.
-                    // We rely on lazy cleanup or keys evaporating.
-                    // Actually, if we don't clean up indexes, they grow forever.
-                    // In a real system, we'd use consistent expiration or a separate job.
-                    // For now, let's keep it simple.
+                let mut conn = match client.get_multiplexed_async_connection().await {
+                   Ok(c) => c,
+                   Err(e) => {
+                       tracing::error!("Redis connection error: {}", e);
+                       return;
+                   }
+               };
+               
+               let entry = CachedResponse {
+                   data: response,
+                   created_at: SystemTime::now(),
+                   ttl_secs: self.config.default_ttl.as_secs(),
+                   referenced_types: referenced_types.clone(),
+                   referenced_entities: referenced_entities.clone(),
+               };
+               
+               let json = match serde_json::to_string(&entry) {
+                   Ok(j) => j,
+                   Err(e) => {
+                       tracing::error!("Serialization error: {}", e);
+                       return;
+                   }
+               };
+               
+               // Pipeline the commands
+               let mut pipe = redis::pipe();
+               pipe.atomic();
+               
+               // SETEX cache_key ttl json
+               pipe.set_ex(&cache_key, json, self.config.default_ttl.as_secs());
+               
+               // Add to type indexes
+               for type_name in &referenced_types {
+                   pipe.sadd(format!("type:{}", type_name), &cache_key);
+               }
+               
+               // Add to entity indexes
+               for entity_key in &referenced_entities {
+                   pipe.sadd(format!("entity:{}", entity_key), &cache_key);
+               }
+               
+               if let Err(e) = pipe.query_async::<()>(&mut conn).await {
+                    tracing::error!("Redis PUT error: {}", e);
+               } else {
+                    tracing::debug!(cache_key = %cache_key, "Response cached (Redis)");
+               }
+            }
+        }
+    }
+
+    /// Explicitly cache individual entities found in a response
+    /// This allows different queries to share the same cached "nodes"
+    pub async fn put_all_entities(
+        &self,
+        response: &serde_json::Value,
+        ttl: Option<Duration>,
+    ) {
+        let entities = extract_entities_with_data(response);
+        let ttl_secs = ttl.map(|t| t.as_secs()).unwrap_or(self.config.default_ttl.as_secs());
+
+        for (entity_key, data) in entities {
+            match &self.backend {
+                CacheBackend::Memory { cache, .. } => {
+                    let entry = CachedResponse {
+                        data: data.clone(),
+                        created_at: SystemTime::now(),
+                        ttl_secs,
+                        referenced_types: HashSet::new(),
+                        referenced_entities: HashSet::new(),
+                    };
+                    cache.write().insert(format!("entity:{}", entity_key), entry);
                 }
-                
-                // Add to entity indexes
-                for entity_key in &referenced_entities {
-                    pipe.sadd(format!("entity:{}", entity_key), &cache_key);
-                }
-                
-                if let Err(e) = pipe.query_async::<()>(&mut conn).await {
-                     tracing::error!("Redis PUT error: {}", e);
-                } else {
-                     tracing::debug!(cache_key = %cache_key, "Response cached (Redis)");
+                CacheBackend::Redis { client } => {
+                    let mut conn = match client.get_multiplexed_async_connection().await {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                    if let Ok(json) = serde_json::to_string(&data) {
+                        let _: () = redis::cmd("SETEX")
+                            .arg(format!("entity:{}", entity_key))
+                            .arg(ttl_secs)
+                            .arg(json)
+                            .query_async(&mut conn).await.unwrap_or(());
+                    }
                 }
             }
         }
@@ -886,6 +929,39 @@ fn extract_entities_recursive(value: &serde_json::Value, entities: &mut HashSet<
     }
 }
 
+/// Extract entity keys (Type#id) and their corresponding data from a response
+fn extract_entities_with_data(response: &serde_json::Value) -> Vec<(String, serde_json::Value)> {
+    let mut entities = Vec::new();
+    extract_entities_data_recursive(response, &mut entities);
+    entities
+}
+
+fn extract_entities_data_recursive(value: &serde_json::Value, entities: &mut Vec<(String, serde_json::Value)>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let type_name = map.get("__typename").and_then(|t| t.as_str());
+            let id = map
+                .get("id")
+                .and_then(|i| i.as_str())
+                .or_else(|| map.get("_id").and_then(|i| i.as_str()));
+
+            if let (Some(tn), Some(id_val)) = (type_name, id) {
+                entities.push((format!("{}#{}", tn, id_val), value.clone()));
+            }
+
+            for v in map.values() {
+                extract_entities_data_recursive(v, entities);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                extract_entities_data_recursive(item, entities);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Sort JSON object keys recursively for consistent hashing
 fn sort_json_value(value: &serde_json::Value) -> serde_json::Value {
     match value {
@@ -1210,5 +1286,34 @@ mod tests {
         cache.clear().await;
         assert_eq!(cache.len(), 0);
         assert!(cache.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_put_all_entities() {
+        let cache = ResponseCache::new(CacheConfig::default());
+        let response = serde_json::json!({
+            "data": {
+                "user": {
+                    "__typename": "User",
+                    "id": "123",
+                    "name": "Alice",
+                    "friend": {
+                        "__typename": "User",
+                        "id": "456",
+                        "name": "Bob"
+                    }
+                }
+            }
+        });
+
+        cache.put_all_entities(&response, None).await;
+
+        // Verify "Alice" is cached by field/ID
+        let alice = cache.get_entity("User", "123").await.expect("Alice should be cached");
+        assert_eq!(alice["name"], "Alice");
+
+        // Verify nested "Bob" is also cached by field/ID
+        let bob = cache.get_entity("User", "456").await.expect("Bob should be cached");
+        assert_eq!(bob["name"], "Bob");
     }
 }
