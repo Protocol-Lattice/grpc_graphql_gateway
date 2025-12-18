@@ -63,6 +63,7 @@
 - [Header Propagation](./production/header-propagation.md)
 - [Configuration Reference](./production/configuration.md)
 - [Cost Analysis](./production/cost-analysis.md)
+- [Cost Optimization Strategies](./production/cost-optimization-strategies.md)
 
 # Reference
 
