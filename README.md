@@ -38,7 +38,7 @@ GBP Ultra (800KB)          ▏                    0.8% ⚡ (<1ms latency)
 
 ```toml
 [dependencies]
-grpc_graphql_gateway = "0.3.8"
+grpc_graphql_gateway = "0.5.5"
 tokio = { version = "1", features = ["full"] }
 ```
 
