@@ -77,6 +77,7 @@ pub mod smart_ttl;
 pub mod subscription;
 pub mod request_collapsing;
 pub mod openapi;
+pub mod lz4_compression;
 pub mod tracing_otel;
 pub mod types;
 pub mod high_performance;
@@ -159,4 +160,7 @@ pub use high_performance::{
     FastJsonParser, FastJsonError, ShardedCache, CacheStats as ShardedCacheStats,
     ObjectPool, BatchProcessor, BatchConfig, HighPerfConfig, OptimizedConnectionConfig,
     PerfMetrics, ResponseTemplates, recommended_workers, pin_to_core,
+};
+pub use lz4_compression::{
+    lz4_compression_middleware, compress_lz4, decompress_lz4, Lz4CacheCompressor,
 };

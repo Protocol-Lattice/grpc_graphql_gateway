@@ -12,6 +12,7 @@
 //!
 //! # Supported Algorithms
 //!
+//! - **LZ4** (`lz4`) - Ultra-fast compression, ideal for high-throughput (NEW!)
 //! - **Brotli** (`br`) - Best compression ratio, preferred for modern browsers
 //! - **Gzip** (`gzip`) - Widely supported, good compression
 //! - **Deflate** (`deflate`) - Legacy support
@@ -135,6 +136,7 @@ pub struct CompressionConfig {
     /// Enabled compression algorithms in preference order (default: ["br", "gzip", "deflate"])
     ///
     /// Supported values:
+    /// - `"lz4"` - LZ4 (ultra-fast, great for high-throughput)
     /// - `"br"` - Brotli (recommended, best ratio)
     /// - `"gzip"` - Gzip (widely supported)
     /// - `"deflate"` - Deflate (legacy)
@@ -248,6 +250,35 @@ impl CompressionConfig {
     /// Check if zstd compression is enabled.
     pub fn zstd_enabled(&self) -> bool {
         self.enabled && self.algorithms.iter().any(|a| a == "zstd")
+    }
+
+    /// Check if lz4 compression is enabled.
+    pub fn lz4_enabled(&self) -> bool {
+        self.enabled && self.algorithms.iter().any(|a| a == "lz4")
+    }
+
+    /// Create an ultra-fast config using LZ4 compression.
+    ///
+    /// LZ4 is ideal for high-throughput scenarios where CPU time is more
+    /// valuable than bandwidth. It offers:
+    /// - 10-20x faster compression than gzip
+    /// - 5-10x faster decompression
+    /// - ~50-60% compression ratio (vs 70-80% for gzip)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use grpc_graphql_gateway::CompressionConfig;
+    ///
+    /// let config = CompressionConfig::ultra_fast();
+    /// ```
+    pub fn ultra_fast() -> Self {
+        Self {
+            enabled: true,
+            level: CompressionLevel::Fast,
+            min_size_bytes: 256,  // Lower threshold for ultra-fast LZ4
+            algorithms: vec!["lz4".into()],  // LZ4 only for maximum speed
+        }
     }
 }
 
