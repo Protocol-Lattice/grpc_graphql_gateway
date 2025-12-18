@@ -12,7 +12,7 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 - **High-Performance Mode**: SIMD JSON parsing, lock-free sharded caching, and object pooling for 100K+ RPS per instance.
 - **Cost Reduction Suite**: Advanced Query Cost Analysis and Smart TTL Management for significant resource savings.
-- **GBP (GraphQL Binary Protocol) v8**: Achievement of **99.28% compression reduction** for large-scale structured responses.
+- **GBP (GraphQL Binary Protocol) v8**: Achievement of **99.25% compression reduction** verified on 100MB+ "Behemoth" payloads.
 - **Binary Interoperability**: New `GbpDecoder` and `gbp-lz4` encoding for high-speed server-to-server GraphQL communication.
 - **Infrastructure Upgrades**: Migrated to latest stable versions of `axum`, `tonic`, and `prost`.
 

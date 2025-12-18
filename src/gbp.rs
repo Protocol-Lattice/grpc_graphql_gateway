@@ -432,4 +432,63 @@ mod tests {
         
         assert!(reduction >= 99.0, "Reduction was only {:.2}%", reduction);
     }
+
+    #[test]
+    fn test_gbp_ultra_100mb_behemoth() {
+        let mut encoder = GbpEncoder::new();
+        
+        // Generate ~100MB of JSON data (200,000 users)
+        println!("\nGenerating 100MB Behemoth payload...");
+        let data = json!({
+            "data": {
+                "users": (0..200000).map(|i| json!({
+                    "id": i,
+                    "typename": "User",
+                    "status": "ACTIVE",
+                    "role": "MEMBER",
+                    "organization": {
+                        "id": "org-lattice",
+                        "name": "Protocol Lattice",
+                        "settings": { "theme": "dark", "notifications": true, "audit": "enabled" }
+                    },
+                    "permissions": ["READ", "WRITE", "EXECUTE", "ADMIN", "OWNER"],
+                    "profile": {
+                        "verified": true,
+                        "tier": "GOLD",
+                        "metadata": { 
+                            "region": "EU", 
+                            "shard": 7, 
+                            "cluster": "alpha-1",
+                            "tags": ["premium", "early-adopter", "verified"]
+                        }
+                    },
+                    "description": "High-performance software engineer at Protocol Lattice working on gRPC-GraphQL gateway optimizations and binary protocols."
+                })).collect::<Vec<_>>()
+            }
+        });
+
+        let json_bytes = serde_json::to_vec(&data).unwrap();
+        println!("Encoding Behemoth with GBP Ultra + LZ4...");
+        let start = std::time::Instant::now();
+        let encoded = encoder.encode_lz4(&data).unwrap();
+        let duration = start.elapsed();
+        
+        let ratio = encoded.len() as f64 / json_bytes.len() as f64;
+        let reduction = (1.0 - ratio) * 100.0;
+        
+        println!("\n--- GBP Ultra Behemoth Test (100MB+) ---");
+        println!("Original JSON size:  {:>12} bytes", json_bytes.len());
+        println!("GBP Ultra size:      {:>12} bytes", encoded.len());
+        println!("Reduction Rate:      {:>12.2}%", reduction);
+        println!("Encoding Time:       {:>12.2}ms", duration.as_secs_f64() * 1000.0);
+        println!("Throughput:          {:>12.2} MB/s", (json_bytes.len() as f64 / 1024.0 / 1024.0) / duration.as_secs_f64());
+        
+        // Data Integrity Check
+        println!("Verifying data integrity for Behemoth...");
+        let mut decoder = GbpDecoder::new();
+        let decoded = decoder.decode_lz4(&encoded).unwrap();
+        assert_eq!(data, decoded);
+        
+        assert!(reduction >= 99.0, "Reduction was only {:.2}%", reduction);
+    }
 }

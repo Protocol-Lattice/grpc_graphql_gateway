@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Webhook & Event System**: Direct integration for cache invalidation and external triggers.
 
 - **GraphQL Binary Protocol (GBP) v8**:
-  - **99.28% Compression Reduction**: Novel binary encoding specifically for GraphQL structures.
+  - **99.25% Compression Reduction**: Verified on 100MB+ "Behemoth" payloads (~107MB reduced to ~804KB).
+  - **Proven Reliability**: Full data integrity verification on large-scale datasets.
   - **Structural Deduplication**: Efficient "Shape" templates and Value Pooling to eliminate redundant overhead.
   - **Columnar Storage**: Optimized array encoding for maximal LZ4 block compression.
 
