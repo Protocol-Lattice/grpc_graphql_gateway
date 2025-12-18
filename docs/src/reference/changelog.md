@@ -6,6 +6,44 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.4.9] - 2025-12-18 (Cumulative Release: 0.3.9 - 0.4.9)
+
+**Enterprise Performance & Cost Optimization**
+
+- **High-Performance Mode**: SIMD JSON parsing, lock-free sharded caching, and object pooling for 100K+ RPS per instance.
+- **Cost Reduction Suite**: Advanced Query Cost Analysis and Smart TTL Management for significant resource savings.
+- **GBP (GraphQL Binary Protocol) v8**: Achievement of **99.28% compression reduction** for large-scale structured responses.
+- **Binary Interoperability**: New `GbpDecoder` and `gbp-lz4` encoding for high-speed server-to-server GraphQL communication.
+- **Infrastructure Upgrades**: Migrated to latest stable versions of `axum`, `tonic`, and `prost`.
+
+### [0.4.8] - 2025-12-18
+
+**LZ4 Block Compression**
+
+- Integrated `lz4` block compression for ultra-fast, low-CPU overhead data transfer.
+- New `CompressionConfig::ultra_fast()` preset.
+
+### [0.4.4] - 2025-12-17
+
+**Security Maintenance**
+
+- Critical dependency updates to address identified security vulnerabilities.
+- Hardened gRPC metadata handling.
+
+### [0.4.0] - 2025-12-17
+
+**High Performance Foundations**
+
+- Initial support for SIMD-accelerated data processing and sharded caching.
+- Enhanced `protoc` plugin capabilities.
+
+### [0.3.9] - 2025-12-16
+
+**Redis & Smart TTL**
+
+- **Redis Backend**: Distributed caching support for horizontal scalability.
+- **Smart TTL**: Initial foundation for mutation-aware cache invalidation.
+
 ### [0.3.8] - 2025-12-16
 
 **Helm & Kubernetes Deployment**

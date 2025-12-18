@@ -1,4 +1,4 @@
-use serde_json::{Value, json, Map};
+use serde_json::{Value, Map};
 use std::collections::HashMap;
 use lz4::EncoderBuilder;
 use std::io::{Read, Write, Cursor};

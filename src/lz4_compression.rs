@@ -8,7 +8,6 @@ use axum::{
     http::{Request, Response, header},
     middleware::Next,
 };
-use bytes::{Bytes, BytesMut};
 use std::io::{Read, Write};
 use crate::gbp::GbpEncoder;
 use axum::body::to_bytes;
