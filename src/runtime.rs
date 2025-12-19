@@ -1114,8 +1114,11 @@ async fn handle_live_query_ws(
         .on_upgrade(move |socket| handle_live_socket(socket, mux))
 }
 
-/// Handle the live query WebSocket connection
+/// Handle the live query WebSocket connection with auto-push updates
 async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
+    use std::collections::HashMap;
+    use tokio::sync::mpsc;
+    
     let (mut sender, mut receiver) = socket.split();
     
     #[derive(serde::Deserialize)]
@@ -1126,7 +1129,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
         payload: Option<serde_json::Value>,
     }
     
-    #[derive(serde::Serialize)]
+    #[derive(serde::Serialize, Clone)]
     struct WsResponse {
         #[serde(rename = "type")]
         msg_type: String,
@@ -1136,8 +1139,117 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
         payload: Option<serde_json::Value>,
     }
     
-    let mut connection_initialized = false;
+    // Track active live subscriptions
+    #[derive(Clone)]
+    struct LiveSubscription {
+        id: String,
+        query: String,
+        variables: Option<serde_json::Value>,
+        operation_name: Option<String>,
+        triggers: Vec<String>,
+        is_live: bool,
+    }
     
+    let mut connection_initialized = false;
+    let active_subscriptions: Arc<parking_lot::RwLock<HashMap<String, LiveSubscription>>> = 
+        Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    
+    // Channel to send messages to the WebSocket
+    let (ws_tx, mut ws_rx) = mpsc::channel::<WsResponse>(100);
+    
+    // Get live query store for invalidation events
+    let live_query_store = crate::live_query::create_live_query_store();
+    let mut invalidation_rx = live_query_store.subscribe_invalidations();
+    
+    // Spawn task to forward messages to WebSocket
+    let ws_tx_clone = ws_tx.clone();
+    let sender = Arc::new(tokio::sync::Mutex::new(sender));
+    let sender_clone = sender.clone();
+    
+    let forward_task = tokio::spawn(async move {
+        while let Some(msg) = ws_rx.recv().await {
+            let json = serde_json::to_string(&msg).unwrap();
+            let mut sender = sender_clone.lock().await;
+            if sender.send(Message::Text(json.into())).await.is_err() {
+                break;
+            }
+        }
+    });
+    
+    // Spawn task to handle invalidation events and push updates
+    let subscriptions_clone = active_subscriptions.clone();
+    let mux_clone = mux.clone();
+    let ws_tx_for_invalidation = ws_tx.clone();
+    
+    let invalidation_task = tokio::spawn(async move {
+        loop {
+            match invalidation_rx.recv().await {
+                Ok(event) => {
+                    let trigger_pattern = format!("{}.{}", event.type_name, event.action);
+                    
+                    // Find subscriptions that match this invalidation
+                    let matching_subs: Vec<LiveSubscription> = {
+                        let subs = subscriptions_clone.read();
+                        subs.values()
+                            .filter(|sub| {
+                                sub.is_live && sub.triggers.iter().any(|t| {
+                                    t == &trigger_pattern || 
+                                    t == &format!("{}.*", event.type_name) ||
+                                    t == &format!("*.{}", event.action) ||
+                                    t == "*.*"
+                                })
+                            })
+                            .cloned()
+                            .collect()
+                    };
+                    
+                    // Re-execute and push updates for matching subscriptions
+                    for sub in matching_subs {
+                        tracing::info!(
+                            subscription_id = %sub.id,
+                            trigger = %trigger_pattern,
+                            "Re-executing live query due to invalidation"
+                        );
+                        
+                        // Build request
+                        let mut gql_request = async_graphql::Request::new(&sub.query);
+                        if let Some(vars) = &sub.variables {
+                            if let Ok(variables) = serde_json::from_value(vars.clone()) {
+                                gql_request = gql_request.variables(variables);
+                            }
+                        }
+                        if let Some(op_name) = &sub.operation_name {
+                            gql_request = gql_request.operation_name(op_name);
+                        }
+                        
+                        // Execute
+                        let response = mux_clone.handle_http(HeaderMap::new(), gql_request).await;
+                        let response_json = serde_json::to_value(&response).unwrap_or_default();
+                        
+                        // Send update
+                        let update = WsResponse {
+                            msg_type: "next".to_string(),
+                            id: Some(sub.id.clone()),
+                            payload: Some(response_json),
+                        };
+                        
+                        if ws_tx_for_invalidation.send(update).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Missed some events, continue
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    break;
+                }
+            }
+        }
+    });
+    
+    // Main message loop
     while let Some(msg) = receiver.next().await {
         let msg = match msg {
             Ok(Message::Text(text)) => text,
@@ -1161,8 +1273,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                     id: None,
                     payload: None,
                 };
-                if let Err(e) = sender.send(Message::Text(serde_json::to_string(&ack).unwrap().into())).await {
-                    tracing::error!("Failed to send connection_ack: {}", e);
+                if ws_tx.send(ack).await.is_err() {
                     break;
                 }
             }
@@ -1173,7 +1284,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                     id: None,
                     payload: None,
                 };
-                let _ = sender.send(Message::Text(serde_json::to_string(&pong).unwrap().into())).await;
+                let _ = ws_tx.send(pong).await;
             }
             
             "subscribe" => {
@@ -1201,6 +1312,12 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                     query.to_string()
                 };
                 
+                let variables = parsed.payload.as_ref().and_then(|p| p.get("variables")).cloned();
+                let operation_name = parsed.payload.as_ref()
+                    .and_then(|p| p.get("operationName"))
+                    .and_then(|n| n.as_str())
+                    .map(|s| s.to_string());
+                
                 tracing::info!(
                     subscription_id = %id,
                     is_live = is_live,
@@ -1210,51 +1327,70 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                 // Build and execute the GraphQL request
                 let mut gql_request = async_graphql::Request::new(&clean_query);
                 
-                // Add variables if present
-                if let Some(vars) = parsed.payload.as_ref().and_then(|p| p.get("variables")) {
-                    if let Ok(variables) = serde_json::from_value(vars.clone()) {
-                        gql_request = gql_request.variables(variables);
+                if let Some(vars) = &variables {
+                    if let Ok(v) = serde_json::from_value(vars.clone()) {
+                        gql_request = gql_request.variables(v);
                     }
                 }
                 
-                // Add operation name if present
-                if let Some(op_name) = parsed.payload.as_ref().and_then(|p| p.get("operationName")).and_then(|n| n.as_str()) {
+                if let Some(ref op_name) = operation_name {
                     gql_request = gql_request.operation_name(op_name);
                 }
                 
-                // Execute the query - using mux.handle_http for consistency
+                // Execute initial query
                 let response = mux.handle_http(HeaderMap::new(), gql_request).await;
-                
-                // Send the result
                 let response_json = serde_json::to_value(&response).unwrap_or_default();
                 
+                // Send initial result
                 let next_msg = WsResponse {
                     msg_type: "next".to_string(),
                     id: Some(id.clone()),
                     payload: Some(response_json),
                 };
                 
-                if let Err(e) = sender.send(Message::Text(serde_json::to_string(&next_msg).unwrap().into())).await {
-                    tracing::error!("Failed to send live query result: {}", e);
+                if ws_tx.send(next_msg).await.is_err() {
                     break;
                 }
                 
-                // Send complete for now (full live updates would require keeping connection open)
-                // TODO: Integrate with LiveQueryStore for real-time updates
-                let complete_msg = WsResponse {
-                    msg_type: "complete".to_string(),
-                    id: Some(id),
-                    payload: None,
-                };
-                
-                if let Err(e) = sender.send(Message::Text(serde_json::to_string(&complete_msg).unwrap().into())).await {
-                    tracing::error!("Failed to send complete: {}", e);
-                    break;
+                if is_live {
+                    // Keep subscription active for live updates
+                    // Default triggers based on common patterns
+                    let triggers = vec![
+                        "User.create".to_string(),
+                        "User.update".to_string(),
+                        "User.delete".to_string(),
+                        "*.*".to_string(), // Catch-all for demo
+                    ];
+                    
+                    let subscription = LiveSubscription {
+                        id: id.clone(),
+                        query: clean_query,
+                        variables,
+                        operation_name,
+                        triggers,
+                        is_live: true,
+                    };
+                    
+                    active_subscriptions.write().insert(id.clone(), subscription);
+                    tracing::info!(subscription_id = %id, "Live subscription registered for updates");
+                } else {
+                    // Non-live query: send complete immediately
+                    let complete_msg = WsResponse {
+                        msg_type: "complete".to_string(),
+                        id: Some(id),
+                        payload: None,
+                    };
+                    if ws_tx.send(complete_msg).await.is_err() {
+                        break;
+                    }
                 }
             }
             
             "complete" => {
-                tracing::debug!("Client completed subscription: {:?}", parsed.id);
+                if let Some(id) = parsed.id {
+                    active_subscriptions.write().remove(&id);
+                    tracing::debug!(subscription_id = %id, "Client completed subscription");
+                }
             }
             
             _ => {
@@ -1263,6 +1399,9 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
         }
     }
     
+    // Cleanup
+    forward_task.abort();
+    invalidation_task.abort();
     tracing::debug!("Live query WebSocket connection closed");
 }
 

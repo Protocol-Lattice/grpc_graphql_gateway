@@ -285,14 +285,13 @@ lazy_static::lazy_static! {
         RwLock::new(store)
     };
     
-    static ref LIVE_QUERY_STORE: SharedLiveQueryStore = create_live_query_store();
-    
     static ref NEXT_USER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(4);
 }
 
 /// Get the live query store for triggering invalidations
+/// Uses the global singleton store shared with WebSocket connections
 pub fn get_live_query_store() -> SharedLiveQueryStore {
-    LIVE_QUERY_STORE.clone()
+    grpc_graphql_gateway::global_live_query_store()
 }
 
 /// gRPC service implementation with live query support
@@ -304,7 +303,7 @@ pub struct ServiceImpl {
 impl Default for ServiceImpl {
     fn default() -> Self {
         Self {
-            live_query_store: LIVE_QUERY_STORE.clone(),
+            live_query_store: grpc_graphql_gateway::global_live_query_store(),
         }
     }
 }

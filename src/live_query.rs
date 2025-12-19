@@ -595,12 +595,27 @@ impl Default for LiveQueryStore {
 /// Thread-safe shared live query store
 pub type SharedLiveQueryStore = Arc<LiveQueryStore>;
 
+lazy_static::lazy_static! {
+    /// Global live query store singleton
+    /// All WebSocket connections and mutations share this store
+    static ref GLOBAL_LIVE_QUERY_STORE: SharedLiveQueryStore = Arc::new(LiveQueryStore::new());
+}
+
+/// Get the global live query store
+/// 
+/// This returns a reference to the singleton store that is shared across
+/// all WebSocket connections and can be used by mutations to trigger invalidations.
+pub fn global_live_query_store() -> SharedLiveQueryStore {
+    GLOBAL_LIVE_QUERY_STORE.clone()
+}
+
 /// Create a new shared live query store
 pub fn create_live_query_store() -> SharedLiveQueryStore {
-    Arc::new(LiveQueryStore::new())
+    global_live_query_store()
 }
 
 /// Create a shared live query store with custom configuration
+/// Note: This creates a NEW store, not the global one
 pub fn create_live_query_store_with_config(config: LiveQueryConfig) -> SharedLiveQueryStore {
     Arc::new(LiveQueryStore::with_config(config))
 }

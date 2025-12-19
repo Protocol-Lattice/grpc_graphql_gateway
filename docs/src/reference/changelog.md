@@ -7,6 +7,15 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.6.5] - 2025-12-19
+
+**Live Query Auto-Push Updates** 🚀
+
+- **Persistent Connections**: `@live` queries keep WebSocket connections open for receiving updates.
+- **Automatic Re-execution**: Server re-executes queries when `InvalidationEvent` is triggered by mutations.
+- **Global Store**: `global_live_query_store()` singleton shared across all connections for proper invalidation propagation.
+- **Zero Polling**: Updates are server-initiated, no client-side polling required.
+
 ### [0.6.4] - 2025-12-19
 
 **Live Query WebSocket Integration**

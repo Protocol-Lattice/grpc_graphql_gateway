@@ -119,9 +119,9 @@ pub use high_performance::{
 };
 pub use live_query::{
     create_live_query_store, create_live_query_store_with_config, generate_subscription_id,
-    has_live_directive, strip_live_directive, ActiveLiveQuery, InvalidationEvent, LiveQueryConfig,
-    LiveQueryConfigInfo, LiveQueryError, LiveQueryStats, LiveQueryStore, LiveQueryStrategy,
-    LiveQueryUpdate, SharedLiveQueryStore,
+    global_live_query_store, has_live_directive, strip_live_directive, ActiveLiveQuery, 
+    InvalidationEvent, LiveQueryConfig, LiveQueryConfigInfo, LiveQueryError, LiveQueryStats, 
+    LiveQueryStore, LiveQueryStrategy, LiveQueryUpdate, SharedLiveQueryStore,
 };
 pub use lz4_compression::{
     compress_lz4, decompress_lz4, lz4_compression_middleware, Lz4CacheCompressor,

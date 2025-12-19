@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2025-12-19
+
+### Added
+- **Live Query Auto-Push Updates** 🚀:
+  - Connections now stay open for `@live` queries instead of closing immediately.
+  - Server automatically re-executes and pushes updates when invalidation events occur.
+  - Global `LiveQueryStore` singleton shared across all WebSocket connections.
+  - `global_live_query_store()` function to access the shared store from mutations.
+
+- **Invalidation-Driven Updates**:
+  - Mutations trigger `InvalidationEvent` which propagates to active live queries.
+  - Matching queries are automatically re-executed and results pushed to clients.
+  - No client polling required - updates are server-initiated.
+
+### How It Works
+
+```
+Client                    Server                    Database
+  │                         │                          │
+  │──@live query──────────▶│                          │
+  │◀──────────initial data──│                          │
+  │         (connection stays open)                    │
+  │                         │                          │
+  │                         │◀────mutation triggers────│
+  │                         │   InvalidationEvent      │
+  │                         │                          │
+  │◀──────────auto-push─────│ (re-executes query)     │
+  │         updated data    │                          │
+```
+
+### Example
+
+```rust
+// In mutation handler - trigger invalidation
+let store = grpc_graphql_gateway::global_live_query_store();
+store.invalidate(InvalidationEvent::new("User", "create"));
+// All @live queries watching User.create will receive updated data
+```
+
 ## [0.6.4] - 2025-12-19
 
 ### Added

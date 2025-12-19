@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// Test WebSocket live query with mutation
+// Test WebSocket live query with AUTOMATIC push updates
 const WebSocket = require('ws');
 const http = require('http');
 
-console.log('=== Live Query WebSocket Test with Mutation ===\n');
+console.log('=== Live Query AUTO-PUSH Test ===\n');
+console.log('This test demonstrates that the server automatically pushes');
+console.log('updates to live queries when mutations occur.\n');
 
 // Helper to make HTTP mutation
 function sendMutation(mutation) {
@@ -35,11 +37,12 @@ function sendMutation(mutation) {
 console.log('1. Connecting to ws://localhost:9000/graphql/live ...');
 
 const ws = new WebSocket('ws://localhost:9000/graphql/live', 'graphql-transport-ws');
+let updateCount = 0;
+let subscriptionId = 'live-users';
 
 ws.on('open', () => {
     console.log('   ✓ Connected to WebSocket\n');
 
-    // Step 1: Send connection_init
     console.log('2. Sending connection_init...');
     ws.send(JSON.stringify({ type: 'connection_init' }));
 });
@@ -50,10 +53,9 @@ ws.on('message', async (data) => {
     if (msg.type === 'connection_ack') {
         console.log('   ✓ Connection acknowledged\n');
 
-        // Step 2: Subscribe with @live query
-        console.log('3. Subscribing to @live query: users { users { id name } }');
+        console.log('3. Subscribing to LIVE query (connection stays open for updates)');
         ws.send(JSON.stringify({
-            id: 'live-1',
+            id: subscriptionId,
             type: 'subscribe',
             payload: {
                 query: 'query @live { users { users { id name } total_count } }'
@@ -61,70 +63,56 @@ ws.on('message', async (data) => {
         }));
     }
 
-    if (msg.type === 'next') {
+    if (msg.type === 'next' && msg.id === subscriptionId) {
+        updateCount++;
         const users = msg.payload?.data?.users;
+
         if (users) {
-            console.log(`   ✓ Received data: ${users.total_count} users`);
-            users.users.forEach(u => console.log(`     - ${u.id}: ${u.name}`));
+            console.log(`\n   📡 UPDATE #${updateCount}: Received ${users.total_count} users`);
+            users.users.forEach(u => console.log(`      - ${u.id}: ${u.name}`));
+
+            // After first update, trigger mutations to see auto-push
+            if (updateCount === 1) {
+                console.log('\n4. Connection stays open! Now triggering mutations...\n');
+
+                // Wait a bit then send mutation
+                setTimeout(async () => {
+                    console.log('   → Sending mutation: createUser(name: "Eve")');
+                    try {
+                        const result = await sendMutation('mutation { createUser(name: "Eve", email: "eve@example.com") { id name } }');
+                        console.log(`   ✓ Created: ${result.data?.createUser?.name} (id: ${result.data?.createUser?.id})`);
+                        console.log('   ⏳ Waiting for auto-push update...');
+                    } catch (e) {
+                        console.log(`   ✗ Mutation failed: ${e.message}`);
+                    }
+                }, 500);
+
+                // Send another mutation after first one
+                setTimeout(async () => {
+                    console.log('\n   → Sending mutation: deleteUser(id: "1")');
+                    try {
+                        const result = await sendMutation('mutation { deleteUser(id: "1") { success message } }');
+                        console.log(`   ✓ ${result.data?.deleteUser?.message}`);
+                        console.log('   ⏳ Waiting for auto-push update...');
+                    } catch (e) {
+                        console.log(`   ✗ Mutation failed: ${e.message}`);
+                    }
+                }, 2000);
+
+                // Close after some time
+                setTimeout(() => {
+                    console.log('\n5. Test complete! Summary:');
+                    console.log(`   - Total updates received: ${updateCount}`);
+                    console.log(`   - Expected: 3 (initial + 2 mutations)`);
+                    console.log(`   - Auto-push working: ${updateCount >= 2 ? '✓ YES' : '✗ Check logs'}`);
+                    console.log('\n   → Closing connection...');
+                    ws.send(JSON.stringify({ type: 'complete', id: subscriptionId }));
+                    ws.close();
+                }, 5000);
+            }
         } else if (msg.payload?.errors) {
             console.log('   ✗ Error:', msg.payload.errors[0].message);
         }
-        console.log('');
-    }
-
-    if (msg.type === 'complete' && msg.id === 'live-1') {
-        console.log('   ✓ Initial query completed\n');
-
-        // Step 3: Send a mutation via HTTP
-        console.log('4. Sending mutation: deleteUser(id: "2")');
-        try {
-            const result = await sendMutation('mutation { deleteUser(id: "2") { success message } }');
-            console.log(`   ✓ Mutation result: ${result.data?.deleteUser?.message || JSON.stringify(result)}\n`);
-        } catch (e) {
-            console.log(`   ✗ Mutation failed: ${e.message}\n`);
-        }
-
-        // Step 4: Subscribe again to see the updated data
-        console.log('5. Re-subscribing to see updated data...');
-        ws.send(JSON.stringify({
-            id: 'live-2',
-            type: 'subscribe',
-            payload: {
-                query: 'query @live { users { users { id name } total_count } }'
-            }
-        }));
-    }
-
-    if (msg.type === 'complete' && msg.id === 'live-2') {
-        console.log('   ✓ Second query completed\n');
-
-        // Step 5: Create a new user
-        console.log('6. Sending mutation: createUser(name: "David", email: "david@example.com")');
-        try {
-            const result = await sendMutation('mutation { createUser(name: "David", email: "david@example.com") { id name } }');
-            console.log(`   ✓ Created user: ${result.data?.createUser?.name} (id: ${result.data?.createUser?.id})\n`);
-        } catch (e) {
-            console.log(`   ✗ Mutation failed: ${e.message}\n`);
-        }
-
-        // Step 6: Query one more time
-        console.log('7. Final query to see all changes...');
-        ws.send(JSON.stringify({
-            id: 'live-3',
-            type: 'subscribe',
-            payload: {
-                query: 'query @live { users { users { id name } total_count } }'
-            }
-        }));
-    }
-
-    if (msg.type === 'complete' && msg.id === 'live-3') {
-        console.log('   ✓ Test completed!\n');
-        console.log('=== Summary ===');
-        console.log('The @live directive allows queries to be executed over WebSocket.');
-        console.log('Mutations trigger invalidation events that can notify live queries.');
-        console.log('');
-        ws.close();
     }
 
     if (msg.type === 'error') {
@@ -137,13 +125,15 @@ ws.on('error', (err) => {
 });
 
 ws.on('close', () => {
-    console.log('Connection closed');
+    console.log('   ✓ Connection closed\n');
+    console.log('=== Test Complete ===');
     process.exit(0);
 });
 
-// Timeout after 15 seconds
+// Timeout after 20 seconds
 setTimeout(() => {
-    console.log('✗ Timeout - closing');
+    console.log('\n✗ Timeout - closing');
+    console.log(`   Total updates received: ${updateCount}`);
     ws.close();
     process.exit(1);
-}, 15000);
+}, 20000);
