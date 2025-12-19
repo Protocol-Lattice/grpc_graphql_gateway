@@ -761,11 +761,11 @@ mod tests {
     fn test_gbp_ultra_behemoth() {
         let mut encoder = GbpEncoder::new();
 
-        // Generate Behemoth payload (100,000 users)
-        println!("\nGenerating Behemoth payload...");
+        // Generate Behemoth payload (1,000,000 users ≈ 1GB)
+        println!("\nGenerating Behemoth payload (1GB)...");
         let data = json!({
             "data": {
-                "users": (0..100000).map(|i| json!({
+                "users": (0..1000000).map(|i| json!({
                     "id": i,
                     "typename": "User",
                     "status": "ACTIVE",
