@@ -1,5 +1,4 @@
 use ahash::{AHashMap, AHasher};
-use lz4::EncoderBuilder;
 use serde_json::{Map, Value};
 use std::hash::{Hash, Hasher};
 use std::io::{Cursor, Read, Write};
@@ -50,12 +49,11 @@ impl GbpEncoder {
     }
 
     pub fn encode_lz4(&mut self, value: &Value) -> Result<Vec<u8>, std::io::Error> {
-        use flate2::write::GzEncoder;
-        use flate2::Compression;
         let gbp_data = self.encode(value);
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let mut encoder = lz4::EncoderBuilder::new().level(4).build(Vec::new())?;
         encoder.write_all(&gbp_data)?;
-        let compressed = encoder.finish()?;
+        let (compressed, result) = encoder.finish();
+        result?;
         Ok(compressed)
     }
 
