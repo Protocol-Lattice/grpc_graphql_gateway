@@ -17,10 +17,10 @@ Performance Rankings (Rust):
 2. async-graphql (Actix)   █████████░░░░░░░░░░░  45,000 req/s
 3. Juniper (Actix)         ████████░░░░░░░░░░░░  39,000 req/s
 
-Data Efficiency Mode (GBP Ultra):
+Data Efficiency Mode (GBP Ultra + RLE):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 JSON Payload (100MB)       ████████████████████ 100%
-GBP Ultra (800KB)          ▏                    0.8% ⚡ (<1ms latency)
+GBP Ultra (400KB)          ▏                    0.4% ⚡ (486 MB/s)
 ```
 
 ## ✨ Features

@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Frontend Compatibility**: Updated `GbpDecoder.ts` to support RLE decompression and BigInt serialization.
 - **Federation Compatibility**: Verified end-to-end compression flow with accurate data reconstruction for federated subgraphs.
 
+### Documentation
+- **Performance**: Updated `README.md` with new GBP Ultra + RLE benchmarks showing **99.6%** reduction (100MB -> 400KB) and **486 MB/s** throughput.
+
 ## [0.6.0] - 2025-12-19
 
 ### Added
