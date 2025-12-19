@@ -90,6 +90,22 @@ cargo run --example greeter      # Basic queries/mutations/subscriptions
 cargo run --example federation   # 3 federated subgraphs
 ```
 
+## 📦 Client SDKs
+
+Official high-performance decoders for GBP:
+
+- **TypeScript/JavaScript**: [`@protocol-lattice/gbp-decoder`](https://www.npmjs.com/package/@protocol-lattice/gbp-decoder)
+
+```bash
+npm install @protocol-lattice/gbp-decoder
+```
+
+```typescript
+import { GbpDecoder } from '@protocol-lattice/gbp-decoder';
+const decoder = new GbpDecoder();
+const decoded = decoder.decodeGzip(uint8Array);
+```
+
 ## 🔗 Links
 
 [📖 Full Documentation](https://protocol-lattice.github.io/grpc_graphql_gateway) • [📦 Crates.io](https://crates.io/crates/grpc_graphql_gateway) • [💻 GitHub](https://github.com/Protocol-Lattice/grpc_graphql_gateway)

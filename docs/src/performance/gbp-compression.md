@@ -62,14 +62,32 @@ The gateway will respond with:
 
 ### Decoding in Rust
 
-The `GbpDecoder` is available for server-to-server communication:
-
 ```rust
 use grpc_graphql_gateway::gbp::GbpDecoder;
 
 let bytes = response.bytes().await?;
 let mut decoder = GbpDecoder::new();
 let json_value = decoder.decode_lz4(&bytes)?;
+```
+
+### Decoding in Browser (TypeScript/JavaScript)
+
+Use the official [`@protocol-lattice/gbp-decoder`](https://www.npmjs.com/package/@protocol-lattice/gbp-decoder) library:
+
+```bash
+npm install @protocol-lattice/gbp-decoder
+```
+
+```typescript
+import { GbpDecoder } from '@protocol-lattice/gbp-decoder';
+
+const decoder = new GbpDecoder();
+
+// Recommended for browsers: Gzip-compressed GBP
+const decoded = decoder.decodeGzip(uint8Array);
+
+// For ultra-performance: LZ4-compressed GBP
+const decodedLz4 = decoder.decodeLz4(uint8Array);
 ```
 
 ## Performance Benchmarks

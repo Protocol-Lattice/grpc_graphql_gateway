@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2025-12-18
+
+### Added
+- **TypeScript GBP Decoder**: Released official `@protocol-lattice/gbp-decoder` npm library.
+  - High-performance, browser-compatible implementation of GraphQL Binary Protocol (GBP) v8.
+  - Support for Gzip (`pako`) and LZ4 (`lz4js`) decompression.
+  - Native support for structural deduplication, shape pooling, and columnar array reconstruction.
+  - Fully typed with TypeScript definitions.
+
 ## [0.5.6] - 2025-12-18
 
 ### Security
