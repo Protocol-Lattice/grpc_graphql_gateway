@@ -58,11 +58,21 @@ impl GbpEncoder {
 
     pub fn encode_lz4(&mut self, value: &Value) -> Result<Vec<u8>, std::io::Error> {
         let gbp_data = self.encode(value);
-        let mut encoder = lz4::EncoderBuilder::new().level(4).build(Vec::new())?;
+        let compressed = lz4::block::compress(&gbp_data, None, false)?;
+        let mut result = Vec::with_capacity(4 + compressed.len());
+        result.extend_from_slice(&(gbp_data.len() as u32).to_le_bytes());
+        result.extend_from_slice(&compressed);
+        Ok(result)
+    }
+
+    pub fn encode_gzip(&mut self, value: &Value) -> Result<Vec<u8>, std::io::Error> {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        let gbp_data = self.encode(value);
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(&gbp_data)?;
-        let (compressed, result) = encoder.finish();
-        result?;
-        Ok(compressed)
+        encoder.finish()
     }
 
     fn analyze_frequencies(&mut self, value: &Value) {
@@ -379,12 +389,14 @@ impl GbpDecoder {
     }
 
     pub fn decode_lz4(&mut self, data: &[u8]) -> Result<Value, String> {
-        let mut decoder = lz4::Decoder::new(data).map_err(|e| e.to_string())?;
-        let mut decoded = Vec::new();
-        decoder
-            .read_to_end(&mut decoded)
+        if data.len() < 4 {
+            return Err("Data too short for LZ4 block".to_string());
+        }
+        let uncompressed_size = u32::from_le_bytes(data[0..4].try_into().unwrap());
+        let compressed_block = &data[4..];
+        let decompressed = lz4::block::decompress(compressed_block, Some(uncompressed_size as i32))
             .map_err(|e| e.to_string())?;
-        self.decode(&decoded)
+        self.decode(&decompressed)
     }
 
     fn decode_recursive(&mut self, cursor: &mut Cursor<&[u8]>) -> Result<Value, String> {
@@ -659,8 +671,15 @@ mod tests {
         let encoded = encoder.encode_lz4(&data).unwrap();
         let duration = start.elapsed();
 
-        println!("Encoding Time:   {:.3}ms", duration.as_secs_f64() * 1000.0);
-        println!("Size:            {} bytes", encoded.len());
+        println!("Encoding Time (LZ4): {:.3}ms", duration.as_secs_f64() * 1000.0);
+        println!("Size (LZ4):          {} bytes", encoded.len());
+
+        // Gzip Benchmark for comparison
+        let start_gzip = std::time::Instant::now();
+        let encoded_gzip = encoder.encode_gzip(&data).unwrap();
+        let duration_gzip = start_gzip.elapsed();
+        println!("Encoding Time (Gzip): {:.3}ms", duration_gzip.as_secs_f64() * 1000.0);
+        println!("Size (Gzip):         {} bytes", encoded_gzip.len());
 
         // Assert speed < 20ms (relaxed for debug/CI)
         assert!(

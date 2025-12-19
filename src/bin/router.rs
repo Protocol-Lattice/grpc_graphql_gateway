@@ -259,15 +259,15 @@ async fn graphql_handler(
             });
 
             // Real GBP Ultra encoding path
+            // Real GBP Ultra encoding path
             if accept_gbp {
                 let mut encoder = grpc_graphql_gateway::gbp::GbpEncoder::new();
-                if let Ok(bytes) = encoder.encode_lz4(&response_data) {
-                    return (
-                        [(axum::http::header::CONTENT_TYPE, "application/x-gbp")],
-                        bytes,
-                    )
-                        .into_response();
-                }
+                let bytes = encoder.encode(&response_data);
+                return (
+                    [(axum::http::header::CONTENT_TYPE, "application/x-gbp")],
+                    bytes,
+                )
+                    .into_response();
             }
 
             Json(response_data).into_response()
