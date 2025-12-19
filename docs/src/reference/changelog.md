@@ -7,6 +7,26 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.6.4] - 2025-12-19
+
+**Live Query WebSocket Integration**
+
+- **WebSocket Endpoint**: Dedicated `/graphql/live` endpoint for `@live` queries with full `graphql-transport-ws` protocol support.
+- **HTTP Support**: `@live` directive detection and stripping in HTTP POST requests.
+- **Runtime Handlers**: `handle_live_query_ws()` and `handle_live_socket()` for processing live subscriptions.
+- **Example Script**: `test_ws.js` demonstrating WebSocket connection, queries, and mutation integration.
+
+### [0.6.3] - 2025-12-19
+
+**Live Query Core Module**
+
+- **`LiveQueryStore`**: Central store for managing active queries and invalidation triggers.
+- **`InvalidationEvent`**: Notify live queries when mutations occur (e.g., `User.update`, `User.delete`).
+- **Proto Definitions**: `GraphqlLiveQuery` message and `graphql.live_query` extension for RPC-level configuration.
+- **Strategies**: Support for `INVALIDATION`, `POLLING`, and `HASH_DIFF` modes.
+- **API Functions**: `has_live_directive()`, `strip_live_directive()`, `create_live_query_store()`.
+- **Example**: Full CRUD implementation in `examples/live_query/`.
+
 ### [0.6.2] - 2025-12-19
 
 **GBP Ultra: Parallel Optimization**

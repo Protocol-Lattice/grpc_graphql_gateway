@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 1ac9844410ad2c55d62b610037f49367edeccba843eb36340527921b47926961 # shrinks to val = Object {"a𐀀¡a¡\u{80}𐀀 \0  \0": Number(0.0), "ࠀ0": Null, "𐀀Aa\0 ࠀ\00𐀀 0¡𐀀¡": Number(36028797018963968)}, offset = 10445781997325653248, byte = 7

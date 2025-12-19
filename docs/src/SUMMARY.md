@@ -43,6 +43,7 @@
 - [REST API Connectors](./advanced/rest-connectors.md)
 - [OpenAPI Integration](./advanced/openapi.md)
 - [Query Cost Analysis](./advanced/query-cost-analysis.md)
+- [Live Queries](./advanced/live-queries.md)
 
 # Performance & Resilience
 
