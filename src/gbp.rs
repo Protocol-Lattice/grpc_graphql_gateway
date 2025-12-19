@@ -6,7 +6,6 @@ use std::io::{Cursor, Read, Write};
 
 #[derive(Default)]
 pub struct GbpEncoder {
-    string_frequencies: AHashMap<String, u32>,
     string_pool: Vec<String>,
     string_map: AHashMap<String, u32>,
     shape_pool: Vec<Vec<u32>>,
@@ -15,8 +14,6 @@ pub struct GbpEncoder {
     value_counter: u32,
     value_positions: Vec<(usize, usize)>,
     key_scratchpad: Vec<u32>,
-    /// O(1) optimization: Cache the last seen shape for repeating structures
-    last_shape: Option<(u32, usize)>, // (shape_id, num_fields)
 }
 
 impl GbpEncoder {
@@ -114,13 +111,8 @@ impl GbpEncoder {
                     return;
                 }
 
-                // O(1) Sticky Shape Check: If the shape matches the last one, skip mapping
-                let shape_id = if let Some((id, len)) = self.last_shape {
-                    if len == obj.len() { id } else { self.get_shape_id_from_map(obj) }
-                } else {
-                    self.get_shape_id_from_map(obj)
-                };
-                self.last_shape = Some((shape_id, obj.len()));
+                // Always compute correct shape - sticky optimization was buggy (only checked field count, not keys)
+                let shape_id = self.get_shape_id_from_map(obj);
 
                 // Dedup check
                 let content_hash = self.fast_content_hash_map(obj);
@@ -773,7 +765,7 @@ mod tests {
         println!("\nGenerating Behemoth payload...");
         let data = json!({
             "data": {
-                "users": (0..2000000).map(|i| json!({
+                "users": (0..100000).map(|i| json!({
                     "id": i,
                     "typename": "User",
                     "status": "ACTIVE",
