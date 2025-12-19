@@ -7,6 +7,21 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.6.2] - 2025-12-19
+
+**GBP Ultra: Parallel Optimization**
+
+- **Parallel Chunk Encoding**: Implemented multi-core encoding (Tag `0x0C`) for massive arrays, achieving **1,749 MB/s** throughput.
+- **Scalability**: Reduces 1GB payload encoding time to **~585ms**, scaling linearly with CPU cores.
+
+### [0.6.1] - 2025-12-19
+
+**GBP Ultra: RLE Optimization**
+
+- **Run-Length Encoding**: New O(1) compression for repetitive columnar data (Tag `0x0B`).
+- **Performance**: Boosted throughput to **486 MB/s** with **99.26%** compression on 100MB+ payloads.
+- **Integrity**: Validated cross-language compatibility (Rust/TS) and pooling synchronization.
+
 ### [0.6.0] - 2025-12-19
 
 **GBP Fast Block & Gzip Stability**
