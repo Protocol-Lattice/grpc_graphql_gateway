@@ -216,6 +216,60 @@ pub struct GraphqlEntity {
     #[prost(bool, tag = "3")]
     pub resolvable: bool,
 }
+/// Live Query configuration for reactive subscriptions.
+/// User can use this option to enable live queries on specific RPC methods:
+///
+/// service UserService {
+///     rpc GetUser(GetUserRequest) returns (User) {
+///       option (graphql.schema) = {
+///         type: QUERY
+///         name: "user"
+///       };
+///       option (graphql.live_query) = {
+///         enabled: true
+///         throttle_ms: 100
+///         triggers: \["User.update", "User.delete"\]
+///       };
+///     }
+/// }
+///
+/// When a client sends a query with @live directive:
+///    query @live { user(id: "1") { name status } }
+///
+/// The gateway will:
+/// 1. Execute the query immediately
+/// 2. Re-execute and push updates when any trigger fires
+/// 3. Throttle updates to prevent flooding (default: 100ms)
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GraphqlLiveQuery {
+    /// Enable live query support for this method
+    #[prost(bool, tag = "1")]
+    pub enabled: bool,
+    /// Minimum time between updates in milliseconds (default: 100ms)
+    /// Prevents flooding clients with too many updates
+    #[prost(uint32, tag = "2")]
+    pub throttle_ms: u32,
+    /// List of invalidation triggers that cause re-execution
+    /// Format: "TypeName.action" where action is: create, update, delete, or *
+    /// Examples: "User.update", "Post.*", "Comment.create"
+    #[prost(string, repeated, tag = "3")]
+    pub triggers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Maximum number of concurrent live query connections per client (default: 10)
+    #[prost(uint32, tag = "4")]
+    pub max_connections: u32,
+    /// Time-to-live in seconds. Live query auto-closes after this duration (0 = infinite)
+    #[prost(uint32, tag = "5")]
+    pub ttl_seconds: u32,
+    /// Strategy for detecting changes
+    #[prost(enumeration = "LiveQueryStrategy", tag = "6")]
+    pub strategy: i32,
+    /// For POLLING strategy: interval in milliseconds
+    #[prost(uint32, tag = "7")]
+    pub poll_interval_ms: u32,
+    /// Entities this query depends on (for automatic invalidation)
+    #[prost(string, repeated, tag = "8")]
+    pub depends_on: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
 /// explicit schema declaration enum
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -249,6 +303,39 @@ impl GraphqlType {
             "MUTATION" => Some(Self::Mutation),
             "RESOLVER" => Some(Self::Resolver),
             "SUBSCRIPTION" => Some(Self::Subscription),
+            _ => None,
+        }
+    }
+}
+/// Strategy for detecting when to push live query updates
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum LiveQueryStrategy {
+    /// Push updates when invalidation triggers fire (recommended)
+    Invalidation = 0,
+    /// Poll the underlying data source at regular intervals
+    Polling = 1,
+    /// Compare response hashes to detect changes
+    HashDiff = 2,
+}
+impl LiveQueryStrategy {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Invalidation => "INVALIDATION",
+            Self::Polling => "POLLING",
+            Self::HashDiff => "HASH_DIFF",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "INVALIDATION" => Some(Self::Invalidation),
+            "POLLING" => Some(Self::Polling),
+            "HASH_DIFF" => Some(Self::HashDiff),
             _ => None,
         }
     }

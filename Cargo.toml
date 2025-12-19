@@ -124,6 +124,10 @@ warp = { version = "0.4.2", features = ["server"] }
 flate2 = "1.1.5"
 rayon = "1.10"
 
+# Live query example dependencies
+lazy_static = "1.4"
+chrono = { version = "0.4", features = ["serde"] }
+
 [features]
 default = []
 otlp = ["opentelemetry-otlp"]
@@ -187,3 +191,11 @@ path = "examples/subgraphs/subgraph-products.rs"
 [[bin]]
 name = "subgraph-reviews"
 path = "examples/subgraphs/subgraph-reviews.rs"
+
+[[example]]
+name = "live_query"
+path = "examples/live_query/main.rs"
+
+[[bin]]
+name = "live_query"
+path = "examples/live_query/main.rs"

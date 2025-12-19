@@ -67,6 +67,7 @@ pub mod grpc_client;
 pub mod headers;
 pub mod health;
 pub mod high_performance;
+pub mod live_query;
 pub mod lz4_compression;
 pub mod metrics;
 pub mod middleware;
@@ -115,6 +116,12 @@ pub use high_performance::{
     pin_to_core, recommended_workers, BatchConfig, BatchProcessor, CacheStats as ShardedCacheStats,
     FastJsonError, FastJsonParser, HighPerfConfig, ObjectPool, OptimizedConnectionConfig,
     PerfMetrics, ResponseTemplates, ShardedCache,
+};
+pub use live_query::{
+    create_live_query_store, create_live_query_store_with_config, generate_subscription_id,
+    has_live_directive, strip_live_directive, ActiveLiveQuery, InvalidationEvent, LiveQueryConfig,
+    LiveQueryConfigInfo, LiveQueryError, LiveQueryStats, LiveQueryStore, LiveQueryStrategy,
+    LiveQueryUpdate, SharedLiveQueryStore,
 };
 pub use lz4_compression::{
     compress_lz4, decompress_lz4, lz4_compression_middleware, Lz4CacheCompressor,
@@ -167,3 +174,4 @@ pub use subscription::{
     SubscriptionPayload, SubscriptionRegistry, SubscriptionResolver, SubscriptionState,
 };
 pub use tracing_otel::{init_tracer, shutdown_tracer, GraphQLSpan, GrpcSpan, TracingConfig};
+
