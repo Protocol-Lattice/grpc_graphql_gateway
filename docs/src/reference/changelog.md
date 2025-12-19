@@ -7,6 +7,14 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.6.0] - 2025-12-19
+
+**GBP Fast Block & Gzip Stability**
+
+- **Ultra-Fast Block Mode**: Switched GBP to LZ4 Block compression, increasing throughput to **211 MB/s** and reducing latency to **<0.3ms**.
+- **Stable Transport**: Integrated Gzip (`flate2`) as a stable fallback for frontend environments where LZ4 libraries are inconsistent.
+- **Data Integrity**: Fixed router-level data corruption by aligning binary framing with the new high-performance decoder specification.
+
 ### [0.5.9] - 2025-12-19
 
 **GBP O(1) Turbo Mode**
