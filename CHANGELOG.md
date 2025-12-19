@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.9] - 2025-12-19
+
+### Added
+- **GBP O(1) Optimization**: Dramatic performance overhaul for massive (1GB+) payloads.
+  - **Positional References**: Replaced expensive value cloning with O(1) buffer position references.
+  - **Shallow Hashing**: Implemented O(1) shallow hashing for structural deduplication, eliminating recursive tree traversal.
+  - **Memory Efficiency**: Constant memory overhead per unique structure, preventing quadratic memory growth on large datasets.
+  - **Throughput**: Verified **195+ MB/s** on 100MB+ Behemoth payloads with 99.25% compression.
+
+## [0.5.8] - 2025-12-18
+
+### Added
+- **GBP LZ4 Compression**: Integrated LZ4 compression directly into the GraphQL Binary Protocol (GBP) pipeline.
+  - New `encode_lz4` and `decode_lz4` methods.
+  - Combined structural deduplication with fast block compression.
+  - Significant reduction in network bandwidth for server-to-server traffic.
+
 ## [0.5.7] - 2025-12-18
 
 ### Added

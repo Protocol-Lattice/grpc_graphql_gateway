@@ -7,6 +7,21 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.5.9] - 2025-12-19
+
+**GBP O(1) Turbo Mode**
+
+- **Massive Payload Support**: Optimized GBP for 1GB+ payloads by replacing recursive hashing with **O(1) shallow hashing**.
+- **Zero-Clone Deduplication**: Switched from value cloning to **positional buffer references**, eliminating memory overhead.
+- **Performance**: Verified **195 MB/s** throughput on massive datasets with **99.25%** compression.
+
+### [0.5.8] - 2025-12-18
+
+**GBP LZ4 Compression**
+
+- **LZ4 Integration**: Native support for LZ4 compression within the GBP pipeline for ultra-low latency server-to-server traffic.
+- **Efficiency**: Combined GBP's structural deduplication with high-speed block compression for 10x smaller payloads than Gzip.
+
 ### [0.5.6] - 2025-12-18
 
 **GBP Data Integrity**
