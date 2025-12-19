@@ -50,6 +50,40 @@ impl GbpEncoder {
         buf
     }
 
+    pub fn encode_slice(&mut self, items: &[Value]) -> Vec<u8> {
+        let mut data = Vec::with_capacity(1024 * 1024); // 1MB initial
+
+        // Mimic Array encoding: Try columnar/RLE first, else fallback to standard list
+        if !(items.len() >= 8 && self.try_encode_columnar(items, &mut data)) {
+            data.push(0x06); // Array
+            write_varint(items.len() as u32, &mut data);
+            for v in items {
+                self.encode_recursive(v, &mut data);
+            }
+        }
+
+        let mut buf = Vec::with_capacity(data.len() + 8192);
+        buf.extend_from_slice(b"GBP\x08");
+
+        write_varint(self.string_pool.len() as u32, &mut buf);
+        for s in &self.string_pool {
+            let bytes = s.as_bytes();
+            write_varint(bytes.len() as u32, &mut buf);
+            buf.extend_from_slice(bytes);
+        }
+
+        write_varint(self.shape_pool.len() as u32, &mut buf);
+        for shape in &self.shape_pool {
+            write_varint(shape.len() as u32, &mut buf);
+            for &key_idx in shape {
+                write_varint(key_idx, &mut buf);
+            }
+        }
+
+        buf.extend_from_slice(&data);
+        buf
+    }
+
     pub fn encode_lz4(&mut self, value: &Value) -> Result<Vec<u8>, std::io::Error> {
         let gbp_data = self.encode(value);
         let compressed = lz4::block::compress(&gbp_data, None, false)?;
@@ -166,9 +200,22 @@ impl GbpEncoder {
     }
 
     fn try_encode_parallel(&mut self, arr: &[Value], buf: &mut Vec<u8>) -> bool {
-        // High-speed path for massive uniform arrays (Ultra v11)
+        // High-speed path for massive arrays (GBP Ultra - Parallel Mode)
         if arr.len() > 50000 {
-            return self.try_encode_columnar(arr, buf);
+            let chunk_size = 25000;
+            // Parallel encode chunks
+            let chunks: Vec<Vec<u8>> = arr.par_chunks(chunk_size).map(|chunk| {
+                let mut encoder = GbpEncoder::new();
+                encoder.encode_slice(chunk)
+            }).collect();
+
+            buf.push(0x0C); // Tag: Parallel Multipart Array
+            write_varint(chunks.len() as u32, buf);
+            for chunk in chunks {
+                write_varint(chunk.len() as u32, buf);
+                buf.extend_from_slice(&chunk);
+            }
+            return true;
         }
         false
     }
@@ -421,6 +468,23 @@ impl GbpDecoder {
                 self.rle_value = Some(val.clone());
             }
             return Ok(val);
+        }
+
+        if tag[0] == 0x0C {
+            let count = read_varint(cursor)?;
+            let mut combined = Vec::new();
+            for _ in 0..count {
+                let len = read_varint(cursor)?;
+                let mut buf = vec![0u8; len as usize];
+                cursor.read_exact(&mut buf).map_err(|e| e.to_string())?;
+
+                let mut sub_decoder = GbpDecoder::new();
+                match sub_decoder.decode(&buf)? {
+                    Value::Array(arr) => combined.extend(arr),
+                    _ => return Err("Parallel chunk was not an Array".to_string()),
+                }
+            }
+            return Ok(Value::Array(combined));
         }
 
         let value = match tag[0] {
@@ -709,7 +773,7 @@ mod tests {
         println!("\nGenerating Behemoth payload...");
         let data = json!({
             "data": {
-                "users": (0..100000).map(|i| json!({
+                "users": (0..2000000).map(|i| json!({
                     "id": i,
                     "typename": "User",
                     "status": "ACTIVE",
