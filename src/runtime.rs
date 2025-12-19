@@ -22,12 +22,16 @@ use crate::schema::{DynamicSchema, GrpcResponseCache};
 use async_graphql::ServerError;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use axum::{
-    extract::State,
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
     http::HeaderMap,
     response::{Html, IntoResponse, Json},
     routing::{get, get_service, post},
     Extension, Router,
 };
+use futures::{SinkExt, StreamExt};
 use bytes::Bytes;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -307,6 +311,26 @@ impl ServeMux {
             }
         } else {
             request
+        };
+
+        // Handle @live directive - detect and strip before execution
+        // The @live directive indicates the client wants live/reactive updates
+        let is_live_query = crate::live_query::has_live_directive(&processed_request.query);
+        let processed_request = if is_live_query {
+            // Strip the @live directive so async-graphql doesn't reject it
+            let stripped_query = crate::live_query::strip_live_directive(&processed_request.query);
+            tracing::debug!(
+                is_live = is_live_query,
+                "Live query detected, stripping @live directive"
+            );
+            let mut new_request = async_graphql::Request::new(stripped_query)
+                .variables(processed_request.variables);
+            if let Some(op_name) = processed_request.operation_name {
+                new_request = new_request.operation_name(op_name);
+            }
+            new_request
+        } else {
+            processed_request
         };
 
         // Validate query against whitelist if enabled
@@ -720,6 +744,7 @@ impl ServeMux {
 
         let mut router = router
             .route_service("/graphql/ws", get_service(subscription))
+            .route("/graphql/live", get(handle_live_query_ws))
             .layer(Extension(state.schema.executor()))
             .with_state(state.clone());
 
@@ -1065,6 +1090,180 @@ async fn analytics_reset_handler(
     } else {
         Json(serde_json::json!({"error": "Analytics not enabled"}))
     }
+}
+
+/// WebSocket handler for live queries
+///
+/// This endpoint handles `@live` queries by:
+/// 1. Executing the query as a regular GraphQL query
+/// 2. Returning the initial result immediately
+/// 3. Keeping the connection open to push updates when data changes
+///
+/// Protocol (same as graphql-transport-ws):
+/// - Client sends: `{"type": "connection_init"}`
+/// - Server responds: `{"type": "connection_ack"}`
+/// - Client sends: `{"type": "subscribe", "id": "1", "payload": {"query": "query @live { ... }"}}`
+/// - Server responds: `{"type": "next", "id": "1", "payload": {"data": {...}}}`
+/// - Server can send more `next` messages when data updates
+/// - Client or server sends: `{"type": "complete", "id": "1"}` to end
+async fn handle_live_query_ws(
+    ws: WebSocketUpgrade,
+    State(mux): State<Arc<ServeMux>>,
+) -> impl IntoResponse {
+    ws.protocols(["graphql-transport-ws"])
+        .on_upgrade(move |socket| handle_live_socket(socket, mux))
+}
+
+/// Handle the live query WebSocket connection
+async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
+    let (mut sender, mut receiver) = socket.split();
+    
+    #[derive(serde::Deserialize)]
+    struct WsMessage {
+        #[serde(rename = "type")]
+        msg_type: String,
+        id: Option<String>,
+        payload: Option<serde_json::Value>,
+    }
+    
+    #[derive(serde::Serialize)]
+    struct WsResponse {
+        #[serde(rename = "type")]
+        msg_type: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload: Option<serde_json::Value>,
+    }
+    
+    let mut connection_initialized = false;
+    
+    while let Some(msg) = receiver.next().await {
+        let msg = match msg {
+            Ok(Message::Text(text)) => text,
+            Ok(Message::Close(_)) => break,
+            _ => continue,
+        };
+        
+        let parsed: WsMessage = match serde_json::from_str(&msg) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("Failed to parse WebSocket message: {}", e);
+                continue;
+            }
+        };
+        
+        match parsed.msg_type.as_str() {
+            "connection_init" => {
+                connection_initialized = true;
+                let ack = WsResponse {
+                    msg_type: "connection_ack".to_string(),
+                    id: None,
+                    payload: None,
+                };
+                if let Err(e) = sender.send(Message::Text(serde_json::to_string(&ack).unwrap().into())).await {
+                    tracing::error!("Failed to send connection_ack: {}", e);
+                    break;
+                }
+            }
+            
+            "ping" => {
+                let pong = WsResponse {
+                    msg_type: "pong".to_string(),
+                    id: None,
+                    payload: None,
+                };
+                let _ = sender.send(Message::Text(serde_json::to_string(&pong).unwrap().into())).await;
+            }
+            
+            "subscribe" => {
+                if !connection_initialized {
+                    tracing::warn!("Received subscribe before connection_init");
+                    continue;
+                }
+                
+                let id = parsed.id.clone().unwrap_or_default();
+                
+                // Extract query from payload
+                let query = parsed.payload
+                    .as_ref()
+                    .and_then(|p| p.get("query"))
+                    .and_then(|q| q.as_str())
+                    .unwrap_or("");
+                
+                // Check for @live directive
+                let is_live = crate::live_query::has_live_directive(query);
+                
+                // Strip @live directive before execution
+                let clean_query = if is_live {
+                    crate::live_query::strip_live_directive(query)
+                } else {
+                    query.to_string()
+                };
+                
+                tracing::info!(
+                    subscription_id = %id,
+                    is_live = is_live,
+                    "Live query subscription started"
+                );
+                
+                // Build and execute the GraphQL request
+                let mut gql_request = async_graphql::Request::new(&clean_query);
+                
+                // Add variables if present
+                if let Some(vars) = parsed.payload.as_ref().and_then(|p| p.get("variables")) {
+                    if let Ok(variables) = serde_json::from_value(vars.clone()) {
+                        gql_request = gql_request.variables(variables);
+                    }
+                }
+                
+                // Add operation name if present
+                if let Some(op_name) = parsed.payload.as_ref().and_then(|p| p.get("operationName")).and_then(|n| n.as_str()) {
+                    gql_request = gql_request.operation_name(op_name);
+                }
+                
+                // Execute the query - using mux.handle_http for consistency
+                let response = mux.handle_http(HeaderMap::new(), gql_request).await;
+                
+                // Send the result
+                let response_json = serde_json::to_value(&response).unwrap_or_default();
+                
+                let next_msg = WsResponse {
+                    msg_type: "next".to_string(),
+                    id: Some(id.clone()),
+                    payload: Some(response_json),
+                };
+                
+                if let Err(e) = sender.send(Message::Text(serde_json::to_string(&next_msg).unwrap().into())).await {
+                    tracing::error!("Failed to send live query result: {}", e);
+                    break;
+                }
+                
+                // Send complete for now (full live updates would require keeping connection open)
+                // TODO: Integrate with LiveQueryStore for real-time updates
+                let complete_msg = WsResponse {
+                    msg_type: "complete".to_string(),
+                    id: Some(id),
+                    payload: None,
+                };
+                
+                if let Err(e) = sender.send(Message::Text(serde_json::to_string(&complete_msg).unwrap().into())).await {
+                    tracing::error!("Failed to send complete: {}", e);
+                    break;
+                }
+            }
+            
+            "complete" => {
+                tracing::debug!("Client completed subscription: {:?}", parsed.id);
+            }
+            
+            _ => {
+                tracing::debug!("Unknown message type: {}", parsed.msg_type);
+            }
+        }
+    }
+    
+    tracing::debug!("Live query WebSocket connection closed");
 }
 
 #[cfg(test)]

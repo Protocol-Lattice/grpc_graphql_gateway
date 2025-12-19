@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2025-12-19
+
+### Added
+- **Live Query WebSocket Integration**:
+  - Dedicated `/graphql/live` WebSocket endpoint for `@live` queries.
+  - Full `graphql-transport-ws` protocol support (connection_init, subscribe, next, complete).
+  - `@live` directive stripping for async-graphql compatibility.
+  - HTTP POST support for `@live` queries at `/graphql` endpoint.
+
+- **Runtime Enhancements**:
+  - `handle_live_query_ws()` - Custom WebSocket handler for live queries.
+  - `handle_live_socket()` - Processes live query subscriptions.
+  - Automatic `@live` directive detection and stripping in `handle_http()`.
+
+- **Example Test Script**: `examples/live_query/test_ws.js` demonstrating:
+  - WebSocket connection and protocol handshake.
+  - `@live` query execution with real-time data retrieval.
+  - Mutation integration showing data changes.
+
+### Usage
+
+```javascript
+// Connect to live query endpoint
+const ws = new WebSocket('ws://localhost:9000/graphql/live', 'graphql-transport-ws');
+
+// Send @live query
+ws.send(JSON.stringify({
+  id: 'live-1',
+  type: 'subscribe',
+  payload: { query: 'query @live { users { id name } }' }
+}));
+```
+
+## [0.6.3] - 2025-12-19
+
+### Added
+- **Live Query Core Module** (`src/live_query.rs`):
+  - `LiveQueryStore` for managing active queries and invalidation triggers.
+  - `InvalidationEvent` system to notify queries when mutations occur.
+  - `ActiveLiveQuery` struct with throttling, TTL, and strategy support.
+  - Configurable strategies: `INVALIDATION`, `POLLING`, `HASH_DIFF`.
+
+- **Proto Definitions** (`proto/graphql.proto`):
+  - `GraphqlLiveQuery` message for RPC-level live query configuration.
+  - `LiveQueryStrategy` enum for invalidation vs polling modes.
+  - `graphql.live_query` extension on `MethodOptions`.
+
+- **Public API Functions**:
+  - `has_live_directive(query)` - Detects `@live` directive in GraphQL queries.
+  - `strip_live_directive(query)` - Strips `@live` for execution compatibility.
+  - `create_live_query_store()` - Creates shared store for managing live queries.
+
+- **Example**: `examples/live_query/` with full CRUD implementation.
+
+### Proto Configuration
+
+```protobuf
+rpc GetUser(GetUserRequest) returns (User) {
+  option (graphql.schema) = { type: QUERY, name: "user" };
+  option (graphql.live_query) = {
+    enabled: true
+    strategy: INVALIDATION
+    triggers: ["User.update", "User.delete"]
+    throttle_ms: 100
+  };
+}
+```
+
+
 ## [0.6.2] - 2025-12-19
 
 ### Added

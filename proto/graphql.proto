@@ -222,6 +222,69 @@ message GraphqlEntity {
   bool resolvable = 3;
 }
 
+// Live Query configuration for reactive subscriptions.
+// User can use this option to enable live queries on specific RPC methods:
+//
+// service UserService {
+//    rpc GetUser(GetUserRequest) returns (User) {
+//      option (graphql.schema) = {
+//        type: QUERY
+//        name: "user"
+//      };
+//      option (graphql.live_query) = {
+//        enabled: true
+//        throttle_ms: 100
+//        triggers: ["User.update", "User.delete"]
+//      };
+//    }
+// }
+//
+// When a client sends a query with @live directive:
+//   query @live { user(id: "1") { name status } }
+//
+// The gateway will:
+// 1. Execute the query immediately
+// 2. Re-execute and push updates when any trigger fires
+// 3. Throttle updates to prevent flooding (default: 100ms)
+message GraphqlLiveQuery {
+  // Enable live query support for this method
+  bool enabled = 1;
+  
+  // Minimum time between updates in milliseconds (default: 100ms)
+  // Prevents flooding clients with too many updates
+  uint32 throttle_ms = 2;
+  
+  // List of invalidation triggers that cause re-execution
+  // Format: "TypeName.action" where action is: create, update, delete, or *
+  // Examples: "User.update", "Post.*", "Comment.create"
+  repeated string triggers = 3;
+  
+  // Maximum number of concurrent live query connections per client (default: 10)
+  uint32 max_connections = 4;
+  
+  // Time-to-live in seconds. Live query auto-closes after this duration (0 = infinite)
+  uint32 ttl_seconds = 5;
+  
+  // Strategy for detecting changes
+  LiveQueryStrategy strategy = 6;
+  
+  // For POLLING strategy: interval in milliseconds
+  uint32 poll_interval_ms = 7;
+  
+  // Entities this query depends on (for automatic invalidation)
+  repeated string depends_on = 8;
+}
+
+// Strategy for detecting when to push live query updates
+enum LiveQueryStrategy {
+  // Push updates when invalidation triggers fire (recommended)
+  INVALIDATION = 0;
+  // Poll the underlying data source at regular intervals
+  POLLING = 1;
+  // Compare response hashes to detect changes
+  HASH_DIFF = 2;
+}
+
 // Extend builtin messages
 
 extend google.protobuf.FileOptions {
@@ -242,4 +305,5 @@ extend google.protobuf.MessageOptions {
 
 extend google.protobuf.MethodOptions {
   GraphqlSchema schema = 1079;
+  GraphqlLiveQuery live_query = 1080;
 }

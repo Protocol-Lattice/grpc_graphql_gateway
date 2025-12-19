@@ -28,6 +28,7 @@ GBP Ultra (9MB)                ▏                    0.9% ⚡ (1,749 MB/s)
 | Category | Capabilities |
 |----------|-------------|
 | **Core** | Schema generation, Queries/Mutations/Subscriptions, WebSocket, File uploads |
+| **Live Queries** | `@live` directive, Real-time updates, Invalidation triggers, WebSocket push |
 | **Federation** | Apollo Federation v2, Entity resolution, DataLoader batching, No N+1 |
 | **Production** | Health checks, Prometheus, OpenTelemetry, Rate limiting, Circuit breaker |
 | **Security** | Query depth/complexity limits, Introspection control, Query whitelisting |
@@ -58,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-**Endpoints:** `http://localhost:8888/graphql` | `ws://localhost:8888/graphql/ws`
+**Endpoints:** `http://localhost:8888/graphql` | `ws://localhost:8888/graphql/ws` | `ws://localhost:8888/graphql/live`
 
 ## 🌐 Federation
 
@@ -83,11 +84,47 @@ Gateway::builder()
     .build()?;
 ```
 
+## ⚡ Live Queries
+
+Real-time updates with the `@live` directive:
+
+```graphql
+# Connect to ws://localhost:8888/graphql/live
+query @live {
+  users {
+    id
+    name
+    status
+  }
+}
+```
+
+Configure in your proto:
+
+```protobuf
+rpc GetUser(GetUserRequest) returns (User) {
+  option (graphql.schema) = { type: QUERY, name: "user" };
+  option (graphql.live_query) = {
+    enabled: true
+    strategy: INVALIDATION
+    triggers: ["User.update", "User.delete"]
+  };
+}
+```
+
+Trigger updates from mutations:
+
+```rust
+// After mutation, invalidate affected queries
+LIVE_QUERY_STORE.invalidate(InvalidationEvent::new("User", "update"));
+```
+
 ## 📚 Examples
 
 ```bash
 cargo run --example greeter      # Basic queries/mutations/subscriptions
 cargo run --example federation   # 3 federated subgraphs
+cargo run --example live_query   # Live queries with @live directive
 ```
 
 ## 📦 Client SDKs

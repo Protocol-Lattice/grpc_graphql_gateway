@@ -2,7 +2,7 @@
 //! provided `.proto` files. The output is a single `graphql_gateway.rs` file
 //! that you can drop into your project and fill in service endpoints.
 
-use grpc_graphql_gateway::graphql::{GraphqlEntity, GraphqlSchema, GraphqlService, GraphqlType};
+use grpc_graphql_gateway::graphql::{GraphqlEntity, GraphqlLiveQuery, GraphqlSchema, GraphqlService, GraphqlType};
 use prost::Message;
 use prost_reflect::{DescriptorPool, DynamicMessage, ExtensionDescriptor, Value};
 use prost_types::compiler::{code_generator_response, CodeGeneratorResponse};
@@ -46,12 +46,36 @@ struct EntityInfo {
     resolvable: bool,
 }
 
+/// Metadata about live query configuration (graphql.live_query).
+#[derive(Debug, Clone)]
+struct LiveQueryInfo {
+    /// GraphQL operation name (from graphql.schema.name)
+    operation_name: String,
+    /// Whether live query is enabled
+    enabled: bool,
+    /// Throttle interval in milliseconds
+    throttle_ms: u32,
+    /// Invalidation triggers (e.g., "User.update", "Post.*")
+    triggers: Vec<String>,
+    /// Maximum concurrent connections per client
+    max_connections: u32,
+    /// TTL in seconds (0 = infinite)
+    ttl_seconds: u32,
+    /// Strategy: "INVALIDATION", "POLLING", or "HASH_DIFF"
+    strategy: String,
+    /// Poll interval for POLLING strategy
+    poll_interval_ms: u32,
+    /// Entity dependencies for automatic invalidation
+    depends_on: Vec<String>,
+}
+
 #[derive(Debug, Default, Clone)]
 struct OperationBuckets {
     queries: Vec<String>,
     mutations: Vec<String>,
     subscriptions: Vec<String>,
     resolvers: Vec<String>,
+    live_queries: Vec<LiveQueryInfo>,
 }
 
 #[derive(Default)]
@@ -153,7 +177,7 @@ fn is_target_file(targets: &HashSet<&str>, file_name: &str) -> bool {
 }
 
 /// Collect the services from the files protoc asked us to generate for, along with
-/// GraphQL operations (queries, mutations, subscriptions, resolvers).
+/// GraphQL operations (queries, mutations, subscriptions, resolvers, and live queries).
 fn collect_services(
     pool: &DescriptorPool,
     request: &RawCodeGeneratorRequest,
@@ -166,6 +190,7 @@ fn collect_services(
 
     let method_ext = pool.get_extension_by_name("graphql.schema");
     let service_ext = pool.get_extension_by_name("graphql.service");
+    let live_query_ext = pool.get_extension_by_name("graphql.live_query");
 
     let mut services = Vec::new();
     for svc in pool.services() {
@@ -203,24 +228,53 @@ fn collect_services(
                 server_streaming: method.is_server_streaming(),
             });
 
-            if let Some(method_ext) = method_ext.as_ref() {
-                let Some(schema_opts) =
-                    decode_extension::<GraphqlSchema>(&method.options(), method_ext)?
-                else {
-                    continue;
-                };
+            // Get the GraphQL schema options first
+            let graphql_name = if let Some(method_ext) = method_ext.as_ref() {
+                if let Some(schema_opts) = decode_extension::<GraphqlSchema>(&method.options(), method_ext)? {
+                    let name = if schema_opts.name.is_empty() {
+                        method.name().to_string()
+                    } else {
+                        schema_opts.name.clone()
+                    };
 
-                let graphql_name = if schema_opts.name.is_empty() {
-                    method.name().to_string()
+                    match GraphqlType::try_from(schema_opts.r#type).unwrap_or(GraphqlType::Query) {
+                        GraphqlType::Query => info.ops.queries.push(name.clone()),
+                        GraphqlType::Mutation => info.ops.mutations.push(name.clone()),
+                        GraphqlType::Subscription => info.ops.subscriptions.push(name.clone()),
+                        GraphqlType::Resolver => info.ops.resolvers.push(name.clone()),
+                    }
+                    Some(name)
                 } else {
-                    schema_opts.name.clone()
-                };
+                    None
+                }
+            } else {
+                None
+            };
 
-                match GraphqlType::try_from(schema_opts.r#type).unwrap_or(GraphqlType::Query) {
-                    GraphqlType::Query => info.ops.queries.push(graphql_name),
-                    GraphqlType::Mutation => info.ops.mutations.push(graphql_name),
-                    GraphqlType::Subscription => info.ops.subscriptions.push(graphql_name),
-                    GraphqlType::Resolver => info.ops.resolvers.push(graphql_name),
+            // Check for live_query extension
+            if let Some(lq_ext) = live_query_ext.as_ref() {
+                if let Some(lq_opts) = decode_extension::<GraphqlLiveQuery>(&method.options(), lq_ext)? {
+                    if lq_opts.enabled {
+                        let operation_name = graphql_name.unwrap_or_else(|| method.name().to_string());
+                        let strategy = match lq_opts.strategy {
+                            0 => "INVALIDATION",
+                            1 => "POLLING",
+                            2 => "HASH_DIFF",
+                            _ => "INVALIDATION",
+                        };
+                        
+                        info.ops.live_queries.push(LiveQueryInfo {
+                            operation_name,
+                            enabled: true,
+                            throttle_ms: if lq_opts.throttle_ms > 0 { lq_opts.throttle_ms } else { 100 },
+                            triggers: lq_opts.triggers,
+                            max_connections: if lq_opts.max_connections > 0 { lq_opts.max_connections } else { 10 },
+                            ttl_seconds: lq_opts.ttl_seconds,
+                            strategy: strategy.to_string(),
+                            poll_interval_ms: lq_opts.poll_interval_ms,
+                            depends_on: lq_opts.depends_on,
+                        });
+                    }
                 }
             }
         }
@@ -436,6 +490,60 @@ fn render_template(
             "pub const ENTITY_CONFIGS: &[EntityConfigInfo] = {};\n\n",
             render_entity_configs(entities)
         ));
+    }
+
+    // Collect all live queries from all services
+    let all_live_queries: Vec<&LiveQueryInfo> = services
+        .iter()
+        .flat_map(|s| s.ops.live_queries.iter())
+        .collect();
+    let has_live_queries = !all_live_queries.is_empty();
+
+    if has_live_queries {
+        buf.push_str("/// Live Query configuration for reactive subscriptions.\n");
+        buf.push_str("/// Use the @live directive on supported queries to receive automatic updates.\n");
+        buf.push_str("#[derive(Debug, Clone)]\n");
+        buf.push_str("pub struct LiveQueryConfigInfo {\n");
+        buf.push_str("    /// GraphQL operation name\n");
+        buf.push_str("    pub operation_name: &'static str,\n");
+        buf.push_str("    /// Throttle interval in milliseconds\n");
+        buf.push_str("    pub throttle_ms: u32,\n");
+        buf.push_str("    /// Invalidation triggers\n");
+        buf.push_str("    pub triggers: &'static [&'static str],\n");
+        buf.push_str("    /// Maximum connections per client\n");
+        buf.push_str("    pub max_connections: u32,\n");
+        buf.push_str("    /// TTL in seconds (0 = infinite)\n");
+        buf.push_str("    pub ttl_seconds: u32,\n");
+        buf.push_str("    /// Strategy: INVALIDATION, POLLING, or HASH_DIFF\n");
+        buf.push_str("    pub strategy: &'static str,\n");
+        buf.push_str("    /// Poll interval for POLLING strategy\n");
+        buf.push_str("    pub poll_interval_ms: u32,\n");
+        buf.push_str("    /// Entity dependencies\n");
+        buf.push_str("    pub depends_on: &'static [&'static str],\n");
+        buf.push_str("}\n\n");
+        
+        buf.push_str(&format!(
+            "pub const LIVE_QUERY_CONFIGS: &[LiveQueryConfigInfo] = {};\n\n",
+            render_live_query_configs(&all_live_queries)
+        ));
+        
+        buf.push_str("#[allow(dead_code)]\n");
+        buf.push_str("const LIVE_QUERIES_ENABLED: bool = true;\n\n");
+        
+        buf.push_str("fn describe_live_queries() -> String {\n");
+        buf.push_str("    if LIVE_QUERY_CONFIGS.is_empty() {\n");
+        buf.push_str("        \"none\".to_string()\n");
+        buf.push_str("    } else {\n");
+        buf.push_str("        LIVE_QUERY_CONFIGS\n");
+        buf.push_str("            .iter()\n");
+        buf.push_str("            .map(|lq| format!(\"{}@live ({}ms, {})\", lq.operation_name, lq.throttle_ms, lq.strategy))\n");
+        buf.push_str("            .collect::<Vec<_>>()\n");
+        buf.push_str("            .join(\", \")\n");
+        buf.push_str("    }\n");
+        buf.push_str("}\n\n");
+    } else {
+        buf.push_str("#[allow(dead_code)]\n");
+        buf.push_str("const LIVE_QUERIES_ENABLED: bool = false;\n\n");
     }
     buf.push('\n');
 
@@ -926,6 +1034,40 @@ fn render_entity_configs(entities: &[EntityInfo]) -> String {
             ));
             buf.push_str(&format!("        extend: {},\n", entity.extend));
             buf.push_str(&format!("        resolvable: {},\n", entity.resolvable));
+            buf.push_str("    },\n");
+        }
+        buf.push(']');
+        buf
+    }
+}
+
+fn render_live_query_configs(live_queries: &[&LiveQueryInfo]) -> String {
+    if live_queries.is_empty() {
+        "&[]".to_string()
+    } else {
+        let mut buf = String::from("&[\n");
+        for lq in live_queries {
+            buf.push_str("    LiveQueryConfigInfo {\n");
+            buf.push_str(&format!(
+                "        operation_name: {},\n",
+                render_str_literal(&lq.operation_name)
+            ));
+            buf.push_str(&format!("        throttle_ms: {},\n", lq.throttle_ms));
+            buf.push_str(&format!(
+                "        triggers: {},\n",
+                render_str_slice(&lq.triggers)
+            ));
+            buf.push_str(&format!("        max_connections: {},\n", lq.max_connections));
+            buf.push_str(&format!("        ttl_seconds: {},\n", lq.ttl_seconds));
+            buf.push_str(&format!(
+                "        strategy: {},\n",
+                render_str_literal(&lq.strategy)
+            ));
+            buf.push_str(&format!("        poll_interval_ms: {},\n", lq.poll_interval_ms));
+            buf.push_str(&format!(
+                "        depends_on: {},\n",
+                render_str_slice(&lq.depends_on)
+            ));
             buf.push_str("    },\n");
         }
         buf.push(']');

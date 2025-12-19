@@ -3,6 +3,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto/graphql.proto");
     println!("cargo:rerun-if-changed=proto/greeter.proto");
     println!("cargo:rerun-if-changed=proto/federation_example.proto");
+    println!("cargo:rerun-if-changed=proto/live_query_example.proto");
     println!("cargo:rerun-if-changed=build.rs");
 
     // Use src/generated directory for generated files
@@ -36,5 +37,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .file_descriptor_set_path(generated_dir.join("federation_example_descriptor.bin"))
         .compile_protos(&["proto/federation_example.proto"], &proto_paths)?;
 
+    // Build live query example (demonstrates @live directive support)
+    tonic_build::configure()
+        .build_server(true)
+        .build_client(true)
+        .out_dir(&generated_dir)
+        .file_descriptor_set_path(generated_dir.join("live_query_example_descriptor.bin"))
+        .compile_protos(&["proto/live_query_example.proto"], &proto_paths)?;
+
     Ok(())
 }
+

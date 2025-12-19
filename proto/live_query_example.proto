@@ -1,0 +1,150 @@
+// live_query_example.proto
+//
+// Example demonstrating Live Query / Reactive Subscriptions support.
+// Queries with @live directive will automatically push updates when data changes.
+syntax = "proto3";
+
+package live_example;
+
+import "graphql.proto";
+
+option (graphql.rust_package) = "live_example";
+
+// User service with live query support
+service UserService {
+  option (graphql.service) = {
+    host: "localhost:50051"
+    insecure: true
+  };
+
+  // Get a single user - supports @live for real-time updates
+  rpc GetUser(GetUserRequest) returns (User) {
+    option (graphql.schema) = {
+      type: QUERY
+      name: "user"
+    };
+    option (graphql.live_query) = {
+      enabled: true
+      throttle_ms: 100
+      triggers: ["User.update", "User.delete"]
+      max_connections: 10
+      ttl_seconds: 3600
+      strategy: INVALIDATION
+      depends_on: ["User"]
+    };
+  }
+
+  // List all users - supports @live with polling strategy
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {
+    option (graphql.schema) = {
+      type: QUERY
+      name: "users"
+    };
+    option (graphql.live_query) = {
+      enabled: true
+      throttle_ms: 500
+      triggers: ["User.create", "User.update", "User.delete"]
+      strategy: POLLING
+      poll_interval_ms: 5000
+    };
+  }
+
+  // Get user status - supports @live with hash diff strategy
+  rpc GetUserStatus(GetUserStatusRequest) returns (UserStatus) {
+    option (graphql.schema) = {
+      type: QUERY
+      name: "userStatus"
+    };
+    option (graphql.live_query) = {
+      enabled: true
+      throttle_ms: 50
+      triggers: ["User.status_change"]
+      strategy: HASH_DIFF
+    };
+  }
+
+  // Create user - mutation triggers User.create invalidation
+  rpc CreateUser(CreateUserRequest) returns (User) {
+    option (graphql.schema) = {
+      type: MUTATION
+      name: "createUser"
+    };
+  }
+
+  // Update user - mutation triggers User.update invalidation
+  rpc UpdateUser(UpdateUserRequest) returns (User) {
+    option (graphql.schema) = {
+      type: MUTATION
+      name: "updateUser"
+    };
+  }
+
+  // Delete user - mutation triggers User.delete invalidation
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse) {
+    option (graphql.schema) = {
+      type: MUTATION
+      name: "deleteUser"
+    };
+  }
+}
+
+// User entity with federation support
+message User {
+  option (graphql.entity) = {
+    keys: "id"
+    resolvable: true
+  };
+
+  string id = 1;
+  string name = 2;
+  string email = 3;
+  UserStatus status = 4;
+  int64 created_at = 5;
+  int64 updated_at = 6;
+}
+
+message UserStatus {
+  string user_id = 1;
+  bool is_online = 2;
+  string last_active = 3;
+  string current_activity = 4;
+}
+
+message GetUserRequest {
+  string id = 1;
+}
+
+message ListUsersRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+  string filter = 3;
+}
+
+message ListUsersResponse {
+  repeated User users = 1;
+  int32 total_count = 2;
+}
+
+message GetUserStatusRequest {
+  string user_id = 1;
+}
+
+message CreateUserRequest {
+  string name = 1;
+  string email = 2;
+}
+
+message UpdateUserRequest {
+  string id = 1;
+  string name = 2;
+  string email = 3;
+}
+
+message DeleteUserRequest {
+  string id = 1;
+}
+
+message DeleteUserResponse {
+  bool success = 1;
+  string message = 2;
+}
