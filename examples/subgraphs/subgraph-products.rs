@@ -9,7 +9,7 @@ async fn main() {
         .and(warp::header::optional::<String>("accept"))
         .map(|accept: Option<String>| {
             // Generate some products
-            let products: Vec<_> = (0..50)
+            let products: Vec<_> = (0..10000)
                 .map(|i| {
                     json!({
                         "id": format!("prod_{}", i),

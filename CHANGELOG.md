@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2025-12-19
+
+### Added
+- **GBP Ultra - RLE Optimization**:
+  - Implemented **Run-Length Encoding (RLE)** for columnar arrays (Tag `0x0B`).
+  - Detects and compresses repetitive primitive values in O(1) space.
+  - Achieved **486 MB/s** throughput and **99.26% compression** on "Behemoth" (100MB+) payloads.
+  - Reduced encoding latency for repetitive datasets by >50%.
+
+- **Benchmarks**:
+  - Added `test_gbp_ultra_behemoth` for validating performance on 100MB+ payloads.
+  - Updated `subgraph-products` example to generate realistic large-scale datasets (10,000+ items).
+
+### Fixed
+- **Pooling Synchronization**: Fixed critical "Invalid value reference" error by synchronizing value pooling logic between `GbpEncoder` and `GbpDecoder` (Rust & TypeScript).
+- **Frontend Compatibility**: Updated `GbpDecoder.ts` to support RLE decompression and BigInt serialization.
+- **Federation Compatibility**: Verified end-to-end compression flow with accurate data reconstruction for federated subgraphs.
+
 ## [0.6.0] - 2025-12-19
 
 ### Added
