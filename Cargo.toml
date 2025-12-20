@@ -17,7 +17,7 @@ async-graphql-axum = "7.0"
 
 # gRPC
 tonic = { version = "0.12.3", features = ["tls"] }
-prost = "0.13"
+prost = "0.14"
 base64 = "0.22"
 
 # Async
