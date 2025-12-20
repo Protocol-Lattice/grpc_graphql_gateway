@@ -1051,6 +1051,153 @@ mod tests {
         
         // Mid-case should show good compression due to realistic patterns
         assert!(reduction >= 90.0, "Mid-case reduction was only {:.2}%, expected >= 90%", reduction);
+    }
 
+    #[test]
+    fn test_gbp_mid_case_1gb() {
+        let mut encoder = GbpEncoder::new();
+        
+        // Define realistic, limited value sets for categorical fields
+        let statuses = vec!["ACTIVE", "INACTIVE", "PENDING", "SUSPENDED", "TRIAL", "ARCHIVED"];
+        let roles = vec!["ADMIN", "MEMBER", "VIEWER", "OWNER", "CONTRIBUTOR", "GUEST", "MODERATOR"];
+        let tiers = vec!["FREE", "BASIC", "PREMIUM", "ENTERPRISE", "TRIAL"];
+        let regions = vec!["US-EAST", "US-WEST", "EU-CENTRAL", "EU-WEST", "ASIA-PACIFIC", "SOUTH-AMERICA", "MIDDLE-EAST"];
+        let themes = vec!["dark", "light", "auto", "high-contrast"];
+        let departments = vec!["Engineering", "Sales", "Marketing", "Support", "HR", "Finance", "Operations"];
+        
+        // Simulate 50 different organizations (shared across users)
+        let organizations: Vec<Value> = (0..50).map(|i| json!({
+            "id": format!("org-{}", i),
+            "name": format!("Organization {}", i),
+            "industry": departments[i % departments.len()],
+            "settings": {
+                "theme": themes[i % themes.len()],
+                "notifications": i % 2 == 0,
+                "twoFactorAuth": i % 3 == 0,
+                "audit": if i % 3 == 0 { "enabled" } else { "disabled" },
+                "backup": if i % 2 == 0 { "daily" } else { "weekly" }
+            },
+            "billing": {
+                "plan": tiers[i % tiers.len()],
+                "seats": (i % 10 + 1) * 10,
+                "currency": if i % 2 == 0 { "USD" } else { "EUR" }
+            }
+        })).collect();
+        
+        // Generate 1GB mid-case payload: ~1,000,000 users with realistic variation
+        println!("\nGenerating 1GB Mid-Case payload (1,000,000 users with realistic variation)...");
+        let data = json!({
+            "data": {
+                "users": (0..1000000).map(|i| {
+                    json!({
+                        "id": i,
+                        "typename": "User",
+                        "status": statuses[i % statuses.len()],
+                        "role": roles[i % roles.len()],
+                        "organization": organizations[i % organizations.len()].clone(),
+                        "permissions": if i % 3 == 0 {
+                            vec!["READ", "WRITE", "DELETE"]
+                        } else if i % 2 == 0 {
+                            vec!["READ", "WRITE"]
+                        } else {
+                            vec!["READ"]
+                        },
+                        "profile": {
+                            "verified": i % 3 == 0,
+                            "tier": tiers[i % tiers.len()],
+                            "department": departments[i % departments.len()],
+                            "score": (i % 100) as f64 / 10.0,
+                            "metadata": {
+                                "region": regions[i % regions.len()],
+                                "shard": (i % 32) as u32,
+                                "cluster": format!("cluster-{}", i % 8),
+                                "datacenter": format!("dc-{}", i % 4),
+                                "tags": if i % 2 == 0 {
+                                    vec!["premium", "verified", "trusted"]
+                                } else {
+                                    vec!["standard", "active"]
+                                },
+                                "preferences": {
+                                    "theme": themes[i % themes.len()],
+                                    "language": if i % 3 == 0 { "en" } else if i % 3 == 1 { "es" } else { "fr" },
+                                    "timezone": format!("UTC{:+}", (i % 24) as i32 - 12)
+                                }
+                            }
+                        },
+                        "description": format!("User {} - {} in {}", i, roles[i % roles.len()], departments[i % departments.len()]),
+                        "email": format!("user{}@org{}.com", i, i % 50),
+                        "lastLogin": format!("2025-12-{:02}T{:02}:00:00Z", (i % 30) + 1, i % 24),
+                        "createdAt": format!("2023-{:02}-01T00:00:00Z", (i % 12) + 1),
+                    })
+                }).collect::<Vec<_>>()
+            }
+        });
+
+        let json_bytes = serde_json::to_vec(&data).unwrap();
+        println!("Original payload size: {:.2} MB", json_bytes.len() as f64 / 1024.0 / 1024.0);
+        println!("Encoding 1GB Mid-Case with GBP Ultra + LZ4...");
+        
+        let start = std::time::Instant::now();
+        let encoded = encoder.encode_lz4(&data).unwrap();
+        let duration = start.elapsed();
+
+        let ratio = encoded.len() as f64 / json_bytes.len() as f64;
+        let reduction = (1.0 - ratio) * 100.0;
+
+        println!("\n--- GBP 1GB Mid-Case Compression Test ---");
+        println!("Original JSON size:  {:>12} bytes ({:.2} MB)", 
+            json_bytes.len(), json_bytes.len() as f64 / 1024.0 / 1024.0);
+        println!("GBP Ultra size:      {:>12} bytes ({:.2} MB)", 
+            encoded.len(), encoded.len() as f64 / 1024.0 / 1024.0);
+        println!("Compression Ratio:   {:>12.2}% reduction", reduction);
+        println!("Encoding Time:       {:>12.2}ms ({:.2}s)", 
+            duration.as_secs_f64() * 1000.0, duration.as_secs_f64());
+        println!("Throughput:          {:>12.2} MB/s",
+            (json_bytes.len() as f64 / 1024.0 / 1024.0) / duration.as_secs_f64()
+        );
+
+        // Data Integrity Check (lighter check for performance)
+        println!("Verifying data integrity for 1GB Mid-Case...");
+        let decode_start = std::time::Instant::now();
+        let mut decoder = GbpDecoder::new();
+        let decoded = decoder.decode_lz4(&encoded).expect("Decoding failed");
+        let decode_duration = decode_start.elapsed();
+        
+        println!("Decoding Time:       {:>12.2}ms ({:.2}s)",
+            decode_duration.as_secs_f64() * 1000.0, decode_duration.as_secs_f64());
+        println!("Decode Throughput:   {:>12.2} MB/s",
+            (json_bytes.len() as f64 / 1024.0 / 1024.0) / decode_duration.as_secs_f64()
+        );
+        
+        // Verify structure
+        assert!(decoded.is_object(), "Root should be an object");
+        let decoded_data = decoded.get("data").expect("Missing 'data' field");
+        let decoded_users = decoded_data.get("users").expect("Missing 'users' field");
+        assert!(decoded_users.is_array(), "Users should be an array");
+        assert_eq!(decoded_users.as_array().unwrap().len(), 1000000, "Should have 1,000,000 users");
+        
+        // Spot check values
+        let first_user = &decoded_users[0];
+        assert_eq!(first_user.get("typename").unwrap().as_str().unwrap(), "User");
+        assert_eq!(first_user.get("id").unwrap().as_i64().unwrap(), 0);
+        
+        let mid_user = &decoded_users[500000];
+        assert_eq!(mid_user.get("id").unwrap().as_i64().unwrap(), 500000);
+        
+        println!("✅ Integrity verified (structural check + spot checks)");
+
+        println!("\nℹ️  1GB Mid-Case Scenario Summary:");
+        println!("   Dataset: 1,000,000 users with realistic production patterns");
+        println!("   Characteristics:");
+        println!("   - 50 shared organizations (realistic multi-tenant scenario)");
+        println!("   - 6 statuses, 7 roles, 5 tiers, 7 regions (limited categorical values)");
+        println!("   - Unique IDs, emails, timestamps per user");
+        println!("   - Nested profile with preferences and metadata");
+        println!("   Achieved reduction: {:.2}%", reduction);
+        println!("   Total round-trip time: {:.2}s (encode + decode)", 
+            (duration.as_secs_f64() + decode_duration.as_secs_f64()));
+        
+        // 1GB mid-case should show excellent compression
+        assert!(reduction >= 90.0, "1GB mid-case reduction was only {:.2}%, expected >= 90%", reduction);
     }
 }
