@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -9,6 +9,9 @@ repository = "https://github.com/Protocol-Lattice/grpc_graphql_gateway"
 keywords = ["grpc", "graphql", "gateway", "protobuf", "api"]
 categories = ["network-programming", "api-bindings", "web-programming"]
 default-run = "greeter"
+
+# Disable automatic example discovery (we use [[bin]] targets instead)
+autoexamples = false
 
 [dependencies]
 # GraphQL
