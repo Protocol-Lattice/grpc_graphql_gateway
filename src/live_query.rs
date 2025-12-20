@@ -688,17 +688,30 @@ pub enum LiveQueryError {
 
 /// Parse `@live` directive from a GraphQL query
 // Parse @live directive from a GraphQL query
+// Parse @live directive from a GraphQL query
 pub fn has_live_directive(query: &str) -> bool {
+    let normalized = query
+        .lines()
+        .map(|line| {
+            if let Some(idx) = line.find('#') {
+                &line[..idx]
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
     // Basic detection of @live directive
     // Matches @live followed by whitespace, parenthesis (args), or brace (selection set)
     let custom_patterns = ["@live ", "@live\n", "@live\t", "@live(", "@live{"];
     for pattern in custom_patterns {
-        if query.contains(pattern) {
+        if normalized.contains(pattern) {
             return true;
         }
     }
     // Check for @live at end of string (e.g. "query @live")
-    if query.ends_with("@live") {
+    if normalized.trim_end().ends_with("@live") {
         return true;
     }
     
