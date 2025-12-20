@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Barrier;
-use uuid::Uuid;
+
 
 const SERVER_URL: &str = "http://127.0.0.1:8888/graphql";
 
