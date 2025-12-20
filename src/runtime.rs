@@ -1114,7 +1114,7 @@ async fn handle_live_query_ws(
         .on_upgrade(move |socket| handle_live_socket(socket, mux))
 }
 
-/// Handle the live query WebSocket connection with auto-push updates
+/// Handle the live query WebSocket connection with auto-push updates and GBP compression
 async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
     use std::collections::HashMap;
     use tokio::sync::mpsc;
@@ -1150,6 +1150,9 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
         is_live: bool,
     }
     
+    // Track compression preference (negotiated during connection_init)
+    let use_gbp_compression = Arc::new(parking_lot::RwLock::new(false));
+    
     let mut connection_initialized = false;
     let active_subscriptions: Arc<parking_lot::RwLock<HashMap<String, LiveSubscription>>> = 
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
@@ -1166,12 +1169,57 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
     let sender = Arc::new(tokio::sync::Mutex::new(sender));
     let sender_clone = sender.clone();
     
+    let use_compression_clone = use_gbp_compression.clone();
     let forward_task = tokio::spawn(async move {
         while let Some(msg) = ws_rx.recv().await {
-            let json = serde_json::to_string(&msg).unwrap();
             let mut sender = sender_clone.lock().await;
-            if sender.send(Message::Text(json.into())).await.is_err() {
-                break;
+            
+            // Check if GBP compression is enabled for this connection
+            if *use_compression_clone.read() {
+                // Use GBP binary compression
+                if let Some(payload) = &msg.payload {
+                    match crate::gbp::GbpEncoder::new().encode_lz4(payload) {
+                        Ok(compressed) => {
+                            // Create envelope: {type, id, compressed_payload}
+                            let envelope = serde_json::json!({
+                                "type": msg.msg_type,
+                                "id": msg.id,
+                                "compressed": true
+                            });
+                            let envelope_json = serde_json::to_string(&envelope).unwrap();
+                            
+                            // Send envelope + binary payload as separate frames
+                            // Frame 1: JSON envelope
+                            if sender.send(Message::Text(envelope_json.into())).await.is_err() {
+                                break;
+                            }
+                            // Frame 2: Binary GBP payload
+                            if sender.send(Message::Binary(compressed.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to compress with GBP, falling back to JSON: {}", e);
+                            // Fallback to JSON
+                            let json = serde_json::to_string(&msg).unwrap();
+                            if sender.send(Message::Text(json.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // No payload, send as JSON
+                    let json = serde_json::to_string(&msg).unwrap();
+                    if sender.send(Message::Text(json.into())).await.is_err() {
+                        break;
+                    }
+                }
+            } else {
+                // Use standard JSON (backward compatible)
+                let json = serde_json::to_string(&msg).unwrap();
+                if sender.send(Message::Text(json.into())).await.is_err() {
+                    break;
+                }
             }
         }
     });
@@ -1268,10 +1316,35 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
         match parsed.msg_type.as_str() {
             "connection_init" => {
                 connection_initialized = true;
+                
+                // Check if client requests GBP compression
+                if let Some(payload) = &parsed.payload {
+                    if let Some(compression) = payload.get("compression").and_then(|c| c.as_str()) {
+                        if compression == "gbp-lz4" || compression == "gbp" {
+                            *use_gbp_compression.write() = true;
+                            tracing::info!("GBP compression enabled for live query connection");
+                        }
+                    }
+                }
+                
+                let mut ack_payload = serde_json::json!({});
+                if *use_gbp_compression.read() {
+                    ack_payload["compression"] = serde_json::json!("gbp-lz4");
+                    ack_payload["compressionInfo"] = serde_json::json!({
+                        "algorithm": "GBP Ultra + LZ4",
+                        "expectedReduction": "90-99%",
+                        "format": "binary"
+                    });
+                }
+                
                 let ack = WsResponse {
                     msg_type: "connection_ack".to_string(),
                     id: None,
-                    payload: None,
+                    payload: if ack_payload.as_object().unwrap().is_empty() {
+                        None
+                    } else {
+                        Some(ack_payload)
+                    },
                 };
                 if ws_tx.send(ack).await.is_err() {
                     break;

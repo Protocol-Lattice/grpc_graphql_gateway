@@ -186,7 +186,7 @@ pub mod services {
 
     pub const LIVE_EXAMPLE_USERSERVICE: ServiceConfig = ServiceConfig {
         name: "live_example.UserService",
-        endpoint: "http://localhost:50051",
+        endpoint: "http://localhost:50052",
         insecure: true,
         queries: &["user", "users", "userStatus", "post"],
         mutations: &["createUser", "updateUser", "deleteUser", "createPost"],
@@ -542,31 +542,22 @@ impl live_example::user_service_server::UserService for ServiceImpl {
 }
 
 pub async fn run_services() -> GatewayResult<()> {
-    let mut handles = Vec::new();
-    {
-        let addr: SocketAddr = listen_addr("localhost:50051", DEFAULT_GRPC_ADDR)?;
-        let service = ServiceImpl::default();
-        tracing::info!("gRPC service live_example.UserService listening on {}", addr);
-        let handle = tokio::spawn(async move {
-            Server::builder()
-                .add_service(live_example::user_service_server::UserServiceServer::new(service.clone()))
-                .serve(addr)
-                .await
-                .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))
-        });
-        handles.push(handle);
-    }
-    for handle in handles {
-        match handle.await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                tracing::warn!(error = %e, "gRPC service task exited with error");
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "gRPC service task panicked or was cancelled");
-            }
-        }
-    }
+    let addr: SocketAddr = "127.0.0.1:50052".parse()
+        .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))?;
+    
+    let service = ServiceImpl::default();
+    tracing::info!("gRPC service live_example.UserService listening on {}", addr);
+    
+    // Run the server directly (not in a spawned task)
+    Server::builder()
+        .add_service(live_example::user_service_server::UserServiceServer::new(service))
+        .serve(addr)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "gRPC server failed to start");
+            grpc_graphql_gateway::Error::Other(anyhow::Error::new(e))
+        })?;
+    
     Ok(())
 }
 
