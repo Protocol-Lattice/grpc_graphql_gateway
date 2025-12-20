@@ -46,6 +46,7 @@ use ahash::AHashMap;
 use bytes::Bytes;
 use futures::stream::{FuturesUnordered, StreamExt};
 use governor::{Quota, RateLimiter};
+use serde::{Deserialize, Serialize};
 
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -57,7 +58,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 /// Configuration for DDoS protection
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DdosConfig {
     /// Global requests per second limit (across all clients)
     pub global_rps: u32,
@@ -214,7 +215,7 @@ impl DdosProtection {
 }
 
 /// Configuration for a Federation Router
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouterConfig {
     /// Port to listen on
     pub port: u16,
@@ -225,7 +226,7 @@ pub struct RouterConfig {
 }
 
 /// Configuration for a single subgraph
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubgraphConfig {
     /// Name of the subgraph (e.g., "users", "products")
     pub name: String,

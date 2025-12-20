@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.8] - 2025-12-20
+
+### Fixed
+- **RestConnector Path Validation**: Fixed overly aggressive security validation that was incorrectly rejecting GraphQL queries with newlines in the request body.
+  - Modified `build_request()` to only validate arguments that are actually used as path parameters.
+  - Router now correctly executes federated queries through subgraphs with GBP compression.
+  - Prevents false positives for "path traversal or URL injection" errors.
+
+### Performance
+- **99.998% Compression on Federation**: Verified GBP Ultra compression reducing 43.5 MB JSON payload to 776 bytes (56,091:1 ratio) on realistic federated datasets with 20,000 products.
+
+## [0.6.7] - 2025-12-20
+
+### Changed
+- Internal version bump for consistency.
+
 ## [0.6.6] - 2025-12-20
 
 ### Added

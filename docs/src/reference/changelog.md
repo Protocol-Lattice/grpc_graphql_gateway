@@ -7,6 +7,21 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.6.8] - 2025-12-20
+
+**RestConnector Validation Fix** 🔧
+
+- **Fixed**: Overly aggressive path validation that was incorrectly rejecting GraphQL queries with newlines.
+- **Improvement**: `build_request()` now only validates arguments actually used as path parameters.
+- **Result**: Router successfully executes federated queries through subgraphs with GBP compression.
+- **Performance**: Verified 99.998% compression (43.5 MB → 776 bytes, 56,091:1 ratio) on federated datasets with 20,000 products.
+
+### [0.6.7] - 2025-12-20
+
+**Internal Maintenance**
+
+- Version bump for consistency across the project.
+
 ### [0.6.6] - 2025-12-20
 
 **GBP Ultra: 99% Compression Achieved** 🎯

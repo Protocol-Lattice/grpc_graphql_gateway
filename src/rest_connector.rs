@@ -614,6 +614,12 @@ impl RestConnector {
         let mut path = endpoint.path.clone();
         for (key, value) in args {
             let placeholder = format!("{{{}}}", key);
+
+            // Only validate and replace if this argument is actually used in the path
+            if !path.contains(&placeholder) {
+                continue;
+            }
+
             let value_str = json_value_to_string(value);
 
             // SECURITY: Validate path parameter doesn't contain dangerous characters

@@ -1,12 +1,7 @@
-//! GBP Router - Speed of Light Edition
-//! Force recompile with Gzip support
+//! GBP Router - Configuration Driven
 //!
-//! A GraphQL Federation Router optimized to outperform Apollo Router through:
-//! - Zero-copy GBP compression (99% bandwidth reduction)
-//! - Lock-free request handling
-//! - Connection pooling with HTTP/2
-//! - SIMD-accelerated JSON parsing
-//! - Custom memory allocator (mimalloc)
+//! A high-performance GraphQL Federation Router.
+//! Reads configuration from `router.yaml`.
 
 use axum::{
     extract::{ConnectInfo, Json, State},
@@ -16,16 +11,39 @@ use axum::{
     Router,
 };
 use governor::{Quota, RateLimiter};
-use grpc_graphql_gateway::router::{GbpRouter, RouterConfig, SubgraphConfig};
+use grpc_graphql_gateway::router::{DdosConfig, DdosProtection, GbpRouter, RouterConfig, SubgraphConfig};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::num::NonZeroU32;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
-use tower_http::compression::CompressionLayer;
+
+#[derive(Debug, Deserialize)]
+struct YamlConfig {
+    server: ServerConfig,
+    #[allow(dead_code)]
+    cors: CorsConfig,
+    subgraphs: Vec<SubgraphConfig>,
+    #[serde(default)]
+    rate_limit: Option<DdosConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ServerConfig {
+    listen: String,
+    #[serde(default = "default_workers")]
+    workers: usize,
+}
+
+fn default_workers() -> usize {
+    16
+}
+
+#[derive(Debug, Deserialize)]
+struct CorsConfig {
+    allow_origins: Vec<String>,
+}
 
 #[derive(Debug, Deserialize)]
 struct GraphQlQuery {
@@ -37,74 +55,6 @@ struct GraphQlQuery {
     operation_name: Option<String>,
 }
 
-/// DDoS Protection with lock-free fast path
-#[derive(Clone)]
-pub struct DdosProtection {
-    global_limiter: Arc<
-        RateLimiter<
-            governor::state::NotKeyed,
-            governor::state::InMemoryState,
-            governor::clock::DefaultClock,
-        >,
-    >,
-    ip_limiters: Arc<
-        RwLock<
-            HashMap<
-                IpAddr,
-                Arc<
-                    RateLimiter<
-                        governor::state::NotKeyed,
-                        governor::state::InMemoryState,
-                        governor::clock::DefaultClock,
-                    >,
-                >,
-            >,
-        >,
-    >,
-    per_ip_rps: u32,
-    per_ip_burst: u32,
-}
-
-impl DdosProtection {
-    pub fn new(global_rps: u32, per_ip_rps: u32, per_ip_burst: u32) -> Self {
-        let global_quota = Quota::per_second(NonZeroU32::new(global_rps).unwrap());
-        Self {
-            global_limiter: Arc::new(RateLimiter::direct(global_quota)),
-            ip_limiters: Arc::new(RwLock::new(HashMap::new())),
-            per_ip_rps,
-            per_ip_burst,
-        }
-    }
-
-    #[inline(always)]
-    pub async fn check(&self, ip: IpAddr) -> bool {
-        // Fast path: global check (lock-free)
-        if self.global_limiter.check().is_err() {
-            return false;
-        }
-
-        // Per-IP check with read-preferring lock
-        let limiter = {
-            let limiters = self.ip_limiters.read().await;
-            limiters.get(&ip).cloned()
-        };
-
-        let limiter = match limiter {
-            Some(l) => l,
-            None => {
-                let quota = Quota::per_second(NonZeroU32::new(self.per_ip_rps).unwrap())
-                    .allow_burst(NonZeroU32::new(self.per_ip_burst).unwrap());
-                let new_limiter = Arc::new(RateLimiter::direct(quota));
-                let mut limiters = self.ip_limiters.write().await;
-                limiters.insert(ip, new_limiter.clone());
-                new_limiter
-            }
-        };
-
-        limiter.check().is_ok()
-    }
-}
-
 struct AppState {
     router: GbpRouter,
     ddos: DdosProtection,
@@ -113,10 +63,10 @@ struct AppState {
 }
 
 impl AppState {
-    fn new(router: GbpRouter, ddos: DdosProtection) -> Self {
+    fn new(router: GbpRouter, ddos: DdosProtection, pool_size: usize) -> Self {
         // Pre-allocate encoder pool
-        let mut encoders = Vec::with_capacity(64);
-        for _ in 0..64 {
+        let mut encoders = Vec::with_capacity(pool_size);
+        for _ in 0..pool_size {
             encoders.push(grpc_graphql_gateway::gbp::GbpEncoder::new());
         }
         Self {
@@ -125,84 +75,99 @@ impl AppState {
             encoder_pool: Arc::new(RwLock::new(encoders)),
         }
     }
-
-    async fn get_encoder(&self) -> grpc_graphql_gateway::gbp::GbpEncoder {
-        let mut pool = self.encoder_pool.write().await;
-        pool.pop()
-            .unwrap_or_else(grpc_graphql_gateway::gbp::GbpEncoder::new)
-    }
-
-    async fn return_encoder(&self, encoder: grpc_graphql_gateway::gbp::GbpEncoder) {
-        let mut pool = self.encoder_pool.write().await;
-        if pool.len() < 64 {
-            pool.push(encoder);
-        }
-    }
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
-async fn main() {
-    // Initialize logging (minimal for performance)
+fn main() {
+    // Determine config path from args or defaults
+    let args: Vec<String> = std::env::args().collect();
+    let config_path = if args.len() > 1 {
+        args[1].clone()
+    } else if std::path::Path::new("router.yaml").exists() {
+        "router.yaml".to_string()
+    } else if std::path::Path::new("examples/router.yaml").exists() {
+        "examples/router.yaml".to_string()
+    } else {
+        "router.yaml".to_string()
+    };
+
+    println!("📝 Loading configuration from: {}", config_path);
+
+    // We use a custom runtime builder to support configuration of worker threads
+    // First, load config to see how many workers we need
+    let config_content = std::fs::read_to_string(&config_path).unwrap_or_else(|_| {
+        eprintln!("⚠️  Could not read {}, using defaults", config_path);
+        r#"
+server:
+  listen: "0.0.0.0:4000"
+  workers: 16
+cors:
+  allow_origins: ["*"]
+subgraphs: []
+        "#.to_string()
+    });
+
+    let config: YamlConfig = serde_yaml::from_str(&config_content).expect("Failed to parse router configuration");
+
+    // Configure and start Tokio runtime
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(config.server.workers)
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async_main(config, config_path));
+}
+
+async fn async_main(yaml_config: YamlConfig, config_path: String) {
+    // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_target(false)
         .init();
 
-    // Router Configuration
-    let config = RouterConfig {
-        port: 4000,
-        subgraphs: vec![
-            SubgraphConfig {
-                name: "users".to_string(),
-                url: "http://localhost:4002/graphql".to_string(),
-            },
-            SubgraphConfig {
-                name: "products".to_string(),
-                url: "http://localhost:4003/graphql".to_string(),
-            },
-            SubgraphConfig {
-                name: "reviews".to_string(),
-                url: "http://localhost:4004/graphql".to_string(),
-            },
-        ],
-        force_gbp: true,
+    // Parse port from listen address
+    let port = yaml_config.server.listen
+        .split(':')
+        .last()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(4000);
+
+    // Convert YamlConfig to RouterConfig
+    let router_config = RouterConfig {
+        port,
+        subgraphs: yaml_config.subgraphs.clone(),
+        force_gbp: true, // Always enable GBP for this high-perf router
     };
 
-    // High-performance DDoS config (relaxed for benchmarking)
-    // - 1M global RPS
-    // - 100k per-IP RPS with 200k burst
-    let ddos = DdosProtection::new(1_000_000, 100_000, 200_000);
+    // Setup DDoS protection
+    let ddos_config = yaml_config.rate_limit.clone().unwrap_or(DdosConfig::relaxed());
+    let ddos = DdosProtection::new(ddos_config.clone());
 
-    let router = GbpRouter::new(config.clone());
-    let state = Arc::new(AppState::new(router, ddos));
+    let router = GbpRouter::new(router_config.clone());
+    let state = Arc::new(AppState::new(router, ddos, 64));
 
-    // Optimized Axum Router with Tower middleware
+    // Optimized Axum Router
     let app = Router::new()
         .route("/graphql", post(graphql_handler))
         .route("/health", get(health_handler))
         .with_state(state);
 
-    let addr = format!("0.0.0.0:{}", config.port);
-
     println!();
     println!("  ╔═══════════════════════════════════════════════════════════╗");
-    println!("  ║                     Router                                ║");
+    println!("  ║             GBP Router (Configured)                       ║");
     println!("  ╠═══════════════════════════════════════════════════════════╣");
-    println!(
-        "  ║  Listening:     http://{}                       ║",
-        addr
-    );
-    println!("  ║  Subgraphs:     2 (users, products)                       ║");
+    println!("  ║  Listening:     {}                       ║", yaml_config.server.listen);
+    println!("  ║  Workers:       {}                                       ║", yaml_config.server.workers);
+    println!("  ║  Subgraphs:     {}                                       ║", yaml_config.subgraphs.len());
+    for sg in &yaml_config.subgraphs {
+        println!("  ║   - {:<12} {} ║", sg.name, sg.url);
+    }
     println!("  ║  GBP Enabled:   ✅ (99% compression)                      ║");
-    println!("  ║  DDoS Shield:   100k global RPS, 1k per-IP                ║");
-    println!("  ║  Allocator:     mimalloc                                  ║");
-    println!("  ║  Workers:       16 threads                                ║");
+    println!("  ║  DDoS Shield:   {} global RPS, {} per-IP            ║", ddos_config.global_rps, ddos_config.per_ip_rps);
     println!("  ╚═══════════════════════════════════════════════════════════╝");
     println!();
 
-    let listener = TcpListener::bind(&addr).await.unwrap();
+    let listener = TcpListener::bind(&yaml_config.server.listen).await.unwrap();
 
-    // Use hyper's high-performance server configuration
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -218,7 +183,7 @@ async fn graphql_handler(
     headers: axum::http::HeaderMap,
     Json(payload): Json<GraphQlQuery>,
 ) -> impl IntoResponse {
-    // Extract client IP (fast path for direct connections)
+    // Extract client IP (fast path)
     let client_ip = headers
         .get("x-forwarded-for")
         .and_then(|h| h.to_str().ok())
@@ -254,15 +219,32 @@ async fn graphql_handler(
                 "data": data,
                 "extensions": {
                     "duration_ms": duration.as_secs_f64() * 1000.0,
-                    "powered_by": "GBP Ultra - Speed of Light"
+                    "powered_by": "GBP Ultra - Configurable"
                 }
             });
 
-            // Real GBP Ultra encoding path
-            // Real GBP Ultra encoding path
             if accept_gbp {
-                let mut encoder = grpc_graphql_gateway::gbp::GbpEncoder::new();
+                // Use pooled encoder
+                // We access the lock briefly to get/return encoder
+                // Ideally this would be a thread-local or pure stack if inexpensive construction
+                // But GbpEncoder reuses buffers, so pooling is good.
+                
+                // Note: In a real "Speed of Light" implementation, we might stick to thread-local
+                // encoders to avoid this mutex entirely.
+                // For now, minimal locking.
+                let mut encoders = state.encoder_pool.write().await;
+                let mut encoder = encoders.pop().unwrap_or_else(grpc_graphql_gateway::gbp::GbpEncoder::new);
+                drop(encoders); // release lock ASAP
+
                 let bytes = encoder.encode(&response_data);
+                
+                // Return encoder to pool
+                let mut encoders = state.encoder_pool.write().await;
+                if encoders.len() < 64 {
+                    encoders.push(encoder);
+                }
+                drop(encoders);
+
                 return (
                     [(axum::http::header::CONTENT_TYPE, "application/x-gbp")],
                     bytes,
@@ -283,6 +265,6 @@ async fn health_handler() -> impl IntoResponse {
     Json(json!({
         "status": "healthy",
         "version": "1.0.0",
-        "engine": "GBP Ultra"
+        "engine": "GBP Router"
     }))
 }
