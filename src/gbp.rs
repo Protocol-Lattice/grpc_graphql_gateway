@@ -824,4 +824,233 @@ mod tests {
 
         assert!(reduction >= 95.0, "Reduction was only {:.2}%", reduction);
     }
+
+    #[test]
+    fn test_gbp_worst_case_compression() {
+        use rand::{Rng, SeedableRng};
+        use rand::rngs::StdRng;
+        
+        let mut encoder = GbpEncoder::new();
+        let mut rng = StdRng::seed_from_u64(42); // Deterministic for reproducibility
+        
+        // Generate worst-case payload: completely random, unique data with no patterns
+        println!("\nGenerating Worst-Case payload (10,000 random users)...");
+        let data = json!({
+            "data": {
+                "users": (0..10000).map(|i| {
+                    // Each user has completely unique and random data
+                    json!({
+                        "id": format!("user-{}-{}", i, rng.gen::<u64>()),
+                        "typename": format!("Type_{}", rng.gen::<u32>()),
+                        "status": format!("STATUS_{}", rng.gen::<u16>()),
+                        "role": format!("Role_{}_{}", i, rng.gen::<u32>()),
+                        "randomField1": rng.gen::<f64>(),
+                        "randomField2": format!("random_string_{}_{}_{}", 
+                            rng.gen::<u64>(), rng.gen::<u64>(), rng.gen::<u64>()),
+                        "randomField3": rng.gen::<i64>(),
+                        "organization": {
+                            "id": format!("org-{}-{}", i, rng.gen::<u64>()),
+                            "name": format!("Organization_{}_{}", rng.gen::<u32>(), rng.gen::<u32>()),
+                            "randomMetric": rng.gen::<f64>(),
+                            "settings": {
+                                "theme": format!("theme_{}", rng.gen::<u16>()),
+                                "pref1": rng.gen::<bool>(),
+                                "pref2": format!("pref_{}", rng.gen::<u32>()),
+                                "randomValue": rng.gen::<i32>()
+                            }
+                        },
+                        "permissions": vec![
+                            format!("PERM_{}", rng.gen::<u32>()),
+                            format!("PERM_{}", rng.gen::<u32>()),
+                            format!("PERM_{}", rng.gen::<u32>()),
+                        ],
+                        "profile": {
+                            "verified": rng.gen::<bool>(),
+                            "tier": format!("TIER_{}", rng.gen::<u16>()),
+                            "score": rng.gen::<f64>(),
+                            "metadata": {
+                                "region": format!("REGION_{}", rng.gen::<u32>()),
+                                "shard": rng.gen::<u32>(),
+                                "cluster": format!("cluster-{}-{}", rng.gen::<u64>(), rng.gen::<u64>()),
+                                "tags": vec![
+                                    format!("tag_{}", rng.gen::<u64>()),
+                                    format!("tag_{}", rng.gen::<u64>()),
+                                    format!("tag_{}", rng.gen::<u64>()),
+                                ],
+                                "randomData": rng.gen::<u64>()
+                            }
+                        },
+                        "description": format!(
+                            "Random description {} {} {} {} {} {} {}",
+                            rng.gen::<u64>(), rng.gen::<u64>(), rng.gen::<u64>(),
+                            rng.gen::<u64>(), rng.gen::<u64>(), rng.gen::<u64>(),
+                            rng.gen::<u64>()
+                        ),
+                        // Add more unique fields to make it harder to compress
+                        "uniqueData1": format!("data_{}_{}_{}", rng.gen::<u128>(), rng.gen::<u128>(), rng.gen::<u128>()),
+                        "uniqueData2": rng.gen::<f64>(),
+                        "uniqueData3": rng.gen::<i64>(),
+                    })
+                }).collect::<Vec<_>>()
+            }
+        });
+
+        let json_bytes = serde_json::to_vec(&data).unwrap();
+        println!("Encoding Worst-Case with GBP Ultra + LZ4...");
+        let start = std::time::Instant::now();
+        let encoded = encoder.encode_lz4(&data).unwrap();
+        let duration = start.elapsed();
+
+        let ratio = encoded.len() as f64 / json_bytes.len() as f64;
+        let reduction = (1.0 - ratio) * 100.0;
+
+        println!("\n--- GBP Worst-Case Compression Test ---");
+        println!("Original JSON size:  {:>12} bytes ({:.2} MB)", 
+            json_bytes.len(), json_bytes.len() as f64 / 1024.0 / 1024.0);
+        println!("GBP Ultra size:      {:>12} bytes ({:.2} MB)", 
+            encoded.len(), encoded.len() as f64 / 1024.0 / 1024.0);
+        println!("Compression Ratio:   {:>12.2}% reduction", reduction);
+        println!("Encoding Time:       {:>12.2}ms", duration.as_secs_f64() * 1000.0);
+        println!("Throughput:          {:>12.2} MB/s",
+            (json_bytes.len() as f64 / 1024.0 / 1024.0) / duration.as_secs_f64()
+        );
+
+        // Data Integrity Check (lighter check for performance)
+        println!("Verifying data integrity for Worst-Case...");
+        let mut decoder = GbpDecoder::new();
+        let decoded = decoder.decode_lz4(&encoded).expect("Decoding failed");
+        
+        // Verify structure (not full deep equality, which is expensive for large random data)
+        assert!(decoded.is_object(), "Root should be an object");
+        let decoded_data = decoded.get("data").expect("Missing 'data' field");
+        let decoded_users = decoded_data.get("users").expect("Missing 'users' field");
+        assert!(decoded_users.is_array(), "Users should be an array");
+        assert_eq!(decoded_users.as_array().unwrap().len(), 10000, "Should have 10000 users");
+        
+        // Spot check a few users have the expected fields
+        let first_user = &decoded_users[0];
+        assert!(first_user.get("id").is_some());
+        assert!(first_user.get("typename").is_some());
+        assert!(first_user.get("organization").is_some());
+        
+        println!("✅ Integrity verified (structural check)");
+
+        // In worst case, we expect compression to be much lower
+        // Even with completely random data, GBP structure + LZ4 should provide some compression
+        println!("\nℹ️  Note: This is the WORST-CASE scenario with maximum entropy.");
+        println!("   Achieved reduction: {:.2}% (vs 95-99% for typical GraphQL data)", reduction);
+    }
+
+    #[test]
+    fn test_gbp_mid_case_compression() {
+        use rand::{Rng, SeedableRng};
+        use rand::rngs::StdRng;
+        
+        let mut encoder = GbpEncoder::new();
+        let mut rng = StdRng::seed_from_u64(42);
+        
+        // Define realistic, limited value sets for categorical fields
+        let statuses = vec!["ACTIVE", "INACTIVE", "PENDING", "SUSPENDED", "TRIAL"];
+        let roles = vec!["ADMIN", "MEMBER", "VIEWER", "OWNER", "CONTRIBUTOR", "GUEST"];
+        let tiers = vec!["FREE", "BASIC", "PREMIUM", "ENTERPRISE"];
+        let regions = vec!["US-EAST", "US-WEST", "EU-CENTRAL", "ASIA-PACIFIC", "SOUTH-AMERICA"];
+        let themes = vec!["dark", "light", "auto"];
+        
+        // Simulate 10 different organizations (shared across users)
+        let organizations: Vec<Value> = (0..10).map(|i| json!({
+            "id": format!("org-{}", i),
+            "name": format!("Organization {}", i),
+            "settings": {
+                "theme": themes[i % themes.len()],
+                "notifications": i % 2 == 0,
+                "audit": if i % 3 == 0 { "enabled" } else { "disabled" }
+            }
+        })).collect();
+        
+        // Generate mid-case payload: realistic mix of shared and unique data
+        println!("\nGenerating Mid-Case payload (10,000 users with realistic variation)...");
+        let data = json!({
+            "data": {
+                "users": (0..10000).map(|i| {
+                    json!({
+                        "id": i,  // Unique
+                        "typename": "User",  // Shared
+                        "status": statuses[i % statuses.len()],  // Limited variety
+                        "role": roles[i % roles.len()],  // Limited variety
+                        "organization": organizations[i % organizations.len()].clone(),  // Shared objects
+                        "permissions": vec!["READ", "WRITE"],  // Mostly uniform
+                        "profile": {
+                            "verified": i % 3 == 0,  // Some variation
+                            "tier": tiers[i % tiers.len()],  // Limited variety
+                            "metadata": {
+                                "region": regions[i % regions.len()],
+                                "shard": (i % 20) as u32,  // Limited range
+                                "cluster": format!("cluster-{}", i % 5),  // Limited variety
+                                "tags": if i % 2 == 0 {
+                                    vec!["premium", "verified"]
+                                } else {
+                                    vec!["standard"]
+                                }
+                            }
+                        },
+                        "description": format!("User {} - {}", i, roles[i % roles.len()]),
+                        "email": format!("user{}@org{}.com", i, i % 10),  // Unique but patterned
+                        "lastLogin": format!("2025-12-{:02}T10:00:00Z", (i % 30) + 1),  // Some variety
+                    })
+                }).collect::<Vec<_>>()
+            }
+        });
+
+        let json_bytes = serde_json::to_vec(&data).unwrap();
+        println!("Encoding Mid-Case with GBP Ultra + LZ4...");
+        let start = std::time::Instant::now();
+        let encoded = encoder.encode_lz4(&data).unwrap();
+        let duration = start.elapsed();
+
+        let ratio = encoded.len() as f64 / json_bytes.len() as f64;
+        let reduction = (1.0 - ratio) * 100.0;
+
+        println!("\n--- GBP Mid-Case Compression Test ---");
+        println!("Original JSON size:  {:>12} bytes ({:.2} MB)", 
+            json_bytes.len(), json_bytes.len() as f64 / 1024.0 / 1024.0);
+        println!("GBP Ultra size:      {:>12} bytes ({:.2} MB)", 
+            encoded.len(), encoded.len() as f64 / 1024.0 / 1024.0);
+        println!("Compression Ratio:   {:>12.2}% reduction", reduction);
+        println!("Encoding Time:       {:>12.2}ms", duration.as_secs_f64() * 1000.0);
+        println!("Throughput:          {:>12.2} MB/s",
+            (json_bytes.len() as f64 / 1024.0 / 1024.0) / duration.as_secs_f64()
+        );
+
+        // Data Integrity Check (lighter check for performance)
+        println!("Verifying data integrity for Mid-Case...");
+        let mut decoder = GbpDecoder::new();
+        let decoded = decoder.decode_lz4(&encoded).expect("Decoding failed");
+        
+        // Verify structure
+        assert!(decoded.is_object(), "Root should be an object");
+        let decoded_data = decoded.get("data").expect("Missing 'data' field");
+        let decoded_users = decoded_data.get("users").expect("Missing 'users' field");
+        assert!(decoded_users.is_array(), "Users should be an array");
+        assert_eq!(decoded_users.as_array().unwrap().len(), 10000, "Should have 10000 users");
+        
+        // Spot check values
+        let first_user = &decoded_users[0];
+        assert_eq!(first_user.get("typename").unwrap().as_str().unwrap(), "User");
+        assert_eq!(first_user.get("id").unwrap().as_i64().unwrap(), 0);
+        
+        println!("✅ Integrity verified (structural check)");
+
+        println!("\nℹ️  Note: This is a MID-CASE scenario with realistic data patterns.");
+        println!("   Characteristics:");
+        println!("   - Shared categorical values (status, role, tier, region)");
+        println!("   - Shared nested objects (organizations)");
+        println!("   - Unique identifiers (user IDs, emails)");
+        println!("   - Mix of repetition and variation");
+        println!("   Achieved reduction: {:.2}%", reduction);
+        println!("   Expected range: 90-98% (realistic GraphQL data compresses very well)");
+        
+        // Mid-case should show good compression due to realistic patterns
+        assert!(reduction >= 90.0, "Mid-case reduction was only {:.2}%, expected >= 90%", reduction);
+
+    }
 }
