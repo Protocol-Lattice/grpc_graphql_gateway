@@ -83,7 +83,8 @@ impl GbpEncoder {
 
     pub fn encode_lz4(&mut self, value: &Value) -> Result<Vec<u8>, std::io::Error> {
         let gbp_data = self.encode(value);
-        let compressed = lz4::block::compress(&gbp_data, None, false)?;
+        // Use LZ4 HC (high compression) mode with level 12 for maximum compression
+        let compressed = lz4::block::compress(&gbp_data, Some(lz4::block::CompressionMode::HIGHCOMPRESSION(12)), false)?;
         let mut result = Vec::with_capacity(4 + compressed.len());
         result.extend_from_slice(&(gbp_data.len() as u32).to_le_bytes());
         result.extend_from_slice(&compressed);
