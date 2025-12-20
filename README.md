@@ -131,7 +131,7 @@ cargo run --example live_query   # Live queries with @live directive
 
 Official high-performance decoders for GBP:
 
-- **TypeScript/JavaScript**: [`@protocol-lattice/gbp-decoder`](https://www.npmjs.com/package/@protocol-lattice/gbp-decoder)
+- **TypeScript/JavaScript**: [`@protocol-lattice/gbp-decoder`](https://www.npmjs.com/package/@protocol-lattice/graphql-binary-protocol)
 
 ```bash
 npm install @protocol-lattice/gbp-decoder
