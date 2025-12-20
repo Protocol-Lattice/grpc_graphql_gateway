@@ -6,10 +6,108 @@ GraphQL Binary Protocol (GBP) combined with LZ4 provides a novel, ultra-high-per
 
 | Feature | GBP+LZ4 (Turbo O(1)) | Standard LZ4 | Gzip | Brotli |
 |---------|---------|--------------|------|--------|
-| **Compression Ratio** | **95-99.25%** | 50-60% | 70-80% | 75-85% |
+| **Compression Ratio** | **50-99%** | 50-60% | 70-80% | 75-85% |
 | **Compression Speed** | **Ultra Fast (O(1))** | Ultra Fast | Fast | Slow |
 | **Deduplication** | **Zero-Clone Structural** | Byte-level | Byte-level | Byte-level |
 | **Scale Support** | **1GB+ Payloads** | Generic Binary | Browsers | Static Assets |
+
+## Compression Scenarios
+
+GBP compression effectiveness depends on the **repetitiveness of your data**. Here's what to expect:
+
+### Data Pattern Guide
+
+| Data Pattern | Compression | Example |
+|--------------|-------------|---------|
+| **Highly Repetitive** | **95-99%** | Lists where most fields repeat (same status, permissions, metadata) |
+| **Moderately Repetitive** | **70-85%** | Typical production data with shared types and enums |
+| **Unique/Varied** | **50%** | Unique strings per item (names, descriptions, unique IDs) |
+
+### Scenario 1: Highly Repetitive (99% Compression)
+
+Best case for GBP - data with structural repetition:
+
+```json
+{
+  "products": [
+    { "id": 1, "status": "ACTIVE", "category": "Electronics", "org": { "id": "org-1", "name": "Acme" } },
+    { "id": 2, "status": "ACTIVE", "category": "Electronics", "org": { "id": "org-1", "name": "Acme" } },
+    // ... 20,000 more items with same status, category, org
+  ]
+}
+```
+
+**Result**: 41 MB → 266 KB (**99.37% reduction**)
+
+GBP leverages:
+- String interning for repeated values ("ACTIVE", "Electronics", "Acme")
+- Shape deduplication for identical object structures
+- Columnar encoding for arrays of objects
+- Run-length encoding for consecutive identical values
+
+### Scenario 2: Moderately Repetitive (70-85% Compression)
+
+Typical production data with some variation:
+
+```json
+{
+  "users": [
+    { "id": 1, "name": "Alice", "role": "ADMIN", "status": "ACTIVE", "region": "US" },
+    { "id": 2, "name": "Bob", "role": "USER", "status": "ACTIVE", "region": "EU" },
+    // ... users with unique names but repeated roles/statuses/regions
+  ]
+}
+```
+
+**Result**: ~75% compression typical
+
+GBP benefits from:
+- Repeated enum values (role, status, region)
+- Shape deduplication (all User objects have same structure)
+- `__typename` field repetition
+
+### Scenario 3: Unique/Varied (50% Compression)
+
+Worst case - highly unique data:
+
+```json
+{
+  "logs": [
+    { "id": "uuid-1", "message": "Unique log message 1", "timestamp": "2024-01-01T00:00:01Z" },
+    { "id": "uuid-2", "message": "Different log message 2", "timestamp": "2024-01-01T00:00:02Z" },
+    // ... every field is unique
+  ]
+}
+```
+
+**Result**: ~50% compression
+
+GBP still provides:
+- Binary encoding (smaller than JSON text)
+- LZ4 block compression
+- Shape deduplication (structure is same even if values differ)
+
+### Real-World Expectations
+
+Most production GraphQL responses fall into the **moderately repetitive** category:
+
+| Repeated Elements | Unique Elements |
+|-------------------|-----------------|
+| `__typename` values | Entity IDs |
+| Enum values (status, role) | Timestamps |
+| Nested references (org, category) | User-generated content |
+| Boolean flags | Unique identifiers |
+
+**Realistic expectation: 70-85% compression** for typical production workloads.
+
+### Maximizing Compression
+
+To achieve higher compression rates:
+
+1. **Use enums** instead of freeform strings for status fields
+2. **Normalize data** with shared references (e.g., all products reference same `category` object)
+3. **Batch similar queries** to increase repetition within responses
+4. **Design schemas** with repeated metadata objects
 
 ## Why GBP? (O(1) Turbo Mode)
 
