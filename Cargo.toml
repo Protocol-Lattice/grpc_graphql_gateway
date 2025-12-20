@@ -149,18 +149,10 @@ name = "grpc_graphql_gateway"
 path = "src/lib.rs"
 doctest = false
 
-[[example]]
-name = "greeter"
-path = "examples/greeter/main.rs"
-
-[[example]]
-name = "federation"
-path = "examples/federation/main.rs"
-
-[[example]]
+# Examples as binaries (run with: cargo run --bin <name>)
+[[bin]]
 name = "graphql"
 path = "examples/graphql/main.rs"
-
 
 [[bin]]
 name = "greeter"
@@ -193,10 +185,6 @@ path = "examples/subgraphs/subgraph-products.rs"
 [[bin]]
 name = "subgraph-reviews"
 path = "examples/subgraphs/subgraph-reviews.rs"
-
-[[example]]
-name = "live_query"
-path = "examples/live_query/main.rs"
 
 [[bin]]
 name = "live_query"

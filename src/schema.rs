@@ -7,7 +7,7 @@
 use crate::error::{Error, Result};
 use crate::federation::{EntityResolver, FederationConfig, GrpcEntityResolver};
 use crate::graphql::{
-    GraphqlEntity, GraphqlField, GraphqlLiveQuery, GraphqlResponse, GraphqlSchema, GraphqlService,
+    GraphqlField, GraphqlLiveQuery, GraphqlResponse, GraphqlSchema, GraphqlService,
     GraphqlType,
 };
 use crate::grpc_client::{GrpcClient, GrpcClientPool};
