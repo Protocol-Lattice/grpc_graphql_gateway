@@ -1305,9 +1305,16 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                 // Check for @live directive
                 let is_live = crate::live_query::has_live_directive(query);
                 
-                // Strip @live directive before execution
+                // Strip @live directive and convert subscription to query for live queries
                 let clean_query = if is_live {
-                    crate::live_query::strip_live_directive(query)
+                    let stripped = crate::live_query::strip_live_directive(query);
+                    // Convert "subscription" to "query" because standard GraphQL doesn't allow 
+                    // Subscription operations without a Subscription root in the schema
+                    if stripped.trim_start().starts_with("subscription") {
+                        stripped.replacen("subscription", "query", 1)
+                    } else {
+                        stripped
+                    }
                 } else {
                     query.to_string()
                 };
@@ -1353,21 +1360,42 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                 }
                 
                 if is_live {
-                    // Keep subscription active for live updates
-                    // Default triggers based on common patterns
-                    let triggers = vec![
-                        "User.create".to_string(),
-                        "User.update".to_string(),
-                        "User.delete".to_string(),
-                        "*.*".to_string(), // Catch-all for demo
-                    ];
+                    // Improve trigger detection using Schema Config
+                    let configs = mux.schema.live_query_configs();
+                    let mut triggers = std::collections::HashSet::new();
+
+                    if !configs.is_empty() {
+                         // Heuristic: check if any configured operation name appears in the query
+                         // In a robust implementation, we would parse the query to find the root field
+                         for (op_name, config) in configs {
+                             if clean_query.contains(op_name) {
+                                 for trigger in &config.triggers {
+                                     triggers.insert(trigger.clone());
+                                 }
+                                 tracing::info!(
+                                     operation = %op_name, 
+                                     found_triggers = ?config.triggers,
+                                     "Configured live query triggers found"
+                                 );
+                             }
+                         }
+                    }
+
+                    // Fallback to defaults if no config found or no triggers specified
+                    if triggers.is_empty() {
+                        tracing::debug!("No configured triggers found, using defaults");
+                        triggers.insert("User.create".to_string());
+                        triggers.insert("User.update".to_string());
+                        triggers.insert("User.delete".to_string());
+                        triggers.insert("*.*".to_string());
+                    }
                     
                     let subscription = LiveSubscription {
                         id: id.clone(),
                         query: clean_query,
                         variables,
                         operation_name,
-                        triggers,
+                        triggers: triggers.into_iter().collect(),
                         is_live: true,
                     };
                     

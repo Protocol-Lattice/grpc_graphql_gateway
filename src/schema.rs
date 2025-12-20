@@ -6,10 +6,15 @@
 
 use crate::error::{Error, Result};
 use crate::federation::{EntityResolver, FederationConfig, GrpcEntityResolver};
-use crate::graphql::{GraphqlField, GraphqlResponse, GraphqlSchema, GraphqlService, GraphqlType};
+use crate::graphql::{
+    GraphqlEntity, GraphqlField, GraphqlLiveQuery, GraphqlResponse, GraphqlSchema, GraphqlService,
+    GraphqlType,
+};
 use crate::grpc_client::{GrpcClient, GrpcClientPool};
 use crate::headers::HeaderPropagationConfig;
+use crate::live_query::{LiveQueryOperationConfig, LiveQueryStrategy};
 use crate::rest_connector::{RestConnectorRegistry, RestFieldType, RestResponseSchema};
+use ahash::AHashMap;
 use async_graphql::dynamic::{
     Enum, EnumItem, Field, FieldFuture, FieldValue, InputObject, InputValue, Object,
     ResolverContext, Scalar, Schema as AsyncSchema, Subscription, SubscriptionField,
@@ -42,6 +47,7 @@ use tonic::Status;
 #[derive(Clone)]
 pub struct DynamicSchema {
     inner: AsyncSchema,
+    live_query_configs: Arc<AHashMap<String, LiveQueryOperationConfig>>,
 }
 
 impl DynamicSchema {
@@ -53,6 +59,11 @@ impl DynamicSchema {
     /// Access the executor (used for HTTP/WS integration)
     pub fn executor(&self) -> AsyncSchema {
         self.inner.clone()
+    }
+
+    /// Access live query configurations
+    pub fn live_query_configs(&self) -> &AHashMap<String, LiveQueryOperationConfig> {
+        &self.live_query_configs
     }
 }
 
@@ -399,6 +410,11 @@ impl SchemaBuilder {
             FederationConfig::new()
         };
 
+
+
+        let live_query_ext = pool.get_extension_by_name("graphql.live_query");
+        let mut live_query_configs = AHashMap::new();
+
         let mut registry = TypeRegistry::default();
 
         let mut query_root: Option<Object> = None;
@@ -441,7 +457,7 @@ impl SchemaBuilder {
                 match graphql_type {
                     GraphqlType::Query | GraphqlType::Resolver => {
                         let field = build_field(
-                            field_name,
+                            field_name.clone(),
                             &service,
                             &method,
                             &schema_opts,
@@ -453,6 +469,38 @@ impl SchemaBuilder {
                         let mut query = query_root.take().unwrap_or_else(|| Object::new("Query"));
                         query = query.field(field);
                         query_root = Some(query);
+
+                        // LIVE QUERY SUPPORT
+                        if let Some(ext) = &live_query_ext {
+                            if let Some(live_opts) = decode_extension::<GraphqlLiveQuery>(
+                                &method.options(),
+                                ext,
+                            )? {
+                                if live_opts.enabled {
+                                    let strategy = crate::graphql::LiveQueryStrategy::try_from(live_opts.strategy)
+                                        .ok()
+                                        .and_then(|s| match s {
+                                            crate::graphql::LiveQueryStrategy::Invalidation => Some(LiveQueryStrategy::Invalidation),
+                                            crate::graphql::LiveQueryStrategy::Polling => Some(LiveQueryStrategy::Polling),
+                                            crate::graphql::LiveQueryStrategy::HashDiff => Some(LiveQueryStrategy::HashDiff),
+                                        })
+                                        .unwrap_or(LiveQueryStrategy::Invalidation);
+
+                                    let config = LiveQueryOperationConfig {
+                                        operation_name: field_name.clone(),
+                                        enabled: true,
+                                        throttle_ms: live_opts.throttle_ms,
+                                        triggers: live_opts.triggers,
+                                        max_connections: live_opts.max_connections,
+                                        ttl_seconds: live_opts.ttl_seconds,
+                                        strategy,
+                                        poll_interval_ms: live_opts.poll_interval_ms,
+                                        depends_on: live_opts.depends_on,
+                                    };
+                                    live_query_configs.insert(field_name, config);
+                                }
+                            }
+                        }
                     }
                     GraphqlType::Mutation => {
                         let field = build_field(
@@ -671,7 +719,10 @@ impl SchemaBuilder {
             .finish()
             .map_err(|e| Error::Schema(format!("failed to build schema: {e}")))?;
 
-        Ok(DynamicSchema { inner: schema })
+        Ok(DynamicSchema { 
+            inner: schema,
+            live_query_configs: Arc::new(live_query_configs),
+        })
     }
 
     /// Build a merged DescriptorPool from all configured descriptor sets.
