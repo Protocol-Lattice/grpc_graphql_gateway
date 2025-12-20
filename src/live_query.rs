@@ -297,6 +297,7 @@ pub struct LiveQueryStore {
     /// Broadcast channel for invalidation events
     invalidation_tx: broadcast::Sender<InvalidationEvent>,
     /// Statistics
+    #[allow(dead_code)] // Accessed via stats() method
     stats: LiveQueryStats,
     /// Atomic counters
     update_counter: AtomicU64,

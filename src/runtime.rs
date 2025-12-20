@@ -1119,7 +1119,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
     use std::collections::HashMap;
     use tokio::sync::mpsc;
     
-    let (mut sender, mut receiver) = socket.split();
+    let (sender, mut receiver) = socket.split();
     
     #[derive(serde::Deserialize)]
     struct WsMessage {
@@ -1165,7 +1165,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
     let mut invalidation_rx = live_query_store.subscribe_invalidations();
     
     // Spawn task to forward messages to WebSocket
-    let ws_tx_clone = ws_tx.clone();
+    let _ws_tx_clone = ws_tx.clone();
     let sender = Arc::new(tokio::sync::Mutex::new(sender));
     let sender_clone = sender.clone();
     

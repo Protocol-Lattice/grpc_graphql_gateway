@@ -105,6 +105,7 @@ struct MutationTracker {
 struct MutationStats {
     count: u64,
     last_mutation: Instant,
+    #[allow(dead_code)] // Reserved for future interval-based TTL calculation
     avg_interval: Duration,
 }
 

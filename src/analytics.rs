@@ -296,6 +296,7 @@ pub struct AnalyticsSnapshot {
 
 /// Internal state for tracking analytics
 struct AnalyticsState {
+    #[allow(dead_code)] // Used for initialization from config
     config: AnalyticsConfig,
     queries: HashMap<String, QueryStats>,
     fields: HashMap<String, FieldStats>,
