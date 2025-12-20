@@ -7,6 +7,15 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.6.6] - 2025-12-20
+
+**GBP Ultra: 99% Compression Achieved** 🎯
+
+- **LZ4 High Compression**: Upgraded to LZ4 HC mode (level 12) for maximum compression ratio.
+- **Realistic Test Data**: All subgraphs now generate 20k items with production-like nested structures.
+- **Verified Results**: 41.51 MB JSON → 266.26 KB GBP (99.37% reduction).
+- **Fixed**: Empty array edge case causing "Invalid value reference" errors.
+
 ### [0.6.5] - 2025-12-19
 
 **Live Query Auto-Push Updates** 🚀

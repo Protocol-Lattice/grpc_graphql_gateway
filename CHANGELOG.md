@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.6] - 2025-12-20
+
+### Added
+- **LZ4 High Compression Mode**: Upgraded GBP encoder to use LZ4 HC (High Compression) with level 12 for maximum compression ratio.
+  - Achieves **99%+ compression** on realistic GraphQL datasets.
+  - Better compression ratio at the cost of slightly slower encoding (still sub-millisecond).
+
+- **Realistic Subgraph Data Generation**: Updated all federation examples with production-like data patterns.
+  - `subgraph-products`: 20k products with nested organization, category, metadata, shipping, and permissions.
+  - `subgraph-reviews`: 20k reviews with nested author, moderation, analytics, and content objects.
+  - `subgraph-users`: 20k users with nested organization, permissions, profile, and metadata.
+
+### Performance
+- **Compression Results** (60k total items across 3 subgraphs):
+  - JSON Size: 41.51 MB → GBP Size: 266.26 KB
+  - **Size Reduction: 99.37%**
+  - Network Speedup: 2x faster
+  - Decode Time: 13.76ms
+
+### Fixed
+- **Empty Array Edge Case**: Fixed `"Invalid value reference"` error when encoding empty arrays in GBP columnar mode.
+
 ## [0.6.5] - 2025-12-19
 
 ### Added
