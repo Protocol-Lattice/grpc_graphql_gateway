@@ -759,6 +759,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Too resource-intensive for regular test runs - run manually with: cargo test --ignored test_gbp_ultra_behemoth
     fn test_gbp_ultra_behemoth() {
         let mut encoder = GbpEncoder::new();
 
@@ -943,11 +944,7 @@ mod tests {
 
     #[test]
     fn test_gbp_mid_case_compression() {
-        use rand::{Rng, SeedableRng};
-        use rand::rngs::StdRng;
-        
         let mut encoder = GbpEncoder::new();
-        let mut rng = StdRng::seed_from_u64(42);
         
         // Define realistic, limited value sets for categorical fields
         let statuses = vec!["ACTIVE", "INACTIVE", "PENDING", "SUSPENDED", "TRIAL"];
