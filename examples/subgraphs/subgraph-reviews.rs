@@ -8,15 +8,41 @@ async fn main() {
         .and(warp::post())
         .and(warp::header::optional::<String>("accept"))
         .map(|accept: Option<String>| {
-            // Generate some reviews
-            let reviews: Vec<_> = (0..50)
+            // Generate 20k reviews mocking real-time GraphQL dataset
+            let reviews: Vec<_> = (0..20000)
                 .map(|i| {
                     json!({
-                        "id": format!("rev_{}", i),
-                        "body": format!("Great product! Review #{}", i),
-                        "rating": (i % 5) + 1,
-                        "author": { "id": format!("user_{}", i % 10) },
-                        "product": { "upc": format!("prod_{}", i % 5) }
+                        "id": i,  // Only unique field
+                        "typename": "Review",
+                        "status": "APPROVED",
+                        "visibility": "PUBLIC",
+                        "rating": 5,
+                        "author": {
+                            "id": "author-verified",
+                            "displayName": "Verified Buyer",
+                            "avatar": "https://cdn.example.com/avatars/default.png",
+                            "badges": ["verified", "top-contributor", "early-adopter"]
+                        },
+                        "product": {
+                            "id": "prod-featured",
+                            "name": "Featured Product"
+                        },
+                        "moderation": {
+                            "reviewed": true,
+                            "flagged": false,
+                            "moderator": "system-auto"
+                        },
+                        "analytics": {
+                            "helpful_votes": 150,
+                            "not_helpful_votes": 3,
+                            "reports": 0
+                        },
+                        "content": {
+                            "title": "Excellent product, highly recommended!",
+                            "body": "This product exceeded all my expectations. The quality is outstanding and the customer service was exceptional.",
+                            "pros": ["high quality", "fast shipping", "great value"],
+                            "cons": ["none"]
+                        }
                     })
                 })
                 .collect();

@@ -8,19 +8,50 @@ async fn main() {
         .and(warp::post())
         .and(warp::header::optional::<String>("accept"))
         .map(|accept: Option<String>| {
+            // Generate 20k users mocking real-time GraphQL dataset
+            let users: Vec<_> = (0..20000)
+                .map(|i| {
+                    json!({
+                        "id": i,  // Only unique field
+                        "typename": "User",
+                        "status": "ACTIVE",
+                        "role": "MEMBER",
+                        "organization": {
+                            "id": "org-protocol-lattice",
+                            "name": "Protocol Lattice",
+                            "settings": {
+                                "theme": "dark",
+                                "notifications": true,
+                                "audit": "enabled",
+                                "sso": true
+                            }
+                        },
+                        "permissions": ["READ", "WRITE", "EXECUTE", "ADMIN", "OWNER"],
+                        "profile": {
+                            "verified": true,
+                            "tier": "PREMIUM",
+                            "avatar": "https://cdn.example.com/avatars/default.png",
+                            "preferences": {
+                                "language": "en",
+                                "timezone": "UTC",
+                                "newsletter": true
+                            }
+                        },
+                        "metadata": {
+                            "created_at": "2024-01-01T00:00:00Z",
+                            "last_login": "2024-12-20T00:00:00Z",
+                            "login_count": 500,
+                            "tags": ["premium", "early-adopter", "verified"]
+                        },
+                        "description": "High-performance software engineer at Protocol Lattice working on distributed systems and GraphQL optimizations."
+                    })
+                })
+                .collect();
+
             let user_data = json!({
                 "data": {
-                    "_service": { "sdl": "extend type Query { me: User }" },
-                    "me": {
-                        "id": "1",
-                        "username": "raezil",
-                        "email": "raezil@protocol.lattice",
-                        "role": "ADMIN",
-                        "preferences": {
-                            "theme": "dark",
-                            "notifications": true
-                        }
-                    }
+                    "_service": { "sdl": "extend type Query { users: [User] }" },
+                    "users": users
                 }
             });
             handle_request(accept, user_data)
