@@ -188,8 +188,8 @@ pub mod services {
         name: "live_example.UserService",
         endpoint: "http://localhost:50051",
         insecure: true,
-        queries: &["user", "users", "userStatus"],
-        mutations: &["createUser", "updateUser", "deleteUser"],
+        queries: &["user", "users", "userStatus", "post"],
+        mutations: &["createUser", "updateUser", "deleteUser", "createPost"],
         subscriptions: &[],
         resolvers: &["_entities"],
     };
@@ -255,6 +255,7 @@ lazy_static::lazy_static! {
             }),
             created_at: now,
             updated_at: now,
+            posts: vec![],
         });
         store.insert("2".to_string(), live_example::User {
             id: "2".to_string(),
@@ -268,6 +269,7 @@ lazy_static::lazy_static! {
             }),
             created_at: now,
             updated_at: now,
+            posts: vec![],
         });
         store.insert("3".to_string(), live_example::User {
             id: "3".to_string(),
@@ -281,10 +283,12 @@ lazy_static::lazy_static! {
             }),
             created_at: now,
             updated_at: now,
+            posts: vec![],
         });
         RwLock::new(store)
     };
     
+    static ref POST_STORE: RwLock<HashMap<String, live_example::Post>> = RwLock::new(HashMap::new());
     static ref NEXT_USER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(4);
 }
 
@@ -336,7 +340,16 @@ impl live_example::user_service_server::UserService for ServiceImpl {
         
         let store = USER_STORE.read();
         match store.get(&req.id) {
-            Some(user) => Ok(Response::new(user.clone())),
+            Some(user) => {
+                let mut user = user.clone();
+                // Enrich with posts
+                let post_store = POST_STORE.read();
+                user.posts = post_store.values()
+                    .filter(|p| p.author_id == req.id)
+                    .cloned()
+                    .collect();
+                Ok(Response::new(user))
+            },
             None => Err(Status::not_found(format!("User {} not found", req.id))),
         }
     }
@@ -346,7 +359,15 @@ impl live_example::user_service_server::UserService for ServiceImpl {
         tracing::debug!(limit = req.limit, offset = req.offset, "ListUsers request");
         
         let store = USER_STORE.read();
-        let mut users: Vec<live_example::User> = store.values().cloned().collect();
+        let post_store = POST_STORE.read();
+        let mut users: Vec<live_example::User> = store.values().map(|u| {
+            let mut user = u.clone();
+            user.posts = post_store.values()
+                .filter(|p| p.author_id == u.id)
+                .cloned()
+                .collect();
+            user
+        }).collect();
         
         // Apply filter if provided
         if !req.filter.is_empty() {
@@ -413,6 +434,7 @@ impl live_example::user_service_server::UserService for ServiceImpl {
             }),
             created_at: now,
             updated_at: now,
+            posts: vec![],
         };
         
         {
@@ -479,6 +501,43 @@ impl live_example::user_service_server::UserService for ServiceImpl {
             }
             None => Err(Status::not_found(format!("User {} not found", req.id))),
         }
+    }
+
+    async fn get_post(&self, request: Request<live_example::GetPostRequest>) -> ServiceResult<Response<live_example::Post>> {
+        let req = request.into_inner();
+        tracing::debug!(post_id = %req.id, "GetPost request");
+        
+        let store = POST_STORE.read();
+        match store.get(&req.id) {
+            Some(post) => Ok(Response::new(post.clone())),
+            None => Err(Status::not_found(format!("Post {} not found", req.id))),
+        }
+    }
+
+    async fn create_post(&self, request: Request<live_example::CreatePostRequest>) -> ServiceResult<Response<live_example::Post>> {
+        let req = request.into_inner();
+        tracing::info!(title = %req.title, author_id = %req.author_id, "CreatePost request");
+        
+        let id = uuid::Uuid::new_v4().to_string();
+        
+        let post = live_example::Post {
+            id: id.clone(),
+            title: req.title,
+            content: req.content,
+            author_id: req.author_id.clone(),
+        };
+        
+        {
+            let mut store = POST_STORE.write();
+            store.insert(id.clone(), post.clone());
+        }
+        
+        // Trigger live query invalidation for Post.create and User.update (since user.posts changed)
+        self.invalidate("Post", "create");
+        self.invalidate("User", "update"); // Invalidate user to refresh their post list
+        
+        tracing::info!(post_id = %id, "Created new post");
+        Ok(Response::new(post))
     }
 }
 

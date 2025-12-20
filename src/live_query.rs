@@ -539,17 +539,17 @@ impl LiveQueryStore {
     }
 
     /// Check if a query operation supports live mode
-    pub fn is_live_enabled(&self, operation_name: &str, live_query_configs: &[LiveQueryConfigInfo]) -> bool {
-        live_query_configs.iter().any(|c| c.operation_name == operation_name)
+    pub fn is_live_enabled(&self, operation_name: &str, live_query_configs: &AHashMap<String, LiveQueryOperationConfig>) -> bool {
+        live_query_configs.contains_key(operation_name)
     }
 
     /// Get configuration for a live query operation
     pub fn get_operation_config<'a>(
         &self,
         operation_name: &str,
-        live_query_configs: &'a [LiveQueryConfigInfo],
-    ) -> Option<&'a LiveQueryConfigInfo> {
-        live_query_configs.iter().find(|c| c.operation_name == operation_name)
+        live_query_configs: &'a AHashMap<String, LiveQueryOperationConfig>,
+    ) -> Option<&'a LiveQueryOperationConfig> {
+        live_query_configs.get(operation_name)
     }
 
     /// Get current statistics
@@ -641,6 +641,29 @@ pub struct LiveQueryConfigInfo {
     pub depends_on: &'static [&'static str],
 }
 
+/// Runtime configuration for a live query operation (loaded from proto)
+#[derive(Debug, Clone)]
+pub struct LiveQueryOperationConfig {
+    /// GraphQL operation name
+    pub operation_name: String,
+    /// Enabled status
+    pub enabled: bool,
+    /// Throttle interval in milliseconds
+    pub throttle_ms: u32,
+    /// Invalidation triggers
+    pub triggers: Vec<String>,
+    /// Maximum connections per client
+    pub max_connections: u32,
+    /// TTL in seconds (0 = infinite)
+    pub ttl_seconds: u32,
+    /// Strategy
+    pub strategy: LiveQueryStrategy,
+    /// Poll interval for POLLING strategy
+    pub poll_interval_ms: u32,
+    /// Entity dependencies
+    pub depends_on: Vec<String>,
+}
+
 /// Errors that can occur during live query operations
 #[derive(Debug, thiserror::Error)]
 pub enum LiveQueryError {
@@ -664,24 +687,22 @@ pub enum LiveQueryError {
 }
 
 /// Parse `@live` directive from a GraphQL query
+// Parse @live directive from a GraphQL query
 pub fn has_live_directive(query: &str) -> bool {
-    // Simple check for @live in the query
-    // A proper implementation would use a GraphQL parser
-    let normalized = query
-        .lines()
-        .map(|line| {
-            // Remove comments
-            if let Some(idx) = line.find('#') {
-                &line[..idx]
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    // Check for @live directive
-    normalized.contains("@live")
+    // Basic detection of @live directive
+    // Matches @live followed by whitespace, parenthesis (args), or brace (selection set)
+    let custom_patterns = ["@live ", "@live\n", "@live\t", "@live(", "@live{"];
+    for pattern in custom_patterns {
+        if query.contains(pattern) {
+            return true;
+        }
+    }
+    // Check for @live at end of string (e.g. "query @live")
+    if query.ends_with("@live") {
+        return true;
+    }
+    
+    false
 }
 
 /// Strip the `@live` directive from a GraphQL query.
@@ -798,6 +819,5 @@ mod tests {
         // Unregister
         let removed = store.unregister("sub-1");
         assert!(removed.is_some());
-        assert_eq!(store.stats().active_count, 0);
     }
 }

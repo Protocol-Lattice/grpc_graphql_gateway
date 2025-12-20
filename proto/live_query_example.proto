@@ -86,6 +86,30 @@ service UserService {
       name: "deleteUser"
     };
   }
+
+  // Get a single post - supports @live
+  rpc GetPost(GetPostRequest) returns (Post) {
+    option (graphql.schema) = {
+      type: QUERY
+      name: "post"
+    };
+    option (graphql.live_query) = {
+      enabled: true
+      throttle_ms: 100
+      triggers: ["Post.update", "Post.delete"]
+    };
+  }
+  
+  // Create post - mutation triggers Post.create
+  rpc CreatePost(CreatePostRequest) returns (Post) {
+      option (graphql.schema) = {
+        type: MUTATION
+        name: "createPost"
+        request {
+          name: "input"
+        }
+      };
+  }
 }
 
 // User entity with federation support
@@ -101,6 +125,14 @@ message User {
   UserStatus status = 4;
   int64 created_at = 5;
   int64 updated_at = 6;
+  repeated Post posts = 7; // Nested posts
+}
+
+message Post {
+    string id = 1;
+    string title = 2;
+    string content = 3;
+    string author_id = 4;
 }
 
 message UserStatus {
@@ -147,4 +179,14 @@ message DeleteUserRequest {
 message DeleteUserResponse {
   bool success = 1;
   string message = 2;
+}
+
+message GetPostRequest {
+    string id = 1;
+}
+
+message CreatePostRequest {
+    string title = 1;
+    string content = 2;
+    string author_id = 3;
 }

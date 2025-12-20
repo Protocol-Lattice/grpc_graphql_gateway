@@ -14,6 +14,20 @@ pub struct User {
     pub created_at: i64,
     #[prost(int64, tag = "6")]
     pub updated_at: i64,
+    /// Nested posts
+    #[prost(message, repeated, tag = "7")]
+    pub posts: ::prost::alloc::vec::Vec<Post>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Post {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub content: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub author_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UserStatus {
@@ -79,6 +93,20 @@ pub struct DeleteUserResponse {
     pub success: bool,
     #[prost(string, tag = "2")]
     pub message: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetPostRequest {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CreatePostRequest {
+    #[prost(string, tag = "1")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub content: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub author_id: ::prost::alloc::string::String,
 }
 /// Generated client implementations.
 pub mod user_service_client {
@@ -310,6 +338,50 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("live_example.UserService", "DeleteUser"));
             self.inner.unary(req, path, codec).await
         }
+        /// Get a single post - supports @live
+        pub async fn get_post(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetPostRequest>,
+        ) -> std::result::Result<tonic::Response<super::Post>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/live_example.UserService/GetPost",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("live_example.UserService", "GetPost"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Create post - mutation triggers Post.create
+        pub async fn create_post(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CreatePostRequest>,
+        ) -> std::result::Result<tonic::Response<super::Post>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/live_example.UserService/CreatePost",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("live_example.UserService", "CreatePost"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -361,6 +433,16 @@ pub mod user_service_server {
             tonic::Response<super::DeleteUserResponse>,
             tonic::Status,
         >;
+        /// Get a single post - supports @live
+        async fn get_post(
+            &self,
+            request: tonic::Request<super::GetPostRequest>,
+        ) -> std::result::Result<tonic::Response<super::Post>, tonic::Status>;
+        /// Create post - mutation triggers Post.create
+        async fn create_post(
+            &self,
+            request: tonic::Request<super::CreatePostRequest>,
+        ) -> std::result::Result<tonic::Response<super::Post>, tonic::Status>;
     }
     /// User service with live query support
     #[derive(Debug)]
@@ -694,6 +776,96 @@ pub mod user_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = DeleteUserSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/live_example.UserService/GetPost" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetPostSvc<T: UserService>(pub Arc<T>);
+                    impl<
+                        T: UserService,
+                    > tonic::server::UnaryService<super::GetPostRequest>
+                    for GetPostSvc<T> {
+                        type Response = super::Post;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetPostRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as UserService>::get_post(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetPostSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/live_example.UserService/CreatePost" => {
+                    #[allow(non_camel_case_types)]
+                    struct CreatePostSvc<T: UserService>(pub Arc<T>);
+                    impl<
+                        T: UserService,
+                    > tonic::server::UnaryService<super::CreatePostRequest>
+                    for CreatePostSvc<T> {
+                        type Response = super::Post;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CreatePostRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as UserService>::create_post(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CreatePostSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
