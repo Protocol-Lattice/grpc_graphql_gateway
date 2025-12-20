@@ -146,7 +146,7 @@ npm i @protocol-lattice/graphql-binary-protocol
 ```typescript
 import { GbpDecoder } from '@protocol-lattice/graphql-binary-protocol';
 const decoder = new GbpDecoder();
-const decoded = decoder.decodeGzip(uint8Array);
+const decompressed = decoder.decodeLz4(new Uint8Array(data));
 ```
 
 ## 🔗 Links
