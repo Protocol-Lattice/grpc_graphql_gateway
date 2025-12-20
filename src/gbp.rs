@@ -1054,6 +1054,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Too resource-intensive for CI - run manually with: cargo test --ignored test_gbp_mid_case_1gb
     fn test_gbp_mid_case_1gb() {
         let mut encoder = GbpEncoder::new();
         
