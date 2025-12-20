@@ -10,7 +10,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use governor::{Quota, RateLimiter};
 use grpc_graphql_gateway::router::{DdosConfig, DdosProtection, GbpRouter, RouterConfig, SubgraphConfig};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -42,6 +41,7 @@ fn default_workers() -> usize {
 
 #[derive(Debug, Deserialize)]
 struct CorsConfig {
+    #[allow(dead_code)]
     allow_origins: Vec<String>,
 }
 
@@ -49,9 +49,11 @@ struct CorsConfig {
 struct GraphQlQuery {
     query: String,
     #[serde(default)]
+    #[allow(dead_code)]
     variables: Option<Value>,
     #[serde(default)]
     #[serde(rename = "operationName")]
+    #[allow(dead_code)]
     operation_name: Option<String>,
 }
 
@@ -117,7 +119,7 @@ subgraphs: []
         .block_on(async_main(config, config_path));
 }
 
-async fn async_main(yaml_config: YamlConfig, config_path: String) {
+async fn async_main(yaml_config: YamlConfig, _config_path: String) {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)

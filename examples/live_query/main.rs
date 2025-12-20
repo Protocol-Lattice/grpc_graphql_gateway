@@ -8,7 +8,6 @@ use grpc_graphql_gateway::{Gateway, GatewayBuilder, GrpcClient, Result as Gatewa
 use async_graphql::{Name, Value as GqlValue};
 use std::sync::Arc;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::pin::Pin;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing_subscriber::prelude::*;
 
@@ -16,6 +15,7 @@ type ServiceResult<T> = std::result::Result<T, Status>;
 
 const DESCRIPTOR_SET: &[u8] = include_bytes!("../../src/generated/live_query_example_descriptor.bin");
 
+#[allow(dead_code)]
 const DEFAULT_GRPC_ADDR: &str = "0.0.0.0:50051";
 
 fn describe(list: &[&str]) -> String {
@@ -26,6 +26,7 @@ fn describe_resolvers(list: &[&str]) -> String {
     if list.is_empty() { "none".to_string() } else { list.join(", ") }
 }
 
+#[allow(dead_code)]
 fn listen_addr(endpoint: &str, fallback: &str) -> GatewayResult<SocketAddr> {
     let mut addr = endpoint.trim();
     if let Some(stripped) = addr.strip_prefix("http://").or_else(|| addr.strip_prefix("https://")) {
@@ -152,6 +153,7 @@ pub const LIVE_QUERY_CONFIGS: &[LiveQueryConfigInfo] = &[
 #[allow(dead_code)]
 const LIVE_QUERIES_ENABLED: bool = true;
 
+#[allow(dead_code)]
 fn describe_live_queries() -> String {
     if LIVE_QUERY_CONFIGS.is_empty() {
         "none".to_string()
@@ -169,7 +171,7 @@ pub mod live_example {
     include!("../../src/generated/live_example.rs");
 }
 
-use live_example::user_service_server::{UserService, UserServiceServer};
+
 
 pub struct ServiceConfig {
     pub name: &'static str,
@@ -207,7 +209,7 @@ pub struct LiveExampleEntityResolver;
 impl grpc_graphql_gateway::EntityResolver for LiveExampleEntityResolver {
     async fn resolve_entity(
         &self,
-        entity_config: &grpc_graphql_gateway::federation::EntityConfig,
+        _entity_config: &grpc_graphql_gateway::federation::EntityConfig,
         representation: &async_graphql::indexmap::IndexMap<Name, GqlValue>,
     ) -> grpc_graphql_gateway::Result<GqlValue> {
         let mut obj = representation.clone();
@@ -236,7 +238,7 @@ fn default_entity_resolver() -> Arc<dyn grpc_graphql_gateway::EntityResolver> {
 use std::collections::HashMap;
 use parking_lot::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
-use grpc_graphql_gateway::{create_live_query_store, InvalidationEvent, SharedLiveQueryStore};
+use grpc_graphql_gateway::{InvalidationEvent, SharedLiveQueryStore};
 
 lazy_static::lazy_static! {
     static ref USER_STORE: RwLock<HashMap<String, live_example::User>> = {

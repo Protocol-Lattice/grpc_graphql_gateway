@@ -192,6 +192,7 @@ struct FederationServices {
 }
 
 impl FederationServices {
+    #[allow(dead_code)]
     fn new(data: FederationData) -> Self {
         Self {
             store: Arc::new(RwLock::new(data)),
@@ -265,7 +266,7 @@ impl ReviewService for FederationServices {
 }
 
 #[derive(Clone, Default)]
-struct FederationData {
+pub struct FederationData {
     users: HashMap<String, User>,
     products: HashMap<String, Product>,
     reviews: HashMap<String, Review>,

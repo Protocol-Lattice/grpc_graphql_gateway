@@ -52,6 +52,7 @@ struct LiveQueryInfo {
     /// GraphQL operation name (from graphql.schema.name)
     operation_name: String,
     /// Whether live query is enabled
+    #[allow(dead_code)]
     enabled: bool,
     /// Throttle interval in milliseconds
     throttle_ms: u32,
