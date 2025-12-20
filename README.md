@@ -21,6 +21,12 @@ Data Efficiency Mode (GBP Ultra + Parallel):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 JSON Payload (1GB)             ████████████████████ 100%
 GBP Ultra (9MB)                ▏                    0.9% ⚡ (1,749 MB/s)
+
+Compression by Data Pattern:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Highly Repetitive (orgs/perms) ▏                    1%  (99% reduction)
+Moderately Repetitive (enums)  █████                25% (75% reduction)
+Unique/Varied (logs)           ██████████           50% (50% reduction)
 ```
 
 ## ✨ Features
