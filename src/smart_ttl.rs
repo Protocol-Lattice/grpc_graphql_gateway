@@ -184,7 +184,6 @@ impl SmartTtlManager {
         if query_lower.contains("live")
             || query_lower.contains("current")
             || query_lower.contains("realtime")
-            || query_lower.contains("now")
         {
             return self.config.real_time_data_ttl;
         }
@@ -199,15 +198,6 @@ impl SmartTtlManager {
             return self.config.static_content_ttl;
         }
 
-        // User profile patterns
-        if query_lower.contains("profile")
-            || query_lower.contains("user")
-            || query_lower.contains("account")
-            || query_lower.contains("me")
-        {
-            return self.config.user_profile_ttl;
-        }
-
         // Aggregated data patterns
         if query_lower.contains("count")
             || query_lower.contains("sum")
@@ -219,6 +209,7 @@ impl SmartTtlManager {
         }
 
         // List queries (plural forms, pagination)
+        // Check this BEFORE user profile to catch "users", "accounts" etc.
         if query_lower.contains("list")
             || query_lower.contains("page")
             || query_lower.contains("offset")
@@ -227,6 +218,18 @@ impl SmartTtlManager {
         // plural
         {
             return self.config.list_query_ttl;
+        }
+
+        // User profile patterns
+        if query_lower.contains("profile")
+            || query_lower.contains("user ")
+            || query_lower.contains("user{")
+            || query_lower.contains("user(")
+            || query_lower.contains("account")
+            || query_lower.contains("me {")
+            || query_lower.contains("me{")
+        {
+            return self.config.user_profile_ttl;
         }
 
         // Single item queries
@@ -458,8 +461,11 @@ pub fn parse_cache_hint(schema_metadata: &str) -> Option<Duration> {
     // Example: @cacheControl(maxAge: 300)
     if let Some(start) = schema_metadata.find("maxAge:") {
         let remaining = &schema_metadata[start + 7..];
-        if let Some(end) = remaining.find(|c: char| !c.is_numeric()) {
-            if let Ok(seconds) = remaining[..end].trim().parse::<u64>() {
+        
+        // Find end of the number (could be followed by ')' or space or comma)
+        let trimmed_start = remaining.trim_start(); 
+        if let Some(end) = trimmed_start.find(|c: char| !c.is_numeric()) {
+            if let Ok(seconds) = trimmed_start[..end].parse::<u64>() {
                 return Some(Duration::from_secs(seconds));
             }
         }
@@ -472,41 +478,83 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_static_content_detection() {
+    async fn test_detect_query_types() {
         let config = SmartTtlConfig::default();
         let manager = SmartTtlManager::new(config.clone());
 
-        let query = "query { categories { id name } }";
-        let result = manager.calculate_ttl(query, "categories", None).await;
+        // Static
+        let res = manager.calculate_ttl("query { settings { theme } }", "settings", None).await;
+        assert_eq!(res.ttl, config.static_content_ttl);
 
-        assert_eq!(result.ttl, config.static_content_ttl);
+        // Real-time
+        let res = manager.calculate_ttl("query { stock(symbol: \"AAPL\") { realtime_price } }", "stock", None).await;
+        assert_eq!(res.ttl, config.real_time_data_ttl);
+
+        // User Profile
+        let res = manager.calculate_ttl("query { me { name } }", "me", None).await;
+        assert_eq!(res.ttl, config.user_profile_ttl);
+
+        // Aggregated
+        let res = manager.calculate_ttl("query { analytics { daily_count } }", "analytics", None).await;
+        assert_eq!(res.ttl, config.aggregated_data_ttl);
+
+        // List
+        let res = manager.calculate_ttl("query { users(limit: 10) { name } }", "users", None).await;
+        assert_eq!(res.ttl, config.list_query_ttl);
+        
+        // Item
+        let res = manager.calculate_ttl("query { product_by_id(id: 1) { name } }", "product", None).await;
+        assert_eq!(res.ttl, config.item_query_ttl);
+
+        // Default
+        let res = manager.calculate_ttl("query { generic_data { field } }", "generic", None).await;
+        assert_eq!(res.ttl, config.default_ttl);
     }
 
     #[tokio::test]
-    async fn test_real_time_data_detection() {
-        let config = SmartTtlConfig::default();
-        let manager = SmartTtlManager::new(config.clone());
-
-        let query = "query { liveScores { team score } }";
-        let result = manager.calculate_ttl(query, "liveScores", None).await;
-
-        assert_eq!(result.ttl, config.real_time_data_ttl);
-    }
-
-    #[tokio::test]
-    async fn test_volatility_tracking() {
+    async fn test_volatility_learning_stable() {
         let manager = SmartTtlManager::new(SmartTtlConfig::default());
+        let query = "query { product(id: 1) { price } }";
 
-        let query = "query { user(id: 1) { name } }";
-
-        // Record same result 10 times (stable data)
-        for _ in 0..10 {
+        // Record consistent results
+        for _ in 0..15 {
             manager.record_query_result(query, 12345).await;
         }
 
-        let analytics = manager.get_analytics().await;
-        assert_eq!(analytics.total_queries, 1);
-        assert!(analytics.avg_volatility_score < 0.1);
+        // Should detect stability and increase TTL
+        let result = manager.calculate_ttl(query, "product", None).await;
+        if let TtlStrategy::VolatilityBased { base_ttl: _, volatility_score } = result.strategy {
+            assert!(volatility_score < 0.1);
+            // Stable = 1.5x or 2.0x boost depending on score
+            // Item query base is 300s. 
+            // Score 0.0 -> < 0.1 -> Max adjustment (2.0) -> 600s
+            assert!(result.ttl >= Duration::from_secs(600));
+        } else {
+            panic!("Expected VolatilityBased strategy, got {:?}", result.strategy);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_volatility_learning_volatile() {
+        let manager = SmartTtlManager::new(SmartTtlConfig::default());
+        let query = "query { random_quote { text } }";
+
+        // Record changing results every time
+        for i in 0..15 {
+            manager.record_query_result(query, i as u64).await;
+        }
+
+        // Should detect volatility and decrease TTL
+        let result = manager.calculate_ttl(query, "random_quote", None).await;
+        if let TtlStrategy::VolatilityBased { base_ttl: _, volatility_score } = result.strategy {
+            assert!(volatility_score > 0.9);
+            // Volatile (> 0.7) -> 0.5x multiplier.
+            // Base for "random_quote" (unknown) is default 300s.
+            // 300 * 0.5 = 150s.
+            assert_eq!(result.ttl, Duration::from_secs(150));
+        } else {
+            panic!("Expected VolatilityBased strategy, got {:?}", result.strategy);
+        }
     }
 
     #[tokio::test]
@@ -514,12 +562,12 @@ mod tests {
         let config = SmartTtlConfig::default();
         let manager = SmartTtlManager::new(config);
 
-        let cache_hint = Some(Duration::from_secs(600));
+        let cache_hint = Some(Duration::from_secs(42));
         let result = manager
-            .calculate_ttl("query { test }", "test", cache_hint)
+            .calculate_ttl("query { volatile }", "test", cache_hint)
             .await;
 
-        assert_eq!(result.ttl, Duration::from_secs(600));
+        assert_eq!(result.ttl, Duration::from_secs(42));
         assert!(matches!(result.strategy, TtlStrategy::CacheHint));
     }
 
@@ -528,12 +576,76 @@ mod tests {
         let mut config = SmartTtlConfig::default();
         config
             .custom_patterns
-            .insert("specialQuery".to_string(), Duration::from_secs(7200));
+            .insert("expensive_report".to_string(), Duration::from_secs(3600));
 
         let manager = SmartTtlManager::new(config);
-        let query = "query { specialQuery { data } }";
-        let result = manager.calculate_ttl(query, "specialQuery", None).await;
+        let query = "query { get_expensive_report { data } }"; // contains "expensive_report"
+        
+        let result = manager.calculate_ttl(query, "report", None).await;
 
-        assert_eq!(result.ttl, Duration::from_secs(7200));
+        assert_eq!(result.ttl, Duration::from_secs(3600));
+        if let TtlStrategy::CustomPattern(p) = result.strategy {
+            assert_eq!(p, "expensive_report");
+        } else {
+            panic!("Expected CustomPattern strategy");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_cache_hint() {
+        assert_eq!(
+            parse_cache_hint("@cacheControl(maxAge: 60)"),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            parse_cache_hint("type Query @cacheControl(maxAge: 300) {"),
+            Some(Duration::from_secs(300))
+        );
+        assert_eq!(parse_cache_hint("no hint here"), None);
+        assert_eq!(parse_cache_hint("@cacheControl(invalid)"), None);
+    }
+    
+    #[tokio::test]
+    async fn test_cleanup_old_stats() {
+        let manager = SmartTtlManager::new(SmartTtlConfig::default());
+        let query = "query { old }";
+        manager.record_query_result(query, 1).await;
+        
+        {
+            let stats = manager.query_stats.read().await;
+            assert_eq!(stats.len(), 1);
+        }
+        
+        // Sleep to ensure a small delta
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        
+        // Clean up with 0 duration (should remove everything older than now)
+        manager.cleanup_old_stats(Duration::from_millis(0)).await;
+        
+        {
+            let stats = manager.query_stats.read().await;
+            assert_eq!(stats.len(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_analytics_aggregation() {
+        let manager = SmartTtlManager::new(SmartTtlConfig::default());
+        
+        // 1. Stable query
+        for _ in 0..15 {
+             manager.record_query_result("query { stable }", 1).await;
+        }
+        
+        // 2. Volatile query
+        for i in 0..15 {
+             manager.record_query_result("query { volatile }", i).await;
+        }
+        
+        let analytics = manager.get_analytics().await;
+        assert_eq!(analytics.total_queries, 2);
+        assert_eq!(analytics.stable_queries, 1);
+        assert_eq!(analytics.highly_volatile_queries, 1);
+        assert!(analytics.avg_volatility_score > 0.0 && analytics.avg_volatility_score < 1.0);
     }
 }

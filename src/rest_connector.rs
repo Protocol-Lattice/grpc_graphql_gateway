@@ -1427,4 +1427,150 @@ mod tests {
         assert!(cache.get("key2").is_some());
         assert!(cache.get("key3").is_some());
     }
+
+    #[test]
+    fn test_retry_config_defaults() {
+        let config = RetryConfig::default();
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.multiplier, 2.0);
+        assert!(config.retry_statuses.contains(&503));
+    }
+
+    #[test]
+    fn test_retry_config_disabled() {
+        let config = RetryConfig::disabled();
+        assert_eq!(config.max_retries, 0);
+    }
+
+    #[test]
+    fn test_retry_config_aggressive() {
+        let config = RetryConfig::aggressive();
+        assert_eq!(config.max_retries, 5);
+        assert!(config.retry_statuses.contains(&429));
+    }
+
+    #[test]
+    fn test_rest_response_field_creation() {
+        let f = RestResponseField::string("name");
+        assert_eq!(f.name, "name");
+        assert_eq!(f.field_type, RestFieldType::String);
+        assert!(!f.nullable);
+
+        let f = RestResponseField::int("age").nullable();
+        assert_eq!(f.field_type, RestFieldType::Int);
+        assert!(f.nullable);
+    }
+
+    #[test]
+    fn test_rest_response_schema_builder() {
+        let schema = RestResponseSchema::new("User")
+            .field(RestResponseField::string("name"))
+            .field(RestResponseField::int("age"))
+            .description("A user");
+
+        assert_eq!(schema.type_name, "User");
+        assert_eq!(schema.fields.len(), 2);
+        assert_eq!(schema.description, Some("A user".to_string()));
+    }
+
+    #[test]
+    fn test_build_request_path_substitution() {
+        let connector = RestConnector::builder()
+            .base_url("http://api.com")
+            .build()
+            .unwrap();
+
+        let endpoint = RestEndpoint::new("test", "/users/{id}");
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), serde_json::json!("123"));
+
+        let req = connector.build_request(&endpoint, &args).expect("Should build");
+        assert_eq!(req.url, "http://api.com/users/123");
+    }
+
+    #[test]
+    fn test_build_request_query_params() {
+        let connector = RestConnector::builder()
+            .base_url("http://api.com")
+            .build()
+            .unwrap();
+
+        let endpoint = RestEndpoint::new("test", "/search")
+            .query_param("q", "{query}")
+            .query_param("limit", "10");
+        
+        let mut args = HashMap::new();
+        args.insert("query".to_string(), serde_json::json!("hello world"));
+
+        let req = connector.build_request(&endpoint, &args).expect("Should build");
+        // query params order is not guaranteed, check contains
+        assert!(req.url.contains("q=hello%20world"));
+        assert!(req.url.contains("limit=10"));
+    }
+
+    #[test]
+    fn test_build_request_body_template() {
+        let connector = RestConnector::builder()
+            .base_url("http://api.com")
+            .build()
+            .unwrap();
+
+        let endpoint = RestEndpoint::new("create", "/users")
+            .method(HttpMethod::POST)
+            .body_template(r#"{"name": "{name}"}"#);
+        
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), serde_json::json!("Alice"));
+
+        let req = connector.build_request(&endpoint, &args).expect("Should build");
+        assert_eq!(req.body, Some(r#"{"name": "Alice"}"#.to_string()));
+    }
+
+    #[test]
+    fn test_build_request_security_path_traversal() {
+        let connector = RestConnector::builder()
+            .base_url("http://api.com")
+            .build()
+            .unwrap();
+
+        let endpoint = RestEndpoint::new("test", "/files/{path}");
+        let mut args = HashMap::new();
+        args.insert("path".to_string(), serde_json::json!("../etc/passwd"));
+
+        let err = connector.build_request(&endpoint, &args).unwrap_err();
+        assert!(err.to_string().contains("Invalid characters"));
+    }
+
+    #[test]
+    fn test_build_request_security_url_injection() {
+        let connector = RestConnector::builder()
+            .base_url("http://api.com")
+            .build()
+            .unwrap();
+
+        let endpoint = RestEndpoint::new("test", "/redirect/{url}");
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), serde_json::json!("http://evil.com"));
+
+        let err = connector.build_request(&endpoint, &args).unwrap_err();
+        assert!(err.to_string().contains("Invalid characters"));
+    }
+
+    #[test]
+    fn test_build_request_headers() {
+        let connector = RestConnector::builder()
+            .base_url("http://api.com")
+            .default_header("X-Global", "global")
+            .build()
+            .unwrap();
+
+        let endpoint = RestEndpoint::new("test", "/test")
+            .header("X-Endpoint", "local");
+        
+        let args = HashMap::new();
+        let req = connector.build_request(&endpoint, &args).unwrap();
+        
+        assert_eq!(req.headers.get("X-Global").map(|s| s.as_str()), Some("global"));
+        assert_eq!(req.headers.get("X-Endpoint").map(|s| s.as_str()), Some("local"));
+    }
 }

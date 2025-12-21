@@ -319,7 +319,60 @@ mod tests {
         "#;
 
         let result = analyzer.calculate_query_cost(query).await;
+        // Cost > 10, should fail
         assert!(result.is_err());
+    }
+    
+    #[tokio::test]
+    async fn test_field_multipliers() {
+        let mut multipliers = HashMap::new();
+        multipliers.insert("expensiveField".to_string(), 100); // +100% cost
+        
+        let config = QueryCostConfig {
+            base_cost_per_field: 10,
+            field_cost_multipliers: multipliers,
+            ..Default::default()
+        };
+        
+        let analyzer = QueryCostAnalyzer::new(config);
+        
+        // Use multi-line format to satisfy count_fields heuristic
+        let query_normal = "query {\n  normalField\n}";
+        let cost_normal = analyzer.calculate_query_cost(query_normal).await.unwrap().total_cost;
+        
+        let query_expensive = "query {\n  expensiveField\n}";
+        let cost_expensive = analyzer.calculate_query_cost(query_expensive).await.unwrap().total_cost;
+        
+        // normal = 1 field * 10 = 10
+        // expensive = 1 field * 10 = 10, plus 100% multiplier = 20
+        assert!(cost_expensive > cost_normal);
+        assert_eq!(cost_normal, 10);
+        assert_eq!(cost_expensive, 20);
+    }
+
+    #[tokio::test]
+    async fn test_adaptive_costs() {
+        let config = QueryCostConfig {
+            base_cost_per_field: 10,
+            adaptive_costs: true,
+            high_load_multiplier: 2.0,
+            ..Default::default()
+        };
+        
+        let analyzer = QueryCostAnalyzer::new(config);
+        
+        let query = "query {\n  field\n}";
+        
+        // Low load
+        analyzer.update_load_factor(0.1, 0.1).await;
+        let cost_low = analyzer.calculate_query_cost(query).await.unwrap().total_cost;
+        
+        // High load
+        analyzer.update_load_factor(0.9, 0.9).await;
+        let cost_high = analyzer.calculate_query_cost(query).await.unwrap().total_cost;
+        
+        assert_eq!(cost_low, 10);
+        assert_eq!(cost_high, 20); // 10 * 2.0
     }
 
     #[tokio::test]
@@ -341,6 +394,27 @@ mod tests {
         // Third query should fail (would exceed budget)
         assert!(analyzer.check_user_budget("user1", 10).await.is_err());
     }
+    
+    #[tokio::test]
+    async fn test_user_budget_expiration() {
+        let config = QueryCostConfig {
+            user_cost_budget: 100,
+            budget_window: Duration::from_millis(50), // Short window
+            ..Default::default()
+        };
+        
+        let analyzer = QueryCostAnalyzer::new(config);
+        analyzer.check_user_budget("user1", 100).await.unwrap();
+        
+        // Immediately full
+        assert!(analyzer.check_user_budget("user1", 1).await.is_err());
+         
+        // Wait for window to expire
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        
+        // Should succeed now
+        assert!(analyzer.check_user_budget("user1", 1).await.is_ok());
+    }
 
     #[tokio::test]
     async fn test_analytics() {
@@ -356,5 +430,29 @@ mod tests {
         assert_eq!(analytics.total_queries, 10);
         assert_eq!(analytics.average_cost, 55);
         assert_eq!(analytics.median_cost, 60);
+        
+        // Threshold check
+        let threshold = analyzer.get_expensive_threshold().await;
+        // 95th percentile of 10 items. Index 9.
+        assert_eq!(threshold, 100);
+    }
+    
+    #[tokio::test]
+    async fn test_cleanup_expired_budgets() {
+        let config = QueryCostConfig {
+            budget_window: Duration::from_millis(10), // Very short
+            ..Default::default()
+        };
+        let analyzer = QueryCostAnalyzer::new(config);
+        
+        analyzer.check_user_budget("userA", 10).await.unwrap();
+        
+        // Wait 2x window
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        
+        analyzer.cleanup_expired_budgets().await;
+        
+        let budgets = analyzer.user_budgets.read().await;
+        assert!(budgets.is_empty());
     }
 }

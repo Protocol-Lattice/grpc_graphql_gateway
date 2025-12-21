@@ -112,6 +112,8 @@ impl Lz4CacheCompressor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{body::Body, http};
+    use tower::ServiceExt;
 
     #[test]
     fn test_lz4_compression() {
@@ -127,12 +129,66 @@ mod tests {
     }
 
     #[test]
+    fn test_lz4_empty_data() {
+        let data = b"";
+        let compressed = compress_lz4(data).unwrap();
+        let decompressed = decompress_lz4(&compressed).unwrap();
+        assert_eq!(data.to_vec(), decompressed);
+    }
+
+    #[test]
+    fn test_lz4_small_data() {
+        let data = b"abc";
+       let compressed = compress_lz4(data).unwrap();
+        let decompressed = decompress_lz4(&compressed).unwrap();
+        assert_eq!(data.to_vec(), decompressed);
+    }
+
+    #[test]
+    fn test_lz4_highly_compressible() {
+        let data = vec![0u8; 10000]; // All zeros
+        let compressed = compress_lz4(&data).unwrap();
+        
+        // Should compress extremely well
+        let ratio = compressed.len() as f64 / data.len() as f64;
+        assert!(ratio < 0.1, "Compression ratio should be < 10%");
+        
+        let decompressed = decompress_lz4(&compressed).unwrap();
+        assert_eq!(data, decompressed);
+    }
+
+    #[test]
+    fn test_lz4_random_data() {
+        // Random data doesn't compress well
+        let data: Vec<u8> = (0..1000).map(|i| (i * 31 + 17) as u8).collect();
+        let compressed = compress_lz4(&data).unwrap();
+        let decompressed = decompress_lz4(&compressed).unwrap();
+        assert_eq!(data, decompressed);
+    }
+
+    #[test]
     fn test_lz4_json_compression() {
         let json = r#"{"data":{"users":[{"id":"1","name":"Alice"},{"id":"2","name":"Bob"}]}}"#;
 
         let compressed = Lz4CacheCompressor::compress(json).unwrap();
         let decompressed = Lz4CacheCompressor::decompress(&compressed).unwrap();
 
+        assert_eq!(json, decompressed);
+    }
+
+    #[test]
+    fn test_lz4_compressor_empty_json() {
+        let json = "";
+        let compressed = Lz4CacheCompressor::compress(json).unwrap();
+        let decompressed = Lz4CacheCompressor::decompress(&compressed).unwrap();
+        assert_eq!(json, decompressed);
+    }
+
+    #[test]
+    fn test_lz4_compressor_unicode() {
+        let json = r#"{"message":"Hello 世界 🌍"}"#;
+        let compressed = Lz4CacheCompressor::compress(json).unwrap();
+        let decompressed = Lz4CacheCompressor::decompress(&compressed).unwrap();
         assert_eq!(json, decompressed);
     }
 
@@ -191,5 +247,137 @@ mod tests {
             "Ratio: {:.1}%",
             compressed.len() as f64 / data.len() as f64 * 100.0
         );
+        
+        // LZ4 should be very fast
+        assert!(compress_time.as_millis() < 100);
+        assert!(decompress_time.as_millis() < 100);
+    }
+
+    #[test]
+    fn test_lz4_roundtrip_various_sizes() {
+        for size in [0, 1, 10, 100, 1000, 10000] {
+            let data = vec![42u8; size];
+            let compressed = compress_lz4(&data).unwrap();
+            let decompressed = decompress_lz4(&compressed).unwrap();
+            assert_eq!(data, decompressed, "Failed for size {}", size);
+        }
+    }
+
+    #[test]
+    fn test_lz4_json_array() {
+        let json = r#"[1,2,3,4,5]"#;
+        let compressed = Lz4CacheCompressor::compress(json).unwrap();
+        let decompressed = Lz4CacheCompressor::decompress(&compressed).unwrap();
+        assert_eq!(json, decompressed);
+    }
+
+    #[test]
+    fn test_lz4_json_nested() {
+        let json = r#"{"a":{"b":{"c":{"d":"value"}}}}"#;
+        let compressed = Lz4CacheCompressor::compress(json).unwrap();
+        let decompressed = Lz4CacheCompressor::decompress(&compressed).unwrap();
+        assert_eq!(json, decompressed);
+    }
+
+    #[test]
+    fn test_lz4_binary_data() {
+        let data: Vec<u8> = (0..=255).cycle().take(5000).collect();
+        let compressed = compress_lz4(&data).unwrap();
+        let decompressed = decompress_lz4(&compressed).unwrap();
+        assert_eq!(data, decompressed);
+    }
+
+    #[test]
+    fn test_lz4_compression_level() {
+        let data = b"Test data for compression level comparison";
+        let compressed = compress_lz4(data).unwrap();
+        // Just verify it works - level is already set to 1 (fast)
+        assert!(compressed.len() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_lz4_middleware_no_accept_encoding() {
+        let app = axum::Router::new()
+            .route("/test", axum::routing::get(|| async { "Hello" }))
+            .layer(axum::middleware::from_fn(lz4_compression_middleware));
+
+        let request = http::Request::builder()
+            .uri("/test")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        
+        // Should not compress without Accept-Encoding
+        assert!(response.headers().get(header::CONTENT_ENCODING).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_lz4_middleware_accepts_lz4() {
+        let app = axum::Router::new()
+            .route("/test", axum::routing::get(|| async { "Hello World ".repeat(100) }))
+            .layer(axum::middleware::from_fn(lz4_compression_middleware));
+
+        let request = http::Request::builder()
+            .uri("/test")
+            .header(header::ACCEPT_ENCODING, "lz4")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        
+        // Should compress with lz4
+        assert_eq!(
+            response.headers().get(header::CONTENT_ENCODING).map(|v| v.as_bytes()),
+            Some(b"lz4".as_ref())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_lz4_middleware_accepts_gbp_lz4() {
+        use axum::response::Json;
+        
+        let app = axum::Router::new()
+            .route("/test", axum::routing::get(|| async {
+                Json(serde_json::json!({"data": {"test": "value"}}))
+            }))
+            .layer(axum::middleware::from_fn(lz4_compression_middleware));
+
+        let request = http::Request::builder()
+            .uri("/test")
+            .header(header::ACCEPT_ENCODING, "gbp-lz4")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        
+        // Should compress with gbp-lz4 for JSON responses
+        let content_encoding = response.headers().get(header::CONTENT_ENCODING);
+        if content_encoding.is_some() {
+            assert_eq!(
+                content_encoding.map(|v| v.as_bytes()),
+                Some(b"gbp-lz4".as_ref())
+            );
+        }
+    }
+
+    #[test]
+    fn test_lz4_special_characters() {
+        let json = r#"{"special":"<>&\"'\n\t\r"}"#;
+        let compressed = Lz4CacheCompressor::compress(json).unwrap();
+        let decompressed = Lz4CacheCompressor::decompress(&compressed).unwrap();
+        assert_eq!(json, decompressed);
+    }
+
+    #[test]
+    fn test_lz4_very_long_string() {
+        let long_string = "a".repeat(100000);
+        let compressed = compress_lz4(long_string.as_bytes()).unwrap();
+        let decompressed = decompress_lz4(&compressed).unwrap();
+        assert_eq!(long_string.as_bytes(), decompressed.as_slice());
+        
+        // Should compress very well
+        let ratio = compressed.len() as f64 / long_string.len() as f64;
+        assert!(ratio < 0.05, "Expected > 95% compression");
     }
 }

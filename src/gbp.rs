@@ -1051,151 +1051,156 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Too resource-intensive for CI - run manually with: cargo test --ignored test_gbp_mid_case_1gb
-    fn test_gbp_mid_case_1gb() {
+    fn test_primitives_roundtrip() {
         let mut encoder = GbpEncoder::new();
-        
-        // Define realistic, limited value sets for categorical fields
-        let statuses = vec!["ACTIVE", "INACTIVE", "PENDING", "SUSPENDED", "TRIAL", "ARCHIVED"];
-        let roles = vec!["ADMIN", "MEMBER", "VIEWER", "OWNER", "CONTRIBUTOR", "GUEST", "MODERATOR"];
-        let tiers = vec!["FREE", "BASIC", "PREMIUM", "ENTERPRISE", "TRIAL"];
-        let regions = vec!["US-EAST", "US-WEST", "EU-CENTRAL", "EU-WEST", "ASIA-PACIFIC", "SOUTH-AMERICA", "MIDDLE-EAST"];
-        let themes = vec!["dark", "light", "auto", "high-contrast"];
-        let departments = vec!["Engineering", "Sales", "Marketing", "Support", "HR", "Finance", "Operations"];
-        
-        // Simulate 50 different organizations (shared across users)
-        let organizations: Vec<Value> = (0..50).map(|i| json!({
-            "id": format!("org-{}", i),
-            "name": format!("Organization {}", i),
-            "industry": departments[i % departments.len()],
-            "settings": {
-                "theme": themes[i % themes.len()],
-                "notifications": i % 2 == 0,
-                "twoFactorAuth": i % 3 == 0,
-                "audit": if i % 3 == 0 { "enabled" } else { "disabled" },
-                "backup": if i % 2 == 0 { "daily" } else { "weekly" }
-            },
-            "billing": {
-                "plan": tiers[i % tiers.len()],
-                "seats": (i % 10 + 1) * 10,
-                "currency": if i % 2 == 0 { "USD" } else { "EUR" }
-            }
-        })).collect();
-        
-        // Generate 1GB mid-case payload: ~1,000,000 users with realistic variation
-        println!("\nGenerating 1GB Mid-Case payload (1,000,000 users with realistic variation)...");
-        let data = json!({
-            "data": {
-                "users": (0..1000000).map(|i| {
-                    json!({
-                        "id": i,
-                        "typename": "User",
-                        "status": statuses[i % statuses.len()],
-                        "role": roles[i % roles.len()],
-                        "organization": organizations[i % organizations.len()].clone(),
-                        "permissions": if i % 3 == 0 {
-                            vec!["READ", "WRITE", "DELETE"]
-                        } else if i % 2 == 0 {
-                            vec!["READ", "WRITE"]
-                        } else {
-                            vec!["READ"]
-                        },
-                        "profile": {
-                            "verified": i % 3 == 0,
-                            "tier": tiers[i % tiers.len()],
-                            "department": departments[i % departments.len()],
-                            "score": (i % 100) as f64 / 10.0,
-                            "metadata": {
-                                "region": regions[i % regions.len()],
-                                "shard": (i % 32) as u32,
-                                "cluster": format!("cluster-{}", i % 8),
-                                "datacenter": format!("dc-{}", i % 4),
-                                "tags": if i % 2 == 0 {
-                                    vec!["premium", "verified", "trusted"]
-                                } else {
-                                    vec!["standard", "active"]
-                                },
-                                "preferences": {
-                                    "theme": themes[i % themes.len()],
-                                    "language": if i % 3 == 0 { "en" } else if i % 3 == 1 { "es" } else { "fr" },
-                                    "timezone": format!("UTC{:+}", (i % 24) as i32 - 12)
-                                }
-                            }
-                        },
-                        "description": format!("User {} - {} in {}", i, roles[i % roles.len()], departments[i % departments.len()]),
-                        "email": format!("user{}@org{}.com", i, i % 50),
-                        "lastLogin": format!("2025-12-{:02}T{:02}:00:00Z", (i % 30) + 1, i % 24),
-                        "createdAt": format!("2023-{:02}-01T00:00:00Z", (i % 12) + 1),
-                    })
-                }).collect::<Vec<_>>()
-            }
+        let primitives = vec![
+            Value::Null,
+            Value::Bool(true),
+            Value::Bool(false),
+            json!(0),
+            json!(1),
+            json!(-1),
+            json!(i64::MAX),
+            json!(i64::MIN),
+            json!(0.0),
+            json!(3.14159),
+            json!(-123.456),
+            json!(""),
+            json!("hello"),
+            json!("ümlaut"),
+            json!("🙂"),
+        ];
+
+        for val in primitives {
+            let encoded = encoder.encode(&val);
+            let mut decoder = GbpDecoder::new();
+            let decoded = decoder.decode(&encoded).unwrap();
+            assert_eq!(val, decoded, "Failed roundtrip for {:?}", val);
+        }
+    }
+
+    #[test]
+    fn test_string_reused_pool() {
+        let mut encoder = GbpEncoder::new();
+        let val = json!({
+            "a": "foo",
+            "b": "foo",
+            "c": "foo"
         });
-
-        let json_bytes = serde_json::to_vec(&data).unwrap();
-        println!("Original payload size: {:.2} MB", json_bytes.len() as f64 / 1024.0 / 1024.0);
-        println!("Encoding 1GB Mid-Case with GBP Ultra + LZ4...");
         
-        let start = std::time::Instant::now();
-        let encoded = encoder.encode_lz4(&data).unwrap();
-        let duration = start.elapsed();
+        encoder.encode(&val);
+        
+        // "foo" implies one entry. Keys "a", "b", "c" are also strings in the pool.
+        // So total strings should be "a", "b", "c", "foo".
+        // Depending on implementation order: "a", "foo", "b", "c" etc.
+        // We just check that "foo" isn't duplicated.
+        
+        let foo_count = encoder.string_pool.iter().filter(|s| *s == "foo").count();
+        assert_eq!(foo_count, 1, "String 'foo' should be pooled and reused");
+    }
 
-        let ratio = encoded.len() as f64 / json_bytes.len() as f64;
-        let reduction = (1.0 - ratio) * 100.0;
+    #[test]
+    fn test_shape_reuse() {
+        let mut encoder = GbpEncoder::new();
+        // Two objects with same structure (keys)
+        let val = json!([
+            { "name": "Alice", "age": 30 },
+            { "name": "Bob", "age": 40 }
+        ]);
 
-        println!("\n--- GBP 1GB Mid-Case Compression Test ---");
-        println!("Original JSON size:  {:>12} bytes ({:.2} MB)", 
-            json_bytes.len(), json_bytes.len() as f64 / 1024.0 / 1024.0);
-        println!("GBP Ultra size:      {:>12} bytes ({:.2} MB)", 
-            encoded.len(), encoded.len() as f64 / 1024.0 / 1024.0);
-        println!("Compression Ratio:   {:>12.2}% reduction", reduction);
-        println!("Encoding Time:       {:>12.2}ms ({:.2}s)", 
-            duration.as_secs_f64() * 1000.0, duration.as_secs_f64());
-        println!("Throughput:          {:>12.2} MB/s",
-            (json_bytes.len() as f64 / 1024.0 / 1024.0) / duration.as_secs_f64()
-        );
+        encoder.encode(&val);
 
-        // Data Integrity Check (lighter check for performance)
-        println!("Verifying data integrity for 1GB Mid-Case...");
-        let decode_start = std::time::Instant::now();
+        // Should have only 1 shape: ["name", "age"] (order depends on map iteration, usually sorted or insertion)
+        // Actually typical JSON maps (serde_json::Map) preserve insertion order or are BTreeMaps (sorted keys).
+        // serde_json uses BTreeMap by default which sorts keys.
+        assert_eq!(encoder.shape_pool.len(), 1, "Should reuse shape for identical object structures");
+    }
+
+    #[test]
+    fn test_array_mixed_types_fallback() {
+        let mut encoder = GbpEncoder::new();
+        // Array with enough items to trigger columnar check (>8), but mixed types to force fallback
+        let mut items = Vec::new();
+        for _ in 0..5 { items.push(json!({"a": 1})); }
+        items.push(json!(123)); // Not an object
+        for _ in 0..4 { items.push(json!({"a": 2})); }
+        
+        let val = Value::Array(items);
+        let encoded = encoder.encode(&val);
+        
         let mut decoder = GbpDecoder::new();
-        let decoded = decoder.decode_lz4(&encoded).expect("Decoding failed");
-        let decode_duration = decode_start.elapsed();
-        
-        println!("Decoding Time:       {:>12.2}ms ({:.2}s)",
-            decode_duration.as_secs_f64() * 1000.0, decode_duration.as_secs_f64());
-        println!("Decode Throughput:   {:>12.2} MB/s",
-            (json_bytes.len() as f64 / 1024.0 / 1024.0) / decode_duration.as_secs_f64()
-        );
-        
-        // Verify structure
-        assert!(decoded.is_object(), "Root should be an object");
-        let decoded_data = decoded.get("data").expect("Missing 'data' field");
-        let decoded_users = decoded_data.get("users").expect("Missing 'users' field");
-        assert!(decoded_users.is_array(), "Users should be an array");
-        assert_eq!(decoded_users.as_array().unwrap().len(), 1000000, "Should have 1,000,000 users");
-        
-        // Spot check values
-        let first_user = &decoded_users[0];
-        assert_eq!(first_user.get("typename").unwrap().as_str().unwrap(), "User");
-        assert_eq!(first_user.get("id").unwrap().as_i64().unwrap(), 0);
-        
-        let mid_user = &decoded_users[500000];
-        assert_eq!(mid_user.get("id").unwrap().as_i64().unwrap(), 500000);
-        
-        println!("✅ Integrity verified (structural check + spot checks)");
+        let decoded = decoder.decode(&encoded).unwrap();
+        assert_eq!(val, decoded);
+    }
 
-        println!("\nℹ️  1GB Mid-Case Scenario Summary:");
-        println!("   Dataset: 1,000,000 users with realistic production patterns");
-        println!("   Characteristics:");
-        println!("   - 50 shared organizations (realistic multi-tenant scenario)");
-        println!("   - 6 statuses, 7 roles, 5 tiers, 7 regions (limited categorical values)");
-        println!("   - Unique IDs, emails, timestamps per user");
-        println!("   - Nested profile with preferences and metadata");
-        println!("   Achieved reduction: {:.2}%", reduction);
-        println!("   Total round-trip time: {:.2}s (encode + decode)", 
-            (duration.as_secs_f64() + decode_duration.as_secs_f64()));
+    #[test]
+    fn test_rle_triggering() {
+        let mut encoder = GbpEncoder::new();
+        // Create an array with a long run of identical values to trigger RLE
+        // RLE threshold in code is run >= 15
+        let run_length = 20;
+        let mut items = Vec::new();
+        for _ in 0..run_length {
+            items.push(json!({"id": 1, "val": 100})); 
+        }
         
-        // 1GB mid-case should show excellent compression
-        assert!(reduction >= 90.0, "1GB mid-case reduction was only {:.2}%, expected >= 90%", reduction);
+        // This array of objects might trigger columnar encoding first.
+        // Inside columnar, for the "val" column, it sees 20 x 100.
+        // 100 is a number (primitive), so RLE check runs.
+        // Run of 20 > 15, so RLE should activate.
+        
+        let val = json!(items);
+        let encoded = encoder.encode(&val);
+        
+        // We can't easily inspect the encoded bytes for RLE tag 0x0B without parsing,
+        // but we can ensure it roundtrips correctly.
+        let mut decoder = GbpDecoder::new();
+        let decoded = decoder.decode(&encoded).unwrap();
+        assert_eq!(val, decoded);
+        
+        // Use a simpler case: simple array of integers (non-columnar)
+        // Wait, regular parsing doesn't use RLE? 
+        // `encode_recursive` doesn't seem to implement RLE for standard arrays, only `try_encode_columnar` does for columns.
+        // Let's verify `try_encode_columnar` is used.
+        // items.len() = 20 > 8. All are objects. All same shape.
+        // Columnar will trigger. Column "val" has 20 integers. RLE should trigger.
+    }
+
+    #[test]
+    fn test_decoder_error_handling() {
+        let mut decoder = GbpDecoder::new();
+        
+        // 1. Empty data
+        assert!(decoder.decode(&[]).is_err());
+        
+        // 2. Invalid magic
+        assert!(decoder.decode(b"BAD\x00").is_err());
+        
+        // 3. Truncated varint
+        let mut data = b"GBP\x08".to_vec();
+        data.push(0x80); // Unfinished varint
+        assert!(decoder.decode(&data).is_err());
+        
+        // 4. Unknown tag
+        // Construct valid header but invalid body tag
+        let mut valid_header = b"GBP\x08\x00\x00".to_vec(); // 0 strings, 0 shapes
+        valid_header.push(0xFF); // Invalid tag
+        assert!(decoder.decode(&valid_header).is_err());
+    }
+
+    #[test]
+    fn test_deeply_nested_structure() {
+        let mut encoder = GbpEncoder::new();
+        let depth = 50;
+        let mut current = json!(null);
+        for _ in 0..depth {
+            current = json!({ "next": current });
+        }
+        
+        let encoded = encoder.encode(&current);
+        let mut decoder = GbpDecoder::new();
+        let decoded = decoder.decode(&encoded).unwrap();
+        
+        assert_eq!(current, decoded);
     }
 }

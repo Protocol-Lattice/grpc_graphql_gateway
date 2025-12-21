@@ -1314,20 +1314,445 @@ impl Default for GatewayBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+    use crate::compression::CompressionLevel;
 
-    #[test]
-    fn test_builder_creation() {
+    // Minimal descriptor for testing
+    const TEST_DESCRIPTOR: &[u8] = include_bytes!("generated/greeter_descriptor.bin");
+
+    #[tokio::test]
+    async fn test_builder_creation() {
         let builder = GatewayBuilder::new();
         let result = builder.build();
         assert!(result.is_err());
     }
 
     #[tokio::test]
+    async fn test_builder_default() {
+        let builder1 = GatewayBuilder::new();
+        let builder2 = GatewayBuilder::default();
+        
+        // Both should behave the same
+        assert!(builder1.build().is_err());
+        assert!(builder2.build().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_gateway_builder() {
+        let builder = Gateway::builder();
+        assert!(builder.build().is_err()); // No descriptor set yet
+    }
+
+    #[tokio::test]
     async fn test_grpc_client_pool() {
         let pool = GrpcClientPool::new();
-
-        // In a real test, you'd create actual clients
-        // For now, just test the pool structure
         assert_eq!(pool.names().len(), 0);
     }
+
+    #[tokio::test]
+    async fn test_builder_with_descriptor_bytes() {
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR);
+        
+        // Should not error with valid descriptor
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_add_descriptor_bytes() {
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .add_descriptor_set_bytes(TEST_DESCRIPTOR); // Add another
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_add_grpc_client() {
+        let client = GrpcClient::connect_lazy("http://localhost:50051", true).unwrap();
+        
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .add_grpc_client("test.Service", client);
+        
+        let gateway = builder.build().unwrap();
+        assert!(gateway.client_pool().names().len() >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_builder_add_grpc_clients() {
+        let client1 = GrpcClient::connect_lazy("http://localhost:50051", true).unwrap();
+        let client2 = GrpcClient::connect_lazy("http://localhost:50052", true).unwrap();
+        
+        let clients = vec![
+            ("service1".to_string(), client1),
+            ("service2".to_string(), client2),
+        ];
+        
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .add_grpc_clients(clients);
+        
+        let gateway = builder.build().unwrap();
+        assert!(gateway.client_pool().names().len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_services() {
+        let services = vec!["example.UserService".to_string()];
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_services(services);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_enable_federation() {
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .enable_federation();
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_compression() {
+        let config = CompressionConfig::default();
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_compression(config);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_compression_fast() {
+        let config = CompressionConfig::fast();
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_compression(config);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_compression_best() {
+        let config = CompressionConfig::best();
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_compression(config);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_header_propagation() {
+        let config = HeaderPropagationConfig::new()
+            .propagate("authorization")
+            .propagate("x-request-id");
+        
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_header_propagation(config);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_header_propagation_common() {
+        let config = HeaderPropagationConfig::common();
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_header_propagation(config);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_query_depth_limit() {
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_query_depth_limit(10);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_query_complexity_limit() {
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_query_complexity_limit(1000);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_enable_health_checks() {
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .enable_health_checks();
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_enable_metrics() {
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .enable_metrics();
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_graceful_shutdown() {
+        let config = ShutdownConfig {
+            timeout: Duration::from_secs(30),
+            ..Default::default()
+        };
+        
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_graceful_shutdown(config);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+
+
+    #[tokio::test]
+    async fn test_builder_chain_multiple_configs() {
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_compression(CompressionConfig::fast())
+            .with_header_propagation(HeaderPropagationConfig::common())
+            .with_query_depth_limit(15)
+            .with_query_complexity_limit(2000)
+            .enable_health_checks()
+            .enable_metrics();
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_gateway_accessors() {
+        let gateway = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .build()
+            .unwrap();
+        
+        // Test accessor methods
+        let _ = gateway.schema();
+        let _ = gateway.client_pool();
+        let _ = gateway.mux();
+    }
+
+    #[tokio::test]
+    async fn test_gateway_into_router() {
+        let gateway = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .build()
+            .unwrap();
+        
+        let _router = gateway.into_router();
+        // Router created successfully
+    }
+
+    #[tokio::test]
+    async fn test_builder_empty_descriptor_fails() {
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(&[]);
+        
+        let result = builder.build();
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_builder_invalid_descriptor_fails() {
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        
+        let result = builder.build();
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_circuit_breaker() {
+        use crate::circuit_breaker::CircuitBreakerConfig;
+        
+        let config = CircuitBreakerConfig::default();
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_circuit_breaker(config);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_response_cache() {
+        use crate::cache::CacheConfig;
+        
+        let config = CacheConfig {
+            max_size: 1000,
+            default_ttl: Duration::from_secs(60),
+            ..Default::default()
+        };
+        
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_response_cache(config);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_enable_analytics() {
+        use crate::analytics::AnalyticsConfig;
+        
+        let config = AnalyticsConfig::default();
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .enable_analytics(config);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_request_collapsing() {
+        use crate::request_collapsing::RequestCollapsingConfig;
+        
+        let config = RequestCollapsingConfig::default();
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_request_collapsing(config);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_high_performance() {
+        use crate::high_performance::HighPerfConfig;
+        
+        let config = HighPerfConfig::default();
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_high_performance(config);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_query_whitelist() {
+        let config = crate::query_whitelist::QueryWhitelistConfig::warn();
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_query_whitelist(config);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_rest_connectors_empty() {
+        let builder = GatewayBuilder::new();
+        assert!(builder.rest_connectors().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_client_pool_operations() {
+        let pool = GrpcClientPool::new();
+        
+        let client = GrpcClient::connect_lazy("http://localhost:50051", true).unwrap();
+        pool.add("service1", client.clone());
+        
+        assert_eq!(pool.names().len(), 1);
+        assert!(pool.get("service1").is_some());
+        assert!(pool.get("nonexistent").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_complete_configuration_stack() {
+        // Build a gateway with ALL features enabled
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .with_compression(CompressionConfig::best())
+            .with_header_propagation(HeaderPropagationConfig::common())
+            .with_query_depth_limit(20)
+            .with_query_complexity_limit(5000)
+            .enable_health_checks()
+            .enable_metrics()
+            .with_graceful_shutdown(ShutdownConfig::default())
+            .with_circuit_breaker(crate::circuit_breaker::CircuitBreakerConfig::default())
+            .with_response_cache(crate::cache::CacheConfig::default())
+            .with_high_performance(crate::high_performance::HighPerfConfig::default())
+            .with_query_whitelist(crate::query_whitelist::QueryWhitelistConfig::warn())
+            .enable_analytics(crate::analytics::AnalyticsConfig::default())
+            .with_request_collapsing(RequestCollapsingConfig::default());
+        
+        let result = builder.build();
+        assert!(result.is_ok(), "Full configuration stack should build successfully");
+    }
+
+    #[tokio::test]
+    async fn test_multiple_descriptor_sets() {
+        let builder = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .add_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .add_descriptor_set_bytes(TEST_DESCRIPTOR);
+        
+        let result = builder.build();
+        assert!(result.is_ok());
+    }
+
+
+
+    #[tokio::test]
+    async fn test_gateway_schema_access() {
+        let gateway = GatewayBuilder::new()
+            .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+            .build()
+            .unwrap();
+        
+        let _schema = gateway.schema();
+        // Schema is accessible
+    }
+
+    #[tokio::test]
+    async fn test_compression_levels() {
+        for level in [
+            CompressionLevel::Fast,
+            CompressionLevel::Default,
+            CompressionLevel::Best,
+            CompressionLevel::Custom(5),
+        ] {
+            let builder = GatewayBuilder::new()
+                .with_descriptor_set_bytes(TEST_DESCRIPTOR)
+                .with_compression(CompressionConfig::new().with_level(level));
+            
+            assert!(builder.build().is_ok());
+        }
+    }
+
+
 }

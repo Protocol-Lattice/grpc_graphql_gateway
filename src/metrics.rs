@@ -253,38 +253,120 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_metrics_creation() {
-        // This will use the global metrics
+    fn test_metrics_registry() {
+        // Ensure global registry works
         let metrics = GatewayMetrics::global();
-
-        // Record some requests
+        let initial_count = metrics.graphql_requests.with_label_values(&["query"]).get();
+        
         metrics.record_graphql_request("query");
+        let new_count = metrics.graphql_requests.with_label_values(&["query"]).get();
+        
+        // Use >= because other tests might run in parallel and increment the counter
+        assert!(new_count >= initial_count + 1, "Expected query count to increase");
+    }
+
+    #[test]
+    fn test_graphql_metrics() {
+        let metrics = GatewayMetrics::global();
+        
+        // Requests
+        let initial_q = metrics.graphql_requests.with_label_values(&["query"]).get();
+        let initial_m = metrics.graphql_requests.with_label_values(&["mutation"]).get();
+        
         metrics.record_graphql_request("query");
         metrics.record_graphql_request("mutation");
-
-        // Verify counts
-        assert!(metrics.requests_total() >= 3);
+        
+        assert!(metrics.graphql_requests.with_label_values(&["query"]).get() >= initial_q + 1);
+        assert!(metrics.graphql_requests.with_label_values(&["mutation"]).get() >= initial_m + 1);
+        
+        // Errors
+        let initial_err_count = metrics.graphql_errors.with_label_values(&["validation"]).get();
+        metrics.record_graphql_error("validation");
+        assert!(metrics.graphql_errors.with_label_values(&["validation"]).get() >= initial_err_count + 1);
+        
+        // Duration
+        metrics.record_graphql_duration("query", 0.5);
+        let count = metrics.graphql_duration.with_label_values(&["query"]).get_sample_count();
+        assert!(count > 0);
     }
 
     #[test]
-    fn test_metrics_render() {
+    fn test_grpc_metrics() {
         let metrics = GatewayMetrics::global();
-        metrics.record_graphql_request("query");
+        
+        // Requests
+        let svc = "TestService";
+        let method = "TestMethod";
+        
+        let initial_reqs = metrics.grpc_requests.with_label_values(&[svc, method]).get();
+        metrics.record_grpc_request(svc, method);
+        assert!(metrics.grpc_requests.with_label_values(&[svc, method]).get() >= initial_reqs + 1);
+        
+        // Duration
+        metrics.record_grpc_duration(svc, method, 0.1);
+        
+        // Errors
+        let initial_errs = metrics.grpc_errors.with_label_values(&[svc, method, "INTERNAL"]).get();
+        metrics.record_grpc_error(svc, method, "INTERNAL");
+        assert!(metrics.grpc_errors.with_label_values(&[svc, method, "INTERNAL"]).get() >= initial_errs + 1);
+    }
 
+    #[test]
+    fn test_request_timer_workflow() {
+        let metrics = GatewayMetrics::global();
+        let start_count = metrics.graphql_requests.with_label_values(&["subscription"]).get();
+        
+        {
+            let timer = RequestTimer::new("subscription");
+            timer.record_error("timeout");
+            // Timer active
+        } // Drop happens here
+        
+        let end_count = metrics.graphql_requests.with_label_values(&["subscription"]).get();
+        assert!(end_count >= start_count + 1);
+        
+        assert!(metrics.graphql_errors.with_label_values(&["timeout"]).get() >= 1);
+    }
+
+    #[test]
+    fn test_grpc_timer_workflow() {
+        let metrics = GatewayMetrics::global();
+        let svc = "TimerService";
+        let method = "TimerMethod";
+        
+        let start_count = metrics.grpc_requests.with_label_values(&[svc, method]).get();
+        
+        {
+            let timer = GrpcTimer::new(svc, method);
+            timer.record_error("UNAVAILABLE");
+        } // Drop
+        
+        assert!(metrics.grpc_requests.with_label_values(&[svc, method]).get() >= start_count + 1);
+        assert!(metrics.grpc_errors.with_label_values(&[svc, method, "UNAVAILABLE"]).get() >= 1);
+    }
+
+    #[test]
+    fn test_metrics_rendering_output() {
+        let metrics = GatewayMetrics::global();
+        metrics.record_graphql_request("render_test");
+        
         let output = metrics.render();
         assert!(output.contains("graphql_requests_total"));
+        assert!(output.contains("render_test"));
+        assert!(output.contains("TYPE graphql_requests_total counter"));
     }
 
     #[test]
-    fn test_request_timer() {
-        let _timer = RequestTimer::new("query");
-        // Timer will auto-record duration when dropped
-    }
-
-    #[test]
-    fn test_grpc_timer() {
-        let timer = GrpcTimer::new("UserService", "GetUser");
-        timer.record_error("NOT_FOUND");
-        // Timer will auto-record duration when dropped
+    fn test_requests_total_aggregator() {
+        let metrics = GatewayMetrics::global();
+        let before_total = metrics.requests_total();
+        
+        metrics.record_graphql_request("query");
+        metrics.record_graphql_request("mutation");
+        metrics.record_graphql_request("subscription");
+        
+        let after_total = metrics.requests_total();
+        // expect at least +3
+        assert!(after_total >= before_total + 3);
     }
 }

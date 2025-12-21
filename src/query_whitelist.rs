@@ -534,6 +534,25 @@ mod tests {
     }
 
     #[test]
+    fn test_query_normalization_edge_cases() {
+        // String with escaped quotes
+        let q1 = r#"query { field(arg: "escaped \"quote\" inside") }"#;
+        let n1 = QueryWhitelist::normalize_query(q1);
+        let expected = r#"query{field(arg:"escaped \"quote\" inside")}"#;
+        assert_eq!(n1, expected);
+
+        // Comments with newlines
+        let q2 = "query {\n  # This is a comment\n  user\n}";
+        let n2 = QueryWhitelist::normalize_query(q2);
+        assert_eq!(n2, "query{user}");
+
+        // Unicode in strings
+        let q3 = r#"query { post(title: "Hello 🌍") }"#;
+        let n3 = QueryWhitelist::normalize_query(q3);
+        assert_eq!(n3, r#"query{post(title:"Hello 🌍")}"#);
+    }
+
+    #[test]
     fn test_whitelist_enforce_mode() {
         let config = QueryWhitelistConfig {
             mode: WhitelistMode::Enforce,
@@ -708,9 +727,6 @@ mod proptest_checks {
             let with_comment = format!("{} # comment", s);
             let n1 = QueryWhitelist::normalize_query(&s);
             let n2 = QueryWhitelist::normalize_query(&with_comment);
-            // Normalization trims input, but if `s` is "A", n1="A".
-            // "A # comment" -> "A ".
-            // So we compare trimmed.
             assert_eq!(n1.trim(), n2.trim());
         }
 

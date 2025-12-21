@@ -439,4 +439,160 @@ mod tests {
         let _layer = create_compression_layer(&config);
         // Layer was created successfully
     }
+
+    #[test]
+    fn test_compression_level_to_gzip() {
+        assert_eq!(
+            CompressionLevel::Fast.to_gzip_level(),
+            tower_http::CompressionLevel::Fastest
+        );
+        assert_eq!(
+            CompressionLevel::Default.to_gzip_level(),
+            tower_http::CompressionLevel::Default
+        );
+        assert_eq!(
+            CompressionLevel::Best.to_gzip_level(),
+            tower_http::CompressionLevel::Best
+        );
+        assert_eq!(
+            CompressionLevel::Custom(7).to_gzip_level(),
+            tower_http::CompressionLevel::Default
+        );
+    }
+
+    #[test]
+    fn test_compression_level_equality() {
+        assert_eq!(CompressionLevel::Fast, CompressionLevel::Fast);
+        assert_ne!(CompressionLevel::Fast, CompressionLevel::Best);
+        assert_eq!(CompressionLevel::Custom(5), CompressionLevel::Custom(5));
+        assert_ne!(CompressionLevel::Custom(5), CompressionLevel::Custom(6));
+    }
+
+    #[test]
+    fn test_compression_config_ultra_fast() {
+        let config = CompressionConfig::ultra_fast();
+        assert!(config.enabled);
+        assert!(config.gbp_lz4_enabled());
+        assert!(config.lz4_enabled());
+        assert_eq!(config.level, CompressionLevel::Fast);
+        assert_eq!(config.min_size_bytes, 128);
+    }
+
+    #[test]
+    fn test_lz4_enabled() {
+        let config = CompressionConfig::default();
+        assert!(!config.lz4_enabled());
+
+        let lz4_config = CompressionConfig::new().with_algorithms(vec!["lz4".into()]);
+        assert!(lz4_config.lz4_enabled());
+    }
+
+    #[test]
+    fn test_gbp_lz4_enabled() {
+        let config = CompressionConfig::default();
+        assert!(config.gbp_lz4_enabled()); // Default includes gbp-lz4
+
+        let no_gbp = CompressionConfig::new().with_algorithms(vec!["gzip".into()]);
+        assert!(!no_gbp.gbp_lz4_enabled());
+    }
+
+    #[test]
+    fn test_zstd_enabled() {
+        let config = CompressionConfig::default();
+        assert!(!config.zstd_enabled());
+
+        let zstd_config = CompressionConfig::new().with_algorithms(vec!["zstd".into()]);
+        assert!(zstd_config.zstd_enabled());
+    }
+
+    #[test]
+    fn test_compression_stats_zero_input() {
+        let stats = CompressionStats {
+            bytes_in: 0,
+            bytes_out: 0,
+            compressed_count: 0,
+            uncompressed_count: 0,
+        };
+
+        assert_eq!(stats.compression_ratio(), 1.0);
+        assert_eq!(stats.savings_percentage(), 0.0);
+    }
+
+    #[test]
+    fn test_compression_stats_no_compression() {
+        let stats = CompressionStats {
+            bytes_in: 1000,
+            bytes_out: 1000,
+            compressed_count: 0,
+            uncompressed_count: 10,
+        };
+
+        assert_eq!(stats.compression_ratio(), 1.0);
+        assert_eq!(stats.savings_percentage(), 0.0);
+    }
+
+    #[test]
+    fn test_compression_stats_perfect_compression() {
+        let stats = CompressionStats {
+            bytes_in: 1000,
+            bytes_out: 0,
+            compressed_count: 10,
+            uncompressed_count: 0,
+        };
+
+        assert_eq!(stats.compression_ratio(), 0.0);
+        assert_eq!(stats.savings_percentage(), 100.0);
+    }
+
+    #[test]
+    fn test_compression_config_clone() {
+        let config1 = CompressionConfig::best();
+        let config2 = config1.clone();
+
+        assert_eq!(config1.level, config2.level);
+        assert_eq!(config1.enabled, config2.enabled);
+        assert_eq!(config1.min_size_bytes, config2.min_size_bytes);
+    }
+
+    #[test]
+    fn test_compression_config_new() {
+        let config = CompressionConfig::new();
+        assert!(config.enabled);
+        assert_eq!(config.level, CompressionLevel::Default);
+    }
+
+    #[test]
+    fn test_compression_level_copy() {
+        let level1 = CompressionLevel::Fast;
+        let level2 = level1;
+        assert_eq!(level1, level2);
+    }
+
+    #[test]
+    fn test_compression_stats_default() {
+        let stats = CompressionStats::default();
+        assert_eq!(stats.bytes_in, 0);
+        assert_eq!(stats.bytes_out, 0);
+        assert_eq!(stats.compressed_count, 0);
+        assert_eq!(stats.uncompressed_count, 0);
+    }
+
+    #[test]
+    fn test_multiple_algorithms() {
+        let config = CompressionConfig::new().with_algorithms(vec![
+            "gbp-lz4".into(),
+            "lz4".into(),
+            "br".into(),
+            "gzip".into(),
+            "deflate".into(),
+            "zstd".into(),
+        ]);
+
+        assert!(config.gbp_lz4_enabled());
+        assert!(config.lz4_enabled());
+        assert!(config.brotli_enabled());
+        assert!(config.gzip_enabled());
+        assert!(config.deflate_enabled());
+        assert!(config.zstd_enabled());
+    }
 }

@@ -246,7 +246,7 @@ fn normalize_object(obj: &Representation) -> Vec<(String, NormalizedValue)> {
 mod tests {
     use super::*;
     use crate::federation::GrpcEntityResolver;
-    use async_graphql::{Name, Value as GqlValue};
+    use async_graphql::{Name, Number, Value as GqlValue};
     use prost_reflect::DescriptorPool;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -319,6 +319,201 @@ mod tests {
         assert_eq!(values[0], GqlValue::Object(first_repr));
         assert_eq!(values[1], GqlValue::Object(second_repr));
         assert_eq!(resolver.batch_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_load_multiple_entity_types() {
+        let resolver = Arc::new(CountingResolver::default());
+        let mut configs = HashMap::new();
+        configs.insert("Type1".to_string(), user_entity_config());
+        configs.insert("Type2".to_string(), user_entity_config());
+        let loader = EntityDataLoader::new(resolver.clone(), configs);
+
+        let repr1 = simple_representation("1");
+        let repr2 = simple_representation("2");
+
+        // Load different entity types
+        let val1 = loader.load("Type1", repr1).await.unwrap();
+        let val2 = loader.load("Type2", repr2).await.unwrap();
+
+        assert!(val1 != val2);
+    }
+
+    #[tokio::test]
+    async fn test_load_many_empty() {
+        let resolver = Arc::new(CountingResolver::default());
+        let mut configs = HashMap::new();
+        configs.insert("User".to_string(), user_entity_config());
+        let loader = EntityDataLoader::new(resolver, configs);
+
+        let values = loader.load_many("User", vec![]).await.unwrap();
+        assert_eq!(values.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_load_many_single() {
+        let resolver = Arc::new(CountingResolver::default());
+        let mut configs = HashMap::new();
+        configs.insert("User".to_string(), user_entity_config());
+        let loader = EntityDataLoader::new(resolver.clone(), configs);
+
+        let repr = simple_representation("1");
+        let values = loader.load_many("User", vec![repr.clone()]).await.unwrap();
+
+        assert_eq!(values.len(), 1);
+        // Should call single resolve for one item
+        assert_eq!(resolver.single_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(resolver.batch_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_normalized_value_null() {
+        let value = GqlValue::Null;
+        let normalized = NormalizedValue::from(&value);
+        assert!(matches!(normalized, NormalizedValue::Null));
+    }
+
+    #[tokio::test]
+    async fn test_normalized_value_boolean() {
+        let value = GqlValue::Boolean(true);
+        let normalized = NormalizedValue::from(&value);
+        assert_eq!(normalized, NormalizedValue::Boolean(true));
+    }
+
+    #[tokio::test]
+    async fn test_normalized_value_number() {
+        let value = GqlValue::Number(Number::from(42));
+        let normalized = NormalizedValue::from(&value);
+        assert_eq!(normalized, NormalizedValue::Number("42".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_normalized_value_string() {
+        let value = GqlValue::String("test".to_string());
+        let normalized = NormalizedValue::from(&value);
+        assert_eq!(normalized, NormalizedValue::String("test".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_normalized_value_enum() {
+        let value = GqlValue::Enum(Name::new("ACTIVE"));
+        let normalized = NormalizedValue::from(&value);
+        assert_eq!(normalized, NormalizedValue::Enum("ACTIVE".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_normalized_value_list() {
+        let value = GqlValue::List(vec![
+            GqlValue::Number(Number::from(1)),
+            GqlValue::Number(Number::from(2)),
+            GqlValue::Number(Number::from(3)),
+        ]);
+        let normalized = NormalizedValue::from(&value);
+        
+        if let NormalizedValue::List(items) = normalized {
+            assert_eq!(items.len(), 3);
+        } else {
+            panic!("Expected List");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_normalized_value_binary() {
+        use bytes::Bytes;
+        let value = GqlValue::Binary(Bytes::from(vec![1, 2, 3, 4]));
+        let normalized = NormalizedValue::from(&value);
+        assert_eq!(normalized, NormalizedValue::Binary(vec![1, 2, 3, 4]));
+    }
+
+    #[tokio::test]
+    async fn test_normalized_value_object_ordering() {
+        let mut obj1 = IndexMap::new();
+        obj1.insert(Name::new("z"), GqlValue::String("last".to_string()));
+        obj1.insert(Name::new("a"), GqlValue::String("first".to_string()));
+        obj1.insert(Name::new("m"), GqlValue::String("middle".to_string()));
+
+        let mut obj2 = IndexMap::new();
+        obj2.insert(Name::new("a"), GqlValue::String("first".to_string()));
+        obj2.insert(Name::new("m"), GqlValue::String("middle".to_string()));
+        obj2.insert(Name::new("z"), GqlValue::String("last".to_string()));
+
+        let norm1 = NormalizedValue::from(&GqlValue::Object(obj1));
+        let norm2 = NormalizedValue::from(&GqlValue::Object(obj2));
+
+        // Should be equal despite different insertion order
+        assert_eq!(norm1, norm2);
+    }
+
+    #[tokio::test]
+    async fn test_representation_key_equality() {
+        let repr1 = simple_representation("1");
+        let repr2 = simple_representation("1");
+        
+        let key1 = RepresentationKey::new("User", repr1);
+        let key2 = RepresentationKey::new("User", repr2);
+
+        assert_eq!(key1, key2);
+    }
+
+    #[tokio::test]
+    async fn test_representation_key_different_entity_types() {
+        let repr = simple_representation("1");
+        
+        let key1 = RepresentationKey::new("User", repr.clone());
+        let key2 = RepresentationKey::new("Product", repr);
+
+        assert_ne!(key1, key2);
+    }
+
+    #[tokio::test]
+    async fn test_representation_key_hash_consistency() {
+        use std::collections::HashSet;
+
+        let repr = simple_representation("1");
+        let key1 = RepresentationKey::new("User", repr.clone());
+        let key2 = RepresentationKey::new("User", repr);
+
+        let mut set = HashSet::new();
+        set.insert(key1.clone());
+        
+        // key2 should be found in set since it's equal to key1
+        assert!(set.contains(&key2));
+    }
+
+    #[tokio::test]
+    async fn test_representation_key_debug() {
+        let repr = simple_representation("1");
+        let key = RepresentationKey::new("User", repr);
+        let debug_str = format!("{:?}", key);
+        
+        assert!(debug_str.contains("RepresentationKey"));
+    }
+
+    #[tokio::test]
+    async fn test_normalized_value_clone() {
+        let original = NormalizedValue::String("test".to_string());
+        let cloned = original.clone();
+        assert_eq!(original, cloned);
+    }
+
+    #[tokio::test]
+    async fn test_error_unknown_entity_type() {
+        let resolver = Arc::new(CountingResolver::default());
+        let configs = HashMap::new(); // Empty configs
+        let loader = EntityDataLoader::new(resolver, configs);
+
+        let result = loader.load("UnknownType", simple_representation("1")).await;
+        assert!(result.is_err());
+    }
+
+    fn simple_representation(id: &str) -> Representation {
+        let mut repr = IndexMap::new();
+        repr.insert(Name::new("id"), GqlValue::String(id.to_string()));
+        repr.insert(
+            Name::new("__typename"),
+            GqlValue::String("User".to_string()),
+        );
+        repr
     }
 
     #[derive(Default)]
