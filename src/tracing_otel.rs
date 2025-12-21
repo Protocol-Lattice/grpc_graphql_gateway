@@ -293,4 +293,47 @@ mod tests {
         let middleware = TracingMiddleware::with_config(TracingConfig::disabled());
         assert!(!middleware.is_enabled());
     }
+
+    #[test]
+    fn test_graphql_span_lifecycle() {
+        // Ensure we can create and manipulate spans without panicking
+        // Note: Use no-op global tracer implicitly
+        let mut span = GraphQLSpan::new("getUsers", "query", "{ users { id } }");
+        
+        span.set_attribute("custom.tag", "value");
+        span.set_attribute("complexity", 100);
+        
+        span.ok();
+        // Should not panic on end()
+    }
+
+    #[test]
+    fn test_graphql_span_error() {
+        let span = GraphQLSpan::new("badQuery", "query", "{ error }");
+        span.error("Something went wrong");
+    }
+
+    #[test]
+    fn test_grpc_span_lifecycle() {
+        let mut span = GrpcSpan::new("UserService", "GetUser");
+        
+        span.set_attribute("peer.address", "127.0.0.1");
+        span.set_attribute("retry", 1);
+        
+        span.ok();
+    }
+
+    #[test]
+    fn test_grpc_span_error() {
+        let span = GrpcSpan::new("UserService", "GetUser");
+        span.error(13, "Internal Error"); // 13 = INTERNAL
+    }
+
+    #[test]
+    fn test_init_tracer() {
+        // Just verify it runs without crashing. 
+        // Real verification would require checking the global state which is hard in parallel tests.
+        let config = TracingConfig::disabled();
+        let _provider = init_tracer(&config);
+    }
 }

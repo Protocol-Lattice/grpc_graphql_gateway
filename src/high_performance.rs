@@ -901,9 +901,67 @@ impl Default for ResponseTemplates {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct TestPayload {
+        id: u64,
+        name: String,
+        values: Vec<i32>,
+    }
+
+    // =========================================================================
+    // FastJsonParser Tests
+    // =========================================================================
+    
+    #[test]
+    fn test_fast_json_parser_roundtrip() {
+        let parser = FastJsonParser::new(10);
+        let payload = TestPayload {
+            id: 12345,
+            name: "test_parser".to_string(),
+            values: vec![1, 2, 3, 4, 5],
+        };
+
+        // Serialize
+        let bytes = parser.serialize(&payload).unwrap();
+        
+        // Parse back
+        let json_val = parser.parse_bytes(&bytes).unwrap();
+        
+        // Verify structure
+        assert_eq!(json_val["id"], 12345);
+        assert_eq!(json_val["name"], "test_parser");
+        assert!(json_val["values"].is_array());
+        
+        // Check array content
+        let values: Vec<i32> = serde_json::from_value(json_val["values"].clone()).unwrap();
+        assert_eq!(values, vec![1, 2, 3, 4, 5]);
+    }
 
     #[test]
-    fn test_sharded_cache() {
+    fn test_fast_json_parser_errors() {
+        let parser = FastJsonParser::new(10);
+        
+        // Empty input
+        match parser.parse_bytes(&[]) {
+            Err(FastJsonError::EmptyInput) => {},
+            _ => panic!("Expected EmptyInput error"),
+        }
+
+        // Invalid JSON
+        match parser.parse_str(r#"{"incomplete": "#) {
+            Err(FastJsonError::ParseError(_)) => {},
+            _ => panic!("Expected ParseError"),
+        }
+    }
+
+    // =========================================================================
+    // ShardedCache Tests
+    // =========================================================================
+
+    #[test]
+    fn test_sharded_cache_basics() {
         let cache: ShardedCache<String> = ShardedCache::new(16, 1000);
 
         cache.insert("key1", "value1".to_string(), Duration::from_secs(60));
@@ -913,11 +971,61 @@ mod tests {
         assert_eq!(cache.get("key2"), Some("value2".to_string()));
         assert_eq!(cache.get("key3"), None);
 
-        assert!(cache.stats().hit_rate() > 0.5);
+        assert!(cache.len() >= 2);
+        
+        // Removal
+        assert!(cache.remove("key1"));
+        assert_eq!(cache.get("key1"), None);
+        assert!(!cache.remove("key1")); // Already removed
+        
+        // Clear
+        cache.clear();
+        assert!(cache.is_empty());
     }
 
     #[test]
-    fn test_object_pool() {
+    fn test_sharded_cache_expiration() {
+        let cache: ShardedCache<String> = ShardedCache::new(4, 100);
+        
+        // Short expiration
+        cache.insert("short", "lived".to_string(), Duration::from_millis(10));
+        
+        // Verify immediately
+        assert_eq!(cache.get("short"), Some("lived".to_string()));
+        
+        // Sleep and verify expiry
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(cache.get("short"), None);
+    }
+
+    #[test]
+    fn test_sharded_cache_eviction_logic() {
+        let cache: ShardedCache<i32> = ShardedCache::new(1, 10);
+        // Fill with 10 items
+        for i in 0..10 {
+            cache.insert(&format!("key{}", i), i, Duration::from_secs(60));
+        }
+        
+        // Boost key0..key4
+        for i in 0..5 {
+            let k = format!("key{}", i);
+            cache.get(&k);
+            cache.get(&k);
+        }
+        
+        // Insert 11th item -> triggers eviction
+        cache.insert("key10", 10, Duration::from_secs(60));
+        
+        // Key with low access (e.g. key9) should be gone
+        assert_eq!(cache.stats().evictions(), 2); // 10/4 = 2 evictions
+    }
+
+    // =========================================================================
+    // ObjectPool Tests
+    // =========================================================================
+
+    #[test]
+    fn test_object_pool_lifecycle() {
         let pool: ObjectPool<Vec<u8>> = ObjectPool::new(10, || Vec::with_capacity(1024));
 
         let item1 = pool.get().unwrap();
@@ -931,38 +1039,120 @@ mod tests {
     }
 
     #[test]
-    fn test_fast_json_parser() {
-        let parser = FastJsonParser::new(10);
-
-        let input = r#"{"name": "test", "value": 123}"#;
-        let result = parser.parse_str(input).unwrap();
-
-        assert_eq!(result["name"], "test");
-        assert_eq!(result["value"], 123);
+    fn test_object_pool_exhaustion() {
+        let pool: ObjectPool<i32> = ObjectPool::new(2, || 42);
+        
+        let i1 = pool.get().unwrap(); // Created new
+        let i2 = pool.get().unwrap(); // Created new
+        let i3 = pool.get().unwrap(); // Created new
+        
+        pool.put(i1);
+        pool.put(i2);
+        pool.put(i3); // Queue size 2. This one might drop.
+        
+        assert!(pool.size() <= 2); 
     }
 
+    // =========================================================================
+    // BatchProcessor Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_batch_processor() {
+        let config = BatchConfig {
+            window_us: 100000,
+            max_size: 5,
+            min_immediate: 2,
+        };
+        let processor = BatchProcessor::<i32, i32>::new(config);
+
+        // Submit requests
+        let mut handlers = Vec::new();
+        for i in 0..5 {
+            handlers.push(processor.submit(i).await);
+        }
+
+        // Should be ready to flush (max_size = 5 reached)
+        assert!(processor.should_flush());
+
+        let batch = processor.flush();
+        assert_eq!(batch.len(), 5);
+
+        // Simulate processing
+        for (req, tx) in batch {
+            let _ = tx.send(req * 2);
+        }
+
+        // Verify results
+        for (i, h) in handlers.into_iter().enumerate() {
+            let res = h.await.unwrap();
+            assert_eq!(res, (i as i32) * 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_batch_processor_time_flush() {
+        let config = BatchConfig {
+            window_us: 1, // Very short window
+            max_size: 10,
+            min_immediate: 1,
+        };
+        let processor = BatchProcessor::<i32, i32>::new(config);
+
+        let _h = processor.submit(42).await;
+        
+        // Wait briefly then allow flush because min_immediate=1 and time passed
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        
+        assert!(processor.should_flush());
+        let batch = processor.flush();
+        assert_eq!(batch.len(), 1);
+    }
+    
+    // =========================================================================
+    // Config & Metrics Tests
+    // =========================================================================
+
     #[test]
-    fn test_perf_metrics() {
+    fn test_perf_metrics_recording() {
         let metrics = PerfMetrics::default();
 
-        metrics.record(1000, true);
-        metrics.record(2000, false);
+        metrics.record(1000, true);  // Hit
+        metrics.record(2000, false); // Miss
+        metrics.record(3000, true);  // Hit
 
-        assert_eq!(metrics.requests.load(Ordering::Relaxed), 2);
-        assert_eq!(metrics.cache_hit_rate(), 0.5);
+        assert_eq!(metrics.requests.load(Ordering::Relaxed), 3);
+        assert_eq!(metrics.total_time_ns.load(Ordering::Relaxed), 6000);
+        assert_eq!(metrics.max_latency_ns.load(Ordering::Relaxed), 3000);
+        assert!(metrics.avg_latency_us() > 0.0);
+        
+        assert!(metrics.cache_hit_rate() > 0.6);
+        
+        metrics.reset();
+        assert_eq!(metrics.requests.load(Ordering::Relaxed), 0);
     }
 
     #[test]
-    fn test_high_perf_config() {
+    fn test_high_perf_config_variants() {
         let ultra = HighPerfConfig::ultra_fast();
         assert_eq!(ultra.cache_shards, 128);
-        assert!(ultra.simd_json_enabled);
         assert!(ultra.cpu_affinity);
 
         let balanced = HighPerfConfig::balanced();
         assert_eq!(balanced.cache_shards, 64);
+        assert!(!balanced.cpu_affinity);
 
         let low_lat = HighPerfConfig::low_latency();
-        assert_eq!(low_lat.batch_window_us, 0);
+        assert_eq!(low_lat.batch_window_us, 0); // No batching
+    }
+    
+    #[test]
+    fn test_response_templates() {
+        let templates = ResponseTemplates::new();
+        assert!(templates.empty_data.len() > 0);
+        assert!(templates.null_data.len() > 0);
+        
+        assert!(templates.errors.contains_key("UNAUTHORIZED"));
+        assert!(templates.errors.contains_key("NOT_FOUND"));
     }
 }

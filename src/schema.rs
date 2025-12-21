@@ -2198,3 +2198,93 @@ impl Encoder for ReflectEncoder {
             .map_err(|e| Status::internal(format!("encode error: {e}")))
     }
 }
+
+#[cfg(test)]
+mod builder_tests {
+    use super::*;
+
+    #[test]
+    fn test_schema_builder_default() {
+        let builder = SchemaBuilder::default();
+        assert_eq!(builder.descriptor_count(), 0);
+    }
+
+    #[test]
+    fn test_schema_builder_with_descriptor_bytes() {
+        let builder = SchemaBuilder::new()
+            .with_descriptor_set_bytes(vec![1, 2, 3]);
+        assert_eq!(builder.descriptor_count(), 1);
+    }
+
+    #[test]
+    fn test_schema_builder_add_descriptor_bytes() {
+        let builder = SchemaBuilder::new()
+            .with_descriptor_set_bytes(vec![1])
+            .add_descriptor_set_bytes(vec![2]);
+        assert_eq!(builder.descriptor_count(), 2);
+    }
+
+    #[test]
+    fn test_schema_builder_enable_federation() {
+        let builder = SchemaBuilder::new().enable_federation();
+        assert!(builder.federation);
+    }
+
+    #[test]
+    fn test_schema_builder_disable_introspection() {
+        let builder = SchemaBuilder::new().disable_introspection();
+        assert!(builder.introspection_disabled);
+    }
+
+    #[test]
+    fn test_schema_builder_depth_limit() {
+        let builder = SchemaBuilder::new().with_query_depth_limit(5);
+        assert_eq!(builder.query_depth_limit, Some(5));
+    }
+
+    #[test]
+    fn test_schema_builder_complexity_limit() {
+        let builder = SchemaBuilder::new().with_query_complexity_limit(100);
+        assert_eq!(builder.query_complexity_limit, Some(100));
+    }
+
+    #[test]
+    fn test_schema_builder_service_allowlist() {
+        let builder = SchemaBuilder::new()
+            .with_services(vec!["ServiceA".to_string(), "ServiceB".to_string()]);
+        
+        let allowlist = builder.service_allowlist.unwrap();
+        assert!(allowlist.contains("ServiceA"));
+        assert!(allowlist.contains("ServiceB"));
+        assert_eq!(allowlist.len(), 2);
+    }
+
+    #[test]
+    fn test_schema_builder_build_empty_fails() {
+        let pool = GrpcClientPool::new();
+        let builder = SchemaBuilder::new();
+        let result = builder.build(&pool);
+        assert!(result.is_err());
+        if let Err(e) = result {
+             assert!(e.to_string().contains("at least one descriptor set"));
+        }
+    }
+
+    #[test]
+    fn test_schema_builder_with_entity_resolver() {
+        // Just verify it compiles and sets the field, tricky to inspect dyn trait
+        let resolver = GrpcEntityResolver::new(GrpcClientPool::new());
+        let builder = SchemaBuilder::new().with_entity_resolver(Arc::new(resolver));
+        assert!(builder.entity_resolver.is_some());
+    }
+
+    #[test]
+    fn test_schema_builder_invalid_descriptor_bytes() {
+        let pool = GrpcClientPool::new();
+        let builder = SchemaBuilder::new()
+            .with_descriptor_set_bytes(vec![0xFF, 0xFF, 0xFF]); // Invalid protobuf
+        
+        let result = builder.build(&pool);
+        assert!(result.is_err());
+    }
+}

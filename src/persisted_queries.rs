@@ -515,4 +515,143 @@ mod tests {
         assert_eq!(store.len(), 0);
         assert!(store.is_empty());
     }
+
+    #[test]
+    fn test_concurrent_cache_operations() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let store = Arc::new(PersistedQueryStore::new(PersistedQueryConfig {
+            cache_size: 100,
+            ttl: None,
+        }));
+
+        let mut handles = vec![];
+
+        // Spawn multiple threads storing queries
+        for i in 0..10 {
+            let store_clone = store.clone();
+            let handle = thread::spawn(move || {
+                let query = format!("{{ query{} }}", i);
+                let hash = PersistedQueryStore::hash_query(&query);
+                store_clone.put(&hash, &query).unwrap();
+                store_clone.get(&hash)
+            });
+            handles.push(handle);
+        }
+
+        // All operations should succeed
+        for handle in handles {
+            let result = handle.join().unwrap();
+            assert!(result.is_some());
+        }
+
+        assert!(store.len() <= 100);
+    }
+
+    #[test]
+    fn test_clone_independence() {
+        let store1 = PersistedQueryStore::new(PersistedQueryConfig::default());
+        let q = "{ clone }";
+        let h = PersistedQueryStore::hash_query(q);
+        
+        store1.put(&h, q).unwrap();
+        
+        let store2 = store1.clone();
+        
+        // verify clone has data
+        assert!(store2.contains(&h));
+        
+        // modify store1
+        let q2 = "{ extra }";
+        let h2 = PersistedQueryStore::hash_query(q2);
+        store1.put(&h2, q2).unwrap();
+        
+        // store2 should NOT have it (independent)
+        assert!(!store2.contains(&h2));
+        assert!(store1.contains(&h2));
+    }
+
+    #[test]
+    fn test_persisted_query_error_extensions() {
+         let err = PersistedQueryError::NotFound;
+         let ext = err.to_extensions();
+         assert_eq!(ext.get("code").unwrap(), "PERSISTED_QUERY_NOT_FOUND");
+         
+         let err = PersistedQueryError::UnsupportedVersion(99);
+         let ext = err.to_extensions();
+         assert_eq!(ext.get("code").unwrap(), "PERSISTED_QUERY_NOT_SUPPORTED");
+    }
+
+    #[test]
+    fn test_debug_impls() {
+        let config = PersistedQueryConfig::default();
+        let store = PersistedQueryStore::new(config.clone());
+        
+        let debug_str = format!("{:?}", store);
+        assert!(debug_str.contains("PersistedQueryStore"));
+        assert!(debug_str.contains("cached_queries"));
+        
+        let debug_cfg = format!("{:?}", config);
+        assert!(debug_cfg.contains("PersistedQueryConfig"));
+    }
+    
+    #[test]
+    fn test_persisted_query_config_creation() {
+        let config = PersistedQueryConfig {
+            cache_size: 50,
+            ttl: Some(Duration::from_secs(60)),
+        };
+        assert_eq!(config.cache_size, 50);
+        assert_eq!(config.ttl, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn test_json_serialization() {
+       let ext = PersistedQueryExtension {
+           version: 1,
+           sha256_hash: "abc".to_string(),
+       };
+       let json = serde_json::to_string(&ext).unwrap();
+       assert!(json.contains("sha256Hash"));
+       assert!(json.contains("version"));
+    }
+    
+    #[test]
+    fn test_store_is_empty() {
+        let store = PersistedQueryStore::new(PersistedQueryConfig::default());
+        assert!(store.is_empty());
+        
+        let query = "{ a }";
+        let hash = PersistedQueryStore::hash_query(query);
+        store.put(&hash, query).unwrap();
+        assert!(!store.is_empty());
+    }
+    
+    #[test]
+    fn test_eviction_updates_lru_order() {
+         let config = PersistedQueryConfig { cache_size: 2, ttl: None };
+         let store = PersistedQueryStore::new(config);
+         
+         let q1 = "query { a }";
+         let q2 = "query { b }";
+         let q3 = "query { c }";
+         
+         let h1 = PersistedQueryStore::hash_query(q1);
+         let h2 = PersistedQueryStore::hash_query(q2);
+         let h3 = PersistedQueryStore::hash_query(q3);
+         
+         store.put(&h1, q1).unwrap();
+         store.put(&h2, q2).unwrap();
+         
+         // re-insert h1 -> moves to back
+         store.put(&h1, q1).unwrap();
+         
+         // insert h3 -> h2 should be evicted (since h1 was just refreshed)
+         store.put(&h3, q3).unwrap();
+         
+         assert!(store.contains(&h1));
+         assert!(store.contains(&h3));
+         assert!(!store.contains(&h2));
+    }
 }

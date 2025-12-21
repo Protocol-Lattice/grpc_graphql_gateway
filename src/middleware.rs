@@ -1093,4 +1093,218 @@ mod tests {
         chain.execute(&mut ctx).await.unwrap();
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
+
+    #[test]
+    fn test_auth_config_optional() {
+        let config = AuthConfig::optional();
+        assert!(!config.required);
+    }
+
+    #[test]
+    fn test_auth_config_required() {
+        let config = AuthConfig::required();
+        assert!(config.required);
+    }
+
+    #[test]
+    fn test_auth_config_with_scheme_no_duplicates() {
+        let config = AuthConfig::default()
+            .with_scheme(AuthScheme::Bearer)
+            .with_scheme(AuthScheme::Bearer);
+        
+        assert_eq!(config.allowed_schemes.len(), 1);
+    }
+
+    #[test]
+    fn test_auth_config_skip_introspection() {
+        let config = AuthConfig::default().with_skip_introspection(true);
+        assert!(config.skip_introspection);
+    }
+
+    #[test]
+    fn test_auth_claims_default() {
+        let claims = AuthClaims::default();
+        assert!(claims.sub.is_none());
+        assert!(claims.exp.is_none());
+        assert!(claims.roles.is_empty());
+    }
+
+    #[test]
+    fn test_logging_config_default() {
+        let config = LoggingConfig::default();
+        assert_eq!(config.level, LogLevel::Info);
+        assert!(config.log_headers);
+        assert!(!config.log_body);
+        assert!(config.log_timing);
+    }
+
+    #[test]
+    fn test_logging_config_minimal() {
+        let config = LoggingConfig::minimal();
+        assert!(!config.log_headers);
+        assert!(!config.log_body);
+        assert!(config.log_timing);
+    }
+
+    #[test]
+    fn test_logging_config_verbose() {
+        let config = LoggingConfig::verbose();
+        assert_eq!(config.level, LogLevel::Debug);
+        assert!(config.log_headers);
+        assert!(config.log_body);
+    }
+
+    #[test]
+    fn test_logging_config_builder() {
+        let config = LoggingConfig::default()
+            .with_level(LogLevel::Warn)
+            .with_headers(false)
+            .with_slow_threshold(std::time::Duration::from_secs(5));
+        
+        assert_eq!(config.level, LogLevel::Warn);
+        assert!(!config.log_headers);
+        assert_eq!(config.slow_request_threshold, std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_log_level_default() {
+        assert_eq!(LogLevel::default(), LogLevel::Info);
+    }
+
+    #[test]
+    fn test_log_level_equality() {
+        assert_eq!(LogLevel::Info, LogLevel::Info);
+        assert_ne!(LogLevel::Info, LogLevel::Debug);
+    }
+
+    #[tokio::test]
+    async fn test_logging_middleware_new() {
+        let middleware = LoggingMiddleware::new();
+        assert_eq!(middleware.name(), "LoggingMiddleware");
+    }
+
+    #[tokio::test]
+    async fn test_logging_middleware_default() {
+        let middleware = LoggingMiddleware::default();
+        assert_eq!(middleware.name(), "LoggingMiddleware");
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_logging_middleware_new() {
+        let middleware = EnhancedLoggingMiddleware::new(LoggingConfig::default());
+        assert_eq!(middleware.name(), "EnhancedLoggingMiddleware");
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_logging_middleware_default() {
+        let middleware = EnhancedLoggingMiddleware::default();
+        assert_eq!(middleware.name(), "EnhancedLoggingMiddleware");
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_allow_all() {
+        use axum::http::Request;
+        
+        let middleware = AuthMiddleware::allow_all();
+        let req = Request::builder()
+            .header("authorization", "Bearer any-token")
+            .uri("/graphql")
+            .body(())
+            .unwrap();
+        let mut ctx = Context::from_request(&req);
+        
+        assert!(middleware.call(&mut ctx).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_require_token() {
+        use axum::http::Request;
+        
+        let middleware = AuthMiddleware::require_token("secret123".to_string());
+        
+        // Valid token
+        let req = Request::builder()
+            .header("authorization", "Bearer secret123")
+            .uri("/graphql")
+            .body(())
+            .unwrap();
+        let mut ctx = Context::from_request(&req);
+        assert!(middleware.call(&mut ctx).await.is_ok());
+        
+        // Invalid token
+        let req = Request::builder()
+            .header("authorization", "Bearer wrong")
+            .uri("/graphql")
+            .body(())
+            .unwrap();
+        let mut ctx = Context::from_request(&req);
+        assert!(middleware.call(&mut ctx).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_missing_header() {
+        use axum::http::Request;
+        
+        let middleware = AuthMiddleware::allow_all();
+        let req = Request::builder()
+            .uri("/graphql")
+            .body(())
+            .unwrap();
+        let mut ctx = Context::from_request(&req);
+        
+        assert!(middleware.call(&mut ctx).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_middleware() {
+        use axum::http::Request;
+        
+        let middleware = RateLimitMiddleware::new(10, 10);
+        let req = Request::builder().uri("/graphql").body(()).unwrap();
+        let mut ctx = Context::from_request(&req);
+        
+        // First request should succeed
+        assert!(middleware.call(&mut ctx).await.is_ok());
+        assert_eq!(middleware.name(), "RateLimitMiddleware");
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_per_minute() {
+        let middleware = RateLimitMiddleware::per_minute(60, 10);
+        assert_eq!(middleware.name(), "RateLimitMiddleware");
+    }
+
+    #[test]
+    fn test_middleware_chain_new() {
+        let chain = MiddlewareChain::new();
+        assert_eq!(chain.len(), 0);
+        assert!(chain.is_empty());
+    }
+
+    #[test]
+    fn test_middleware_chain_default() {
+        let chain = MiddlewareChain::default();
+        assert_eq!(chain.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_middleware_chain_add() {
+        let chain = MiddlewareChain::new()
+            .add(LoggingMiddleware::new())
+            .add(LoggingMiddleware::new());
+        
+        assert_eq!(chain.len(), 2);
+        assert!(!chain.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_middleware_chain_add_arc() {
+        use std::sync::Arc;
+        
+        let chain = MiddlewareChain::new()
+            .add_arc(Arc::new(LoggingMiddleware::new()));
+        
+        assert_eq!(chain.len(), 1);
+    }
+
 }

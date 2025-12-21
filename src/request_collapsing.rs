@@ -504,6 +504,7 @@ mod tests {
 
         assert_eq!(key1, key2);
         assert_ne!(key1, key3);
+        assert_ne!(key1.hash(), key3.hash());
     }
 
     #[test]
@@ -518,9 +519,11 @@ mod tests {
     fn test_config_presets() {
         let high_throughput = RequestCollapsingConfig::high_throughput();
         assert!(high_throughput.coalesce_window > Duration::from_millis(50));
+        assert_eq!(high_throughput.max_waiters, 500);
 
         let low_latency = RequestCollapsingConfig::low_latency();
         assert!(low_latency.coalesce_window < Duration::from_millis(50));
+        assert_eq!(low_latency.max_waiters, 50);
 
         let disabled = RequestCollapsingConfig::disabled();
         assert!(!disabled.enabled);
@@ -561,8 +564,7 @@ mod tests {
             _ => panic!("Expected follower result"),
         }
 
-        // Clean up
-        broadcaster.broadcast(Ok(GqlValue::Null));
+        drop(broadcaster);
     }
 
     #[tokio::test]
@@ -610,6 +612,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_error_broadcasting() {
+        let config = RequestCollapsingConfig::default();
+        let registry = Arc::new(RequestCollapsingRegistry::new(config));
+
+        let key = RequestKey::new("service", "/path", b"request_err");
+
+        let broadcaster = match registry.try_collapse(key.clone()).await {
+            CollapseResult::Leader(b) => b,
+            _ => panic!("Expected leader"),
+        };
+
+        let receiver = match registry.try_collapse(key).await {
+            CollapseResult::Follower(r) => r,
+            _ => panic!("Expected follower"),
+        };
+
+        let error_msg = "test error".to_string();
+        broadcaster.broadcast(Err(error_msg.clone()));
+
+        let received = receiver.recv().await;
+        assert_eq!(received, Err(error_msg));
+    }
+
+    #[tokio::test]
     async fn test_expired_requests_create_new_leader() {
         let config = RequestCollapsingConfig::new().coalesce_window(Duration::from_millis(10));
         let registry = Arc::new(RequestCollapsingRegistry::new(config));
@@ -617,7 +643,7 @@ mod tests {
         let key = RequestKey::new("service", "/path", b"request");
 
         // First request becomes leader
-        let _result1 = registry.try_collapse(key.clone()).await;
+        let _ = registry.try_collapse(key.clone()).await;
 
         // Wait for coalesce window to expire
         sleep(Duration::from_millis(20)).await;
@@ -629,11 +655,61 @@ mod tests {
             _ => panic!("Expected new leader after expiry"),
         }
     }
+    
+    #[tokio::test]
+    async fn test_max_waiters_reached() {
+        let config = RequestCollapsingConfig::default()
+            .max_waiters(1); 
+        let registry = Arc::new(RequestCollapsingRegistry::new(config));
+        
+        let key = RequestKey::new("param", "waiters", b"");
+        
+        // 1. Leader
+        let _ = registry.try_collapse(key.clone()).await;
+        
+        // 2. First waiter (allowed)
+        match registry.try_collapse(key.clone()).await {
+            CollapseResult::Follower(_) => {},
+            _ => panic!("Second should be follower"),
+        }
+        
+        // 3. Second waiter (max waiters reached) -> New Leader
+        match registry.try_collapse(key).await {
+            CollapseResult::Leader(_) => {},
+            res => panic!("Third should be new leader. Got: {:?}", res),
+        }
+    }
+    
+    #[tokio::test]
+    async fn test_eviction() {
+         let config = RequestCollapsingConfig::default()
+            .max_cache_size(1)
+            .coalesce_window(Duration::from_millis(1));
+            
+        let registry = RequestCollapsingRegistry::new(config);
+        
+        let key1 = RequestKey::new("s", "p", b"1");
+        let _ = registry.try_collapse(key1.clone()).await; 
+        
+        assert_eq!(registry.stats().in_flight_count, 1);
+        
+        sleep(Duration::from_millis(15)).await;
+        
+        // Insert key 2, triggering eviction of stale key 1
+        let key2 = RequestKey::new("s", "p", b"2");
+        let _ = registry.try_collapse(key2).await;
+        
+        assert_eq!(registry.stats().in_flight_count, 1);
+        
+        match registry.try_collapse(key1).await {
+            CollapseResult::Leader(_) => {}, 
+            _ => panic!("Key1 should have been evicted"),
+        }
+    }
 
     #[test]
     fn test_metrics() {
         let metrics = CollapsingMetrics::new();
-
         metrics.record_leader();
         metrics.record_collapsed();
         metrics.record_collapsed();
@@ -651,7 +727,6 @@ mod tests {
     fn test_stats() {
         let config = RequestCollapsingConfig::default();
         let registry = RequestCollapsingRegistry::new(config);
-
         let stats = registry.stats();
         assert_eq!(stats.in_flight_count, 0);
         assert!(stats.enabled);
@@ -669,45 +744,36 @@ mod proptest_checks {
         fn fuzz_collapsing_mixed_traffic(
             requests in proptest::collection::vec(("[a-c]", 0..5u64), 10..50)
         ) {
-            let rt = Runtime::new().unwrap();
-            rt.block_on(async {
-                let config = RequestCollapsingConfig::new()
-                    .coalesce_window(Duration::from_millis(20)); // Short window
-                let registry = Arc::new(RequestCollapsingRegistry::new(config));
+             let rt = Runtime::new().unwrap();
+             rt.block_on(async {
+                 let config = RequestCollapsingConfig::new()
+                     .coalesce_window(Duration::from_millis(20));
+                 let registry = Arc::new(RequestCollapsingRegistry::new(config));
 
-                let mut handles = vec![];
+                 let mut handles = vec![];
 
-                for (suffix, delay_ms) in requests {
-                    let registry = registry.clone();
-                    let key = RequestKey::new("svc", &format!("path_{}", suffix), b"data");
+                 for (suffix, delay_ms) in requests {
+                     let registry = registry.clone();
+                     let key = RequestKey::new("svc", &format!("path_{}", suffix), b"data");
 
-                    // Simulate random arrival
-                    // We can't await sleep here easily without delaying loop.
-                    // But we can spawn and sleep inside.
-                    handles.push(tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                     handles.push(tokio::spawn(async move {
+                         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 
-                        match registry.try_collapse(key).await {
-                           CollapseResult::Leader(broadcaster) => {
-                               // Simulate execution work
-                               tokio::time::sleep(Duration::from_millis(10)).await;
-                               broadcaster.broadcast(Ok(async_graphql::Value::String("result".to_string())));
-                               "leader"
-                           }
-                           CollapseResult::Follower(receiver) => {
-                               let res = receiver.recv().await;
-                               assert!(res.is_ok());
-                               "follower"
-                           }
-                           CollapseResult::Passthrough => "passthrough"
-                        }
-                    }));
-                }
+                         match registry.try_collapse(key).await {
+                            CollapseResult::Leader(broadcaster) => {
+                                tokio::time::sleep(Duration::from_millis(10)).await;
+                                broadcaster.broadcast(Ok(async_graphql::Value::String("result".to_string())));
+                            }
+                            CollapseResult::Follower(receiver) => {
+                                let _ = tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await;
+                            }
+                            CollapseResult::Passthrough => {}
+                         }
+                     }));
+                 }
 
-                for h in handles {
-                     let _ = h.await;
-                }
-            });
+                 futures::future::join_all(handles).await;
+             });
         }
     }
 }

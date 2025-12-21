@@ -311,4 +311,81 @@ mod tests {
 
         assert!(!client.is_insecure());
     }
+
+    #[tokio::test]
+    async fn connect_lazy_creates_client() {
+        let client = GrpcClient::connect_lazy("http://localhost:50051", true)
+            .expect("connect_lazy should work");
+        
+        assert_eq!(client.endpoint(), "http://localhost:50051");
+        assert!(client.is_insecure());
+    }
+
+    #[tokio::test]
+    async fn test_grpc_client_pool_new() {
+        let pool = super::GrpcClientPool::new();
+        assert_eq!(pool.names().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_grpc_client_pool_add_get() {
+        let pool = super::GrpcClientPool::new();
+        let client = GrpcClient::connect_lazy("http://localhost:50051", true).unwrap();
+        
+        pool.add("service1", client.clone());
+        
+        let retrieved = pool.get("service1");
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().endpoint(), client.endpoint());
+    }
+
+    #[tokio::test]
+    async fn test_grpc_client_pool_names() {
+        let pool = super::GrpcClientPool::new();
+        let client1 = GrpcClient::connect_lazy("http://localhost:50051", true).unwrap();
+        let client2 = GrpcClient::connect_lazy("http://localhost:50052", true).unwrap();
+        
+        pool.add("service1", client1);
+        pool.add("service2", client2);
+        
+        let names = pool.names();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"service1".to_string()));
+        assert!(names.contains(&"service2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_grpc_client_pool_clear() {
+        let pool = super::GrpcClientPool::new();
+        let client = GrpcClient::connect_lazy("http://localhost:50051", true).unwrap();
+        
+        pool.add("service1", client);
+        assert_eq!(pool.names().len(), 1);
+        
+        pool.clear();
+        assert_eq!(pool.names().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_grpc_client_pool_clone() {
+        let pool1 = super::GrpcClientPool::new();
+        let client = GrpcClient::connect_lazy("http://localhost:50051", true).unwrap();
+        
+        pool1.add("service1", client);
+        
+        let pool2 = pool1.clone();
+        assert!(pool2.get("service1").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_grpc_client_pool_debug() {
+        let pool = super::GrpcClientPool::new();
+        let client = GrpcClient::connect_lazy("http://localhost:50051", true).unwrap();
+        
+        pool.add("service1", client);
+        
+        let debug_str = format!("{:?}", pool);
+        assert!(debug_str.contains("GrpcClientPool"));
+        assert!(debug_str.contains("service1"));
+    }
 }

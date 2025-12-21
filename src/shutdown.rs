@@ -321,6 +321,33 @@ pub async fn run_with_graceful_shutdown(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
+
+    #[tokio::test]
+    async fn test_shutdown_resilience() {
+         let config = ShutdownConfig {
+            timeout: Duration::from_millis(50),
+            handle_signals: false,
+            force_shutdown_delay: Duration::from_millis(10),
+        };
+        let coordinator = ShutdownCoordinator::new(config);
+
+        // Start a 'stuck' request
+        coordinator.request_started();
+        
+        let start = Instant::now();
+        coordinator.shutdown().await;
+        let duration = start.elapsed();
+        
+        // Should have waited at least timeout
+        assert!(duration >= Duration::from_millis(50));
+        // But shouldn't be stuck forever
+        assert!(duration < Duration::from_secs(1));
+        
+        // Should still show active count (it was forced)
+        assert_eq!(coordinator.active_count(), 1);
+        assert_eq!(*coordinator.watch_state().borrow(), ShutdownState::Shutdown);
+    }
 
     #[tokio::test]
     async fn test_shutdown_coordinator_creation() {
@@ -358,6 +385,25 @@ mod tests {
 
         // Guard dropped, count should be back to 0
         assert_eq!(coordinator.active_count(), 0);
+    }
+    
+    #[tokio::test]
+    async fn test_shutdown_idempotency() {
+        let coordinator = ShutdownCoordinator::with_defaults();
+        
+        let c1 = coordinator.clone();
+        let task1 = tokio::spawn(async move {
+            c1.shutdown().await;
+        });
+        
+        let c2 = coordinator.clone();
+        let task2 = tokio::spawn(async move {
+            c2.shutdown().await;
+        });
+        
+        let _ = tokio::join!(task1, task2);
+        
+        assert!(coordinator.is_shutting_down());
     }
 
     #[tokio::test]
@@ -400,6 +446,20 @@ mod tests {
         coordinator.shutdown().await;
         assert_eq!(coordinator.active_count(), 0);
     }
+    
+    #[tokio::test]
+    async fn test_shutdown_signal_propagation() {
+        let coordinator = ShutdownCoordinator::with_defaults();
+        let mut rx = coordinator.subscribe();
+        
+        let handle = tokio::spawn(async move {
+            rx.recv().await
+        });
+        
+        coordinator.shutdown().await;
+        
+        assert!(handle.await.is_ok());
+    }
 
     #[tokio::test]
     async fn test_shutdown_state_transitions() {
@@ -410,12 +470,24 @@ mod tests {
         };
         let coordinator = ShutdownCoordinator::new(config);
 
-        let state_rx = coordinator.watch_state();
+        let mut state_rx = coordinator.watch_state();
         assert_eq!(*state_rx.borrow(), ShutdownState::Running);
 
-        coordinator.shutdown().await;
-
-        // After shutdown, state should be Shutdown
+        // Trigger shutdown in bg
+        let c_clone = coordinator.clone();
+        tokio::spawn(async move {
+            c_clone.shutdown().await;
+        });
+        
+        // It should eventually reach Shutdown
+        // It might pass through Draining
+        while state_rx.changed().await.is_ok() {
+            let state = *state_rx.borrow();
+             if state == ShutdownState::Shutdown {
+                 break;
+             }
+        }
+        
         assert_eq!(*state_rx.borrow(), ShutdownState::Shutdown);
     }
 }

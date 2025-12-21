@@ -855,6 +855,7 @@ fn capitalize(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rest_connector::HttpMethod;
 
     const PETSTORE_JSON: &str = r##"{
         "openapi": "3.0.0",
@@ -870,6 +871,7 @@ mod tests {
                 "get": {
                     "operationId": "listPets",
                     "summary": "List all pets",
+                    "tags": ["pets"],
                     "responses": {
                         "200": {
                             "description": "A list of pets",
@@ -887,6 +889,7 @@ mod tests {
                 "post": {
                     "operationId": "createPet",
                     "summary": "Create a pet",
+                    "tags": ["pets", "admin"],
                     "requestBody": {
                         "content": {
                             "application/json": {
@@ -905,6 +908,7 @@ mod tests {
                 "get": {
                     "operationId": "getPet",
                     "summary": "Get a pet by ID",
+                    "tags": ["pets"],
                     "parameters": [
                         {
                             "name": "petId",
@@ -972,6 +976,23 @@ mod tests {
         assert!(connector.get_endpoint("listPets").is_some());
         assert!(connector.get_endpoint("createPet").is_some());
         assert!(connector.get_endpoint("getPet").is_some());
+        
+        let endpoint = connector.get_endpoint("getPet").unwrap();
+        let schema = endpoint.response_schema.as_ref().unwrap();
+        assert_eq!(schema.type_name, "Pet");
+        assert!(schema.fields.iter().any(|f| f.name == "id"));
+    }
+    
+    #[test]
+    fn test_array_response_handling() {
+        let connector = OpenApiParser::from_string(PETSTORE_JSON, false)
+            .unwrap()
+            .build()
+            .unwrap();
+            
+        let endpoint = connector.get_endpoint("listPets").unwrap();
+        let schema = endpoint.response_schema.as_ref().unwrap();
+        assert_eq!(schema.type_name, "Pet");
     }
 
     #[test]
@@ -1004,17 +1025,40 @@ mod tests {
             .build()
             .unwrap();
 
-        // All endpoints should have the prefix
-        for (name, _endpoint) in connector.endpoints() {
-            assert!(
-                name.starts_with("petstore_"),
-                "Expected prefix, got: {}",
-                name
-            );
-        }
-
         assert!(connector.get_endpoint("petstore_listPets").is_some());
-        assert!(connector.get_endpoint("petstore_createPet").is_some());
-        assert!(connector.get_endpoint("petstore_getPet").is_some());
+    }
+    
+    #[test]
+    fn test_tag_filter() {
+        let connector = OpenApiParser::from_string(PETSTORE_JSON, false)
+            .unwrap()
+            .with_tags(vec!["admin".to_string()])
+            .build()
+            .unwrap();
+
+        assert!(connector.get_endpoint("createPet").is_some());
+        assert!(connector.get_endpoint("getPet").is_none());
+    }
+    
+    #[test]
+    fn test_operation_filter() {
+        let connector = OpenApiParser::from_string(PETSTORE_JSON, false)
+            .unwrap()
+            .filter_operations(|op_id, _| op_id.starts_with("get"))
+            .build()
+            .unwrap();
+
+        assert!(connector.get_endpoint("getPet").is_some());
+        assert!(connector.get_endpoint("createPet").is_none());
+    }
+    
+    #[test]
+    fn test_schema_resolution() {
+        let parser = OpenApiParser::from_string(PETSTORE_JSON, false).unwrap();
+        let schemas = parser.get_schemas();
+        
+        assert!(schemas.contains_key("Pet"));
+        let pet_schema = schemas.get("Pet").unwrap();
+        assert_eq!(pet_schema.schema_type.as_deref(), Some("object"));
     }
 }

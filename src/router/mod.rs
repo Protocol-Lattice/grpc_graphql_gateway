@@ -615,4 +615,143 @@ mod tests {
             "IP2 should not be affected by IP1's usage"
         );
     }
+
+    #[test]
+    fn test_ddos_config_relaxed() {
+        let config = DdosConfig::relaxed();
+        assert_eq!(config.global_rps, 100_000);
+        assert_eq!(config.per_ip_rps, 1_000);
+        assert_eq!(config.per_ip_burst, 2_000);
+    }
+
+    #[tokio::test]
+    async fn test_ddos_cleanup_stale_limiters() {
+        let config = DdosConfig::default();
+        let ddos = DdosProtection::new(config);
+        
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        ddos.check(ip).await;
+        
+        // Just verify it runs without panic and logs
+        ddos.cleanup_stale_limiters().await;
+    }
+
+    #[test]
+    fn test_router_gbp_enabled() {
+        let config = RouterConfig {
+            port: 4000,
+            subgraphs: vec![SubgraphConfig {
+                name: "test".into(),
+                url: "http://localhost:8080".into(),
+            }],
+            force_gbp: true,
+        };
+        let router = GbpRouter::new(config);
+        
+        assert!(router.is_gbp_enabled());
+        assert_eq!(router.subgraph_count(), 1);
+        
+        let stats = router.stats();
+        assert!(stats.gbp_enabled);
+        assert_eq!(stats.subgraph_count, 1);
+    }
+
+    #[test]
+    fn test_router_stats_initial() {
+        let config = RouterConfig {
+            port: 4000,
+            subgraphs: vec![],
+            force_gbp: false,
+        };
+        let router = GbpRouter::new(config);
+        
+        let stats = router.stats();
+        assert_eq!(stats.total_requests, 0);
+        assert_eq!(stats.cache_hits, 0);
+        assert_eq!(stats.cache_hit_rate, 0.0);
+    }
+
+    #[test]
+    fn test_router_clear_cache() {
+        let config = RouterConfig {
+            port: 4000,
+            subgraphs: vec![],
+            force_gbp: false,
+        };
+        let router = GbpRouter::new(config);
+        
+        // Just verify it doesn't panic
+        router.clear_cache();
+    }
+
+    #[tokio::test]
+    async fn test_execute_scatter_gather_network_failure() {
+        // Test with invalid URL to force connection error
+        let config = RouterConfig {
+            port: 4000,
+            subgraphs: vec![SubgraphConfig {
+                name: "failing".into(),
+                url: "http://localhost:9999/graphql".into(), // Likely closed port
+            }],
+            force_gbp: false,
+        };
+        let router = GbpRouter::new(config);
+        
+        // Should return empty success response (partial results = empty)
+        // or errors if the logic changes. Current impl returns Ok with results map.
+        let result = router.execute_scatter_gather("{ hello }").await;
+        
+        assert!(result.is_ok());
+        let val = result.unwrap();
+        assert!(val.is_object());
+        let obj = val.as_object().unwrap();
+        assert!(obj.is_empty()); // No results, but no panic
+        
+        // Stats update
+        let stats = router.stats();
+        assert_eq!(stats.total_requests, 1);
+        assert_eq!(stats.cache_hits, 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_fail_fast_network_failure() {
+        let config = RouterConfig {
+            port: 4000,
+            subgraphs: vec![SubgraphConfig {
+                name: "failing".into(),
+                url: "http://localhost:9999/graphql".into(),
+            }],
+            force_gbp: false,
+        };
+        let router = GbpRouter::new(config);
+        
+        // execute_fail_fast should return Err on first failure
+        let result = router.execute_fail_fast("{ hello }").await;
+        
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_router_caching_behavior() {
+        // We can't easily test cache hit without a working backend to populate the cache initially.
+        // But we can test that a subsequent request hits the cache if we manually populate it...
+        // But the cache is private field `cache`.
+        // We can only populate via execute methods.
+        // If execute methods fail (network error), they don't cache (Line 397: if errors.is_empty()).
+        // So we can't test cache HIT logic with failing backends.
+        // We verified cache MISS logic in test_execute_scatter_gather_network_failure.
+    }
+
+    #[test]
+    fn test_router_with_custom_ttl() {
+        let config = RouterConfig {
+            port: 4000,
+            subgraphs: vec![],
+            force_gbp: false,
+        };
+        let router = GbpRouter::with_cache_ttl(config, Duration::from_secs(123));
+        
+        // Cannot inspect ttl directly as it's private, but constructor should work
+        assert_eq!(router.subgraph_count(), 0);
+    }
 }

@@ -627,4 +627,170 @@ mod tests {
         assert_eq!(ext.get("service"), Some(&serde_json::json!("test")));
         assert_eq!(ext.get("retryAfter"), Some(&serde_json::json!(30)));
     }
+
+    #[test]
+    fn test_config_default() {
+        let config = CircuitBreakerConfig::default();
+        assert_eq!(config.failure_threshold, 5);
+        assert_eq!(config.recovery_timeout, Duration::from_secs(30));
+        assert_eq!(config.half_open_max_requests, 3);
+    }
+
+    #[test]
+    fn test_circuit_state_display() {
+        assert_eq!(CircuitState::Closed.to_string(), "Closed");
+        assert_eq!(CircuitState::Open.to_string(), "Open");
+        assert_eq!(CircuitState::HalfOpen.to_string(), "HalfOpen");
+    }
+
+    #[test]
+    fn test_circuit_state_equality() {
+        assert_eq!(CircuitState::Closed, CircuitState::Closed);
+        assert_ne!(CircuitState::Closed, CircuitState::Open);
+        assert_ne!(CircuitState::Open, CircuitState::HalfOpen);
+    }
+
+    #[test]
+    fn test_circuit_breaker_clone() {
+        let cb1 = CircuitBreaker::new("test", CircuitBreakerConfig::default());
+        cb1.record_failure();
+        
+        let cb2 = cb1.clone();
+        assert_eq!(cb2.failure_count(), cb1.failure_count());
+        assert_eq!(cb2.state(), cb1.state());
+        assert_eq!(cb2.service_name(), cb1.service_name());
+    }
+
+    #[test]
+    fn test_circuit_breaker_debug() {
+        let cb = CircuitBreaker::new("test-service", CircuitBreakerConfig::default());
+        let debug_str = format!("{:?}", cb);
+        
+        assert!(debug_str.contains("CircuitBreaker"));
+        assert!(debug_str.contains("test-service"));
+        assert!(debug_str.contains("Closed"));
+    }
+
+    #[test]
+    fn test_service_name() {
+        let cb = CircuitBreaker::new("my-service", CircuitBreakerConfig::default());
+        assert_eq!(cb.service_name(), "my-service");
+    }
+
+    #[test]
+    fn test_half_open_max_requests_limit() {
+        let config = CircuitBreakerConfig {
+            failure_threshold: 1,
+            recovery_timeout: Duration::from_millis(10),
+            half_open_max_requests: 2,
+        };
+        let cb = CircuitBreaker::new("test", config);
+
+        cb.record_failure(); // Opens
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(cb.state(), CircuitState::HalfOpen);
+
+        // First 2 requests should be allowed
+        assert!(cb.allow_request().is_ok());
+        assert!(cb.allow_request().is_ok());
+        
+        // Third request should be rejected
+        assert!(cb.allow_request().is_err());
+    }
+
+    #[test]
+    fn test_registry_clone() {
+        let registry1 = CircuitBreakerRegistry::new(CircuitBreakerConfig ::default());
+        registry1.get_or_create("service1");
+
+        let registry2 = registry1.clone();
+        assert!(registry2.get("service1").is_some());
+    }
+
+    #[test]
+    fn test_registry_debug() {
+        let registry = CircuitBreakerRegistry::new(CircuitBreakerConfig::default());
+        registry.get_or_create("service1");
+        
+        let debug_str = format!("{:?}", registry);
+        assert!(debug_str.contains("CircuitBreakerRegistry"));
+        assert!(debug_str.contains("service1"));
+    }
+
+    #[test]
+    fn test_registry_get_nonexistent() {
+        let registry = CircuitBreakerRegistry::new(CircuitBreakerConfig::default());
+        assert!(registry.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_registry_reset_all() {
+        let config = CircuitBreakerConfig {
+            failure_threshold: 1,
+            ..Default::default()
+        };
+        let registry = CircuitBreakerRegistry::new(config);
+
+        let cb1 = registry.get_or_create("service1");
+        let cb2 = registry.get_or_create("service2");
+
+        cb1.record_failure(); // Opens
+        cb2.record_failure(); // Opens
+
+        assert_eq!(cb1.state(), CircuitState::Open);
+        assert_eq!(cb2.state(), CircuitState::Open);
+
+        registry.reset_all();
+
+        assert_eq!(cb1.state(), CircuitState::Closed);
+        assert_eq!(cb2.state(), CircuitState::Closed);
+    }
+
+    #[test]
+    fn test_create_circuit_breaker_registry() {
+        let config = CircuitBreakerConfig::default();
+        let registry = create_circuit_breaker_registry(config);
+
+        assert_eq!(registry.all().len(), 0);
+    }
+
+    #[test]
+    fn test_error_without_retry_after() {
+        let err = CircuitBreakerError::CircuitOpen {
+            service: "test".to_string(),
+            retry_after: None,
+        };
+
+        let ext = err.to_extensions();
+        assert_eq!(
+            ext.get("code"),
+            Some(&serde_json::json!("SERVICE_UNAVAILABLE"))
+        );
+        assert!(ext.get("retryAfter").is_none());
+    }
+
+    #[test]
+    fn test_failure_count_tracking() {
+        let cb = CircuitBreaker::new("test", CircuitBreakerConfig::default());
+
+        assert_eq!(cb.failure_count(), 0);
+        cb.record_failure();
+        assert_eq!(cb.failure_count(), 1);
+        cb.record_failure();
+        assert_eq!(cb.failure_count(), 2);
+    }
+
+    #[test]
+    fn test_config_clone() {
+        let config1 = CircuitBreakerConfig {
+            failure_threshold: 10,
+            recovery_timeout: Duration::from_secs(60),
+            half_open_max_requests: 5,
+        };
+        let config2 = config1.clone();
+
+        assert_eq!(config1.failure_threshold, config2.failure_threshold);
+        assert_eq!(config1.recovery_timeout, config2.recovery_timeout);
+        assert_eq!(config1.half_open_max_requests, config2.half_open_max_requests);
+    }
 }

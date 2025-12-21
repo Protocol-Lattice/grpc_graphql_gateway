@@ -775,6 +775,25 @@ pub fn generate_subscription_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
+
+    fn default_query() -> ActiveLiveQuery {
+        ActiveLiveQuery {
+            id: "default".to_string(),
+            operation_name: "op".to_string(),
+            query: "query".to_string(),
+            variables: None,
+            triggers: vec![],
+            throttle_ms: 100,
+            ttl_seconds: 0,
+            strategy: LiveQueryStrategy::Invalidation,
+            poll_interval_ms: 0,
+            last_hash: None,
+            last_update: Instant::now(),
+            created_at: Instant::now(),
+            connection_id: "default_conn".to_string(),
+        }
+    }
 
     #[test]
     fn test_invalidation_event_matching() {
@@ -795,23 +814,100 @@ mod tests {
         assert!(has_live_directive("query @live { user { name } }"));
         assert!(has_live_directive("query GetUser @live { user(id: 1) { name } }"));
         assert!(has_live_directive("query @live\n{ user { name } }"));
+        assert!(has_live_directive("query @live(throttle: 100) { user }"));
         
         assert!(!has_live_directive("query { user { name } }"));
         assert!(!has_live_directive("# @live\nquery { user { name } }"));
     }
 
     #[test]
-    fn test_live_query_store() {
+    fn test_live_query_config_defaults() {
+        let config = LiveQueryConfig::default();
+        assert_eq!(config.default_throttle_ms, 100);
+        assert_eq!(config.max_per_connection, 10);
+        
+        let prod = LiveQueryConfig::production();
+        assert_eq!(prod.max_total, 5000);
+        
+        let dev = LiveQueryConfig::development();
+        assert_eq!(dev.max_total, 50000);
+        assert_eq!(dev.default_throttle_ms, 50);
+    }
+
+    #[test]
+    fn test_strategy_parsing() {
+        assert_eq!(LiveQueryStrategy::from_str("INVALIDATION"), Ok(LiveQueryStrategy::Invalidation));
+        assert_eq!(LiveQueryStrategy::from_str("POLLING"), Ok(LiveQueryStrategy::Polling));
+        assert_eq!(LiveQueryStrategy::from_str("HASH_DIFF"), Ok(LiveQueryStrategy::HashDiff));
+        assert_eq!(LiveQueryStrategy::from_str("HashDiff"), Ok(LiveQueryStrategy::HashDiff));
+        assert!(LiveQueryStrategy::from_str("Unknown").is_err());
+    }
+
+    #[test]
+    fn test_strip_live_directive() {
+        // Basic usage
+        assert_eq!(strip_live_directive("query @live { foo }"), "query  { foo }");
+        // With arguments
+        assert_eq!(strip_live_directive("query @live(throttle: 100) { foo }"), "query  { foo }");
+        // Nested parenthesis
+        assert_eq!(strip_live_directive("query @live(a: (b)) { foo }"), "query  { foo }");
+        // Whitespace handling
+        let stripped = strip_live_directive("query @live\n{ foo }");
+        assert!(!stripped.contains("@live"));
+    }
+
+    #[test]
+    fn test_active_live_query_methods() {
+        let mut query = ActiveLiveQuery {
+            id: "1".to_string(),
+            operation_name: "op".to_string(),
+            query: "query".to_string(),
+            variables: Some(serde_json::json!({"a": 1})),
+            triggers: vec!["Trigger.A".to_string()],
+            throttle_ms: 100,
+            ttl_seconds: 1, // 1 second TTL
+            strategy: LiveQueryStrategy::Invalidation,
+            poll_interval_ms: 0,
+            last_hash: None,
+            last_update: Instant::now() - Duration::from_millis(200),
+            created_at: Instant::now() - Duration::from_secs(2),
+            connection_id: "c1".to_string(),
+        };
+
+        // Cache key consistency
+        let key1 = query.cache_key();
+        let key2 = query.cache_key();
+        assert_eq!(key1, key2);
+        query.variables = None;
+        assert_ne!(key1, query.cache_key());
+
+        // Should update
+        assert!(query.should_update(&InvalidationEvent::new("Trigger", "A")));
+        assert!(!query.should_update(&InvalidationEvent::new("Trigger", "B")));
+
+        // Throttle (last_update was 200ms ago, throttle is 100ms)
+        assert!(query.throttle_elapsed());
+        query.last_update = Instant::now();
+        assert!(!query.throttle_elapsed());
+
+        // TTL (created 2s ago, TTL is 1s)
+        assert!(query.is_expired());
+        query.created_at = Instant::now();
+        assert!(!query.is_expired());
+    }
+
+    #[tokio::test]
+    async fn test_live_query_store_lifecycle() {
         let store = LiveQueryStore::new();
-        let (tx, _rx) = mpsc::channel(10);
+        let (tx, mut rx) = mpsc::channel(10);
 
         let query = ActiveLiveQuery {
             id: "sub-1".to_string(),
             operation_name: "user".to_string(),
             query: "query @live { user { name } }".to_string(),
             variables: None,
-            triggers: vec!["User.update".to_string(), "User.delete".to_string()],
-            throttle_ms: 100,
+            triggers: vec!["User.update".to_string()],
+            throttle_ms: 0, // Instant updates
             ttl_seconds: 0,
             strategy: LiveQueryStrategy::Invalidation,
             poll_interval_ms: 0,
@@ -822,16 +918,125 @@ mod tests {
         };
 
         // Register
-        store.register(query, tx).unwrap();
+        store.register(query.clone(), tx).unwrap();
         assert_eq!(store.stats().active_count, 1);
+        assert_eq!(store.get("sub-1").unwrap().connection_id, "conn-1");
+
+        // Send Update
+        store.send_update("sub-1", serde_json::json!({"data": "test"}), true).await.unwrap();
+        let update = rx.recv().await.unwrap();
+        assert_eq!(update.id, "sub-1");
+        assert!(update.is_initial);
 
         // Invalidate
         let event = InvalidationEvent::new("User", "update");
         let affected = store.invalidate(event);
         assert_eq!(affected, 1);
+        assert_eq!(store.stats().total_invalidations, 1);
 
         // Unregister
         let removed = store.unregister("sub-1");
         assert!(removed.is_some());
+        assert_eq!(store.stats().active_count, 0);
+
+        // Fail to send update to unregistered
+        assert!(store.send_update("sub-1", serde_json::json!({}), false).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_store_limits() {
+        let config = LiveQueryConfig {
+            max_per_connection: 2,
+            max_total: 3,
+            ..Default::default()
+        };
+        let store = LiveQueryStore::with_config(config);
+        let (tx, _rx) = mpsc::channel(1);
+
+        // Fill connection 1
+        for i in 0..2 {
+            let q = ActiveLiveQuery {
+                id: format!("q{}", i),
+                connection_id: "c1".to_string(),
+                ..default_query()
+            };
+            store.register(q, tx.clone()).unwrap();
+        }
+
+        // 3rd query for c1 should fail (per connection limit)
+        let q_fail = ActiveLiveQuery {
+            id: "q_fail".to_string(),
+            connection_id: "c1".to_string(),
+            ..default_query()
+        };
+        match store.register(q_fail, tx.clone()) {
+            Err(LiveQueryError::TooManyQueriesPerConnection { current, max }) => {
+                assert_eq!(current, 2);
+                assert_eq!(max, 2);
+            }
+            _ => panic!("Expected TooManyQueriesPerConnection"),
+        }
+
+        // Query for c2 should succeed (total 2 -> 3)
+        let q_c2 = ActiveLiveQuery {
+            id: "q_c2".to_string(),
+            connection_id: "c2".to_string(),
+            ..default_query()
+        };
+        store.register(q_c2, tx.clone()).unwrap();
+
+        // 4th query total should fail (global limit)
+        let q_global_fail = ActiveLiveQuery {
+            id: "q_global_fail".to_string(),
+            connection_id: "c3".to_string(),
+            ..default_query()
+        };
+        match store.register(q_global_fail, tx.clone()) {
+            Err(LiveQueryError::TooManyQueries { current, max }) => {
+                assert_eq!(current, 3);
+                assert_eq!(max, 3);
+            }
+            _ => panic!("Expected TooManyQueries error"),
+        }
+    }
+
+    #[test]
+    fn test_unregister_connection() {
+        let store = LiveQueryStore::new();
+        let (tx, _rx) = mpsc::channel(1);
+        
+        store.register(ActiveLiveQuery { id: "1".into(), connection_id: "c1".into(), ..default_query() }, tx.clone()).unwrap();
+        store.register(ActiveLiveQuery { id: "2".into(), connection_id: "c1".into(), ..default_query() }, tx.clone()).unwrap();
+        store.register(ActiveLiveQuery { id: "3".into(), connection_id: "c2".into(), ..default_query() }, tx.clone()).unwrap();
+
+        assert_eq!(store.get_for_connection("c1").len(), 2);
+
+        let removed = store.unregister_connection("c1");
+        assert_eq!(removed.len(), 2);
+        assert_eq!(store.stats().active_count, 1); // "3" remains
+        assert!(store.get("1").is_none());
+    }
+
+    #[test]
+    fn test_prune_expired() {
+        let store = LiveQueryStore::new();
+        let (tx, _rx) = mpsc::channel(1);
+        
+        let mut q_expired = default_query();
+        q_expired.id = "exp".to_string();
+        q_expired.ttl_seconds = 1;
+        q_expired.created_at = Instant::now() - Duration::from_secs(2);
+        
+        let mut q_active = default_query();
+        q_active.id = "act".to_string();
+        q_active.ttl_seconds = 100;
+
+        store.register(q_expired, tx.clone()).unwrap();
+        store.register(q_active, tx.clone()).unwrap();
+
+        let pruned = store.prune_expired();
+        assert_eq!(pruned.len(), 1);
+        assert_eq!(pruned[0], "exp");
+        assert_eq!(store.stats().active_count, 1);
     }
 }

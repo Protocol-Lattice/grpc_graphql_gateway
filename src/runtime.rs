@@ -1559,4 +1559,381 @@ mod tests {
             "websocket endpoint should be linked"
         );
     }
+
+    // Category 1: Configuration Tests (Quick Wins!)
+
+    #[tokio::test]
+    async fn test_servemux_new() {
+        let mux = build_router_mux();
+        // Basic creation should work
+        assert!(mux.circuit_breaker().is_none());
+        assert!(mux.response_cache().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_servemux_clone() {
+        let mux = build_router_mux();
+        let cloned = mux.clone();
+        // Should be able to clone
+        let _router1 = mux.into_router();
+        let _router2 = cloned.into_router();
+    }
+
+    #[tokio::test]
+    async fn test_enable_health_checks() {
+        let mut mux = build_router_mux();
+        mux.set_client_pool(crate::grpc_client::GrpcClientPool::new());
+        mux.enable_health_checks();
+        // Health checks enabled (verified by endpoint test below)
+    }
+
+    #[tokio::test]
+    async fn test_enable_metrics() {
+        let mut mux = build_router_mux();
+        mux.enable_metrics();
+        // Metrics enabled (verified by endpoint test below)
+    }
+
+    #[tokio::test]
+    async fn test_enable_circuit_breaker() {
+        let mut mux = build_router_mux();
+        let config = crate::circuit_breaker::CircuitBreakerConfig::default();
+        mux.enable_circuit_breaker(config);
+        assert!(mux.circuit_breaker().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_enable_response_cache() {
+        let mut mux = build_router_mux();
+        let config = crate::cache::CacheConfig::default();
+        mux.enable_response_cache(config);
+        assert!(mux.response_cache().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_enable_compression() {
+        let mut mux = build_router_mux();
+        let config = crate::compression::CompressionConfig::default();
+        mux.enable_compression(config);
+        assert!(mux.compression_config().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_enable_query_whitelist() {
+        let mut mux = build_router_mux();
+        let config = crate::query_whitelist::QueryWhitelistConfig::warn();
+        mux.enable_query_whitelist(config);
+        assert!(mux.query_whitelist().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_enable_analytics() {
+        let mut mux = build_router_mux();
+        let config = crate::analytics::AnalyticsConfig::default();
+        mux.enable_analytics(config);
+        assert!(mux.analytics().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_enable_request_collapsing() {
+        let mut mux = build_router_mux();
+        let config = crate::request_collapsing::RequestCollapsingConfig::default();
+        mux.enable_request_collapsing(config);
+        assert!(mux.request_collapsing().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_enable_high_performance() {
+        let mut mux = build_router_mux();
+        let config = crate::high_performance::HighPerfConfig::default();
+        mux.enable_high_performance(config);
+        // High perf enabled
+    }
+
+    #[tokio::test]
+    async fn test_perf_metrics() {
+        let mux = build_router_mux();
+        let _metrics = mux.perf_metrics();
+        // Metrics accessible
+    }
+
+    // Category 2: Health & Metrics Endpoints
+
+    #[tokio::test]
+    async fn test_health_endpoint() {
+        let mut mux = build_router_mux();
+        mux.set_client_pool(crate::grpc_client::GrpcClientPool::new());
+        mux.enable_health_checks();
+        let app = mux.into_router();
+
+        let response = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_readiness_endpoint() {
+        let mut mux = build_router_mux();
+        mux.set_client_pool(crate::grpc_client::GrpcClientPool::new());
+        mux.enable_health_checks();
+        let app = mux.into_router();
+
+        let response = app
+            .oneshot(Request::builder().uri("/ready").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        // Should return some status
+        assert!(response.status().is_success() || response.status().is_server_error());
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint() {
+        let mut mux = build_router_mux();
+        mux.enable_metrics();
+        let app = mux.into_router();
+
+        let response = app
+            .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_analytics_endpoint() {
+        let mut mux = build_router_mux();
+        mux.enable_analytics(crate::analytics::AnalyticsConfig::default());
+        let app = mux.into_router();
+
+        let response = app
+            .oneshot(Request::builder().uri("/analytics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // Category 3: GraphQL Request Handling
+
+    #[tokio::test]
+    async fn test_graphql_post_query() {
+        let mux = build_router_mux();
+        let app = mux.into_router();
+
+        let query = r#"{ __schema { queryType { name } } }"#;
+        let request_body = serde_json::json!({
+            "query": query
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/graphql")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_graphql_post_introspection() {
+        let mux = build_router_mux();
+        let app = mux.into_router();
+
+        let query = r#"{ __schema { types { name } } }"#;
+        let request_body = serde_json::json!({
+            "query": query
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/graphql")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_graphql_post_empty_body() {
+        let mux = build_router_mux();
+        let app = mux.into_router();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/graphql")
+                    .header("content-type", "application/json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should return error status
+        assert!(!response.status().is_success());
+    }
+
+    #[tokio::test]
+    async fn test_graphql_post_invalid_json() {
+        let mux = build_router_mux();
+        let app = mux.into_router();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/graphql")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{invalid json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should return error status
+        assert!(!response.status().is_success());
+    }
+
+    #[tokio::test]
+    async fn test_graphql_with_variables() {
+        let mux = build_router_mux();
+        let app = mux.into_router();
+
+        let query = r#"query Test($name: String!) { __type(name: $name) { name } }"#;
+        let request_body = serde_json::json!({
+            "query": query,
+            "variables": { "name": "String" }
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/graphql")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_graphql_with_operation_name() {
+        let mux = build_router_mux();
+        let app = mux.into_router();
+
+        let query = r#"
+            query First { __schema { queryType { name } } }
+            query Second { __schema { mutationType { name } } }
+        "#;
+        let request_body = serde_json::json!({
+            "query": query,
+            "operationName": "First"
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/graphql")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // Category 4: Builder Pattern
+
+    #[tokio::test]
+    async fn test_with_middleware_builder() {
+        let mux = build_router_mux();
+        // Should not panic
+        let _router = mux.into_router();
+    }
+
+    #[tokio::test]
+    async fn test_multiple_configurations() {
+        let mut mux = build_router_mux();
+        
+        // Enable multiple features
+        mux.enable_metrics();
+        mux.enable_playground();
+        mux.enable_analytics(crate::analytics::AnalyticsConfig::default());
+        mux.enable_compression(crate::compression::CompressionConfig::default());
+        
+        let app = mux.into_router();
+        
+        // Verify routes work
+        let response = app
+            .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_into_router_consumes_mux() {
+        let mux = build_router_mux();
+        let _router = mux.into_router();
+        // mux is consumed, can't use it again (compile-time check)
+    }
+
+    // Category 5: Security
+
+    #[tokio::test]
+    async fn test_security_headers_present() {
+        let mux = build_router_mux();
+        let app = mux.into_router();
+
+        let response = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        let headers = response.headers();
+        
+        // Check security headers are present
+        assert!(headers.get("x-content-type-options").is_some());
+        assert!(headers.get("x-frame-options").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_cors_headers_present() {
+        let mux = build_router_mux();
+        let app = mux.into_router();
+
+        let response = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        let headers = response.headers();
+        assert!(headers.get("access-control-allow-origin").is_some());
+    }
 }
