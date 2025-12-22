@@ -4,7 +4,11 @@
 //
 // This is a starter gateway. Update endpoint URLs and tweak as needed.
 
-use grpc_graphql_gateway::{Gateway, GatewayBuilder, GrpcClient, Result as GatewayResult};
+use grpc_graphql_gateway::{
+    Gateway, GatewayBuilder, GrpcClient, Result as GatewayResult,
+    PersistedQueryConfig, CacheConfig, RequestCollapsingConfig
+};
+use std::time::Duration;
 use async_graphql::{Name, Value as GqlValue};
 use std::sync::Arc;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -602,7 +606,14 @@ pub fn gateway_builder() -> GatewayResult<GatewayBuilder> {
 
 pub fn gateway_builder_for_service(svc: &ServiceConfig) -> GatewayResult<GatewayBuilder> {
     let mut builder = Gateway::builder()
-        .with_descriptor_set_bytes(DESCRIPTOR_SET);
+        .with_descriptor_set_bytes(DESCRIPTOR_SET)
+        .with_persisted_queries(PersistedQueryConfig::default())
+        .with_response_cache(CacheConfig {
+            max_size: 1000,
+            default_ttl: Duration::from_secs(60),
+            ..Default::default()
+        })
+        .with_request_collapsing(RequestCollapsingConfig::default());
 
     tracing::info!(
         "{svc} -> {endpoint} (queries: {queries}; mutations: {mutations}; subscriptions: {subscriptions}; resolvers: {resolvers})",

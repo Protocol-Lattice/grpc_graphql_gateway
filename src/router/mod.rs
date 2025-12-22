@@ -40,6 +40,13 @@
 //! ```
 
 use crate::high_performance::{FastJsonParser, ShardedCache};
+use crate::persisted_queries::{
+    create_apq_store, process_apq_request, PersistedQueryConfig, SharedPersistedQueryStore,
+};
+use crate::request_collapsing::{
+    create_request_collapsing_registry, CollapseResult, RequestCollapsingConfig, RequestKey,
+    SharedRequestCollapsingRegistry,
+};
 use crate::rest_connector::{HttpMethod, RestConnector, RestEndpoint};
 use crate::Result;
 use ahash::AHashMap;
@@ -223,6 +230,12 @@ pub struct RouterConfig {
     pub subgraphs: Vec<SubgraphConfig>,
     /// Whether to force GBP on all upstream connections
     pub force_gbp: bool,
+    /// APQ configuration
+    #[serde(skip)]
+    pub apq: Option<PersistedQueryConfig>,
+    /// Request collapsing configuration
+    #[serde(skip)]
+    pub request_collapsing: Option<RequestCollapsingConfig>,
 }
 
 /// Configuration for a single subgraph
@@ -260,6 +273,10 @@ pub struct GbpRouter {
     cache_hits: AtomicU64,
     /// Cache TTL
     cache_ttl: Duration,
+    /// APQ Store
+    apq_store: Option<SharedPersistedQueryStore>,
+    /// Request Collapsing Registry
+    collapsing_registry: Option<SharedRequestCollapsingRegistry>,
 }
 
 impl GbpRouter {
@@ -297,6 +314,9 @@ impl GbpRouter {
             );
         }
 
+        let apq_store = config.apq.clone().map(create_apq_store);
+        let collapsing_registry = config.request_collapsing.clone().map(create_request_collapsing_registry);
+
         Self {
             config,
             clients,
@@ -305,6 +325,8 @@ impl GbpRouter {
             request_count: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
             cache_ttl,
+            apq_store,
+            collapsing_registry,
         }
     }
 
@@ -312,11 +334,13 @@ impl GbpRouter {
     ///
     /// # Algorithm
     ///
-    /// 1. **CACHE CHECK**: Look up query in sharded cache (sub-microsecond)
-    /// 2. **SCATTER**: Fire parallel requests using FuturesUnordered
-    /// 3. **GATHER**: Stream responses as they complete (first-to-finish)
-    /// 4. **MERGE**: Combine partial results into unified response
-    /// 5. **CACHE STORE**: Cache response for future requests
+    /// 1. **APQ CHECK**: Resolve query string from hash if needed
+    /// 2. **CACHE CHECK**: Look up query in sharded cache (sub-microsecond)
+    /// 3. **COLLAPSE**: Deduplicate identical in-flight requests
+    /// 4. **SCATTER**: Fire parallel requests using FuturesUnordered
+    /// 5. **GATHER**: Stream responses as they complete (first-to-finish)
+    /// 6. **MERGE**: Combine partial results into unified response
+    /// 7. **CACHE STORE**: Cache response for future requests
     ///
     /// # Performance
     ///
@@ -324,12 +348,40 @@ impl GbpRouter {
     /// - With GBP enabled: **~99% bandwidth reduction**
     /// - FuturesUnordered: Results stream as they arrive
     /// - Parallel execution: Total latency ≈ slowest subgraph
-    pub async fn execute_scatter_gather(&self, query: &str) -> Result<JsonValue> {
+    pub async fn execute_scatter_gather(
+        &self,
+        query: Option<&str>,
+        variables: Option<&JsonValue>,
+        extensions: Option<&JsonValue>,
+    ) -> Result<JsonValue> {
         self.request_count.fetch_add(1, Ordering::Relaxed);
         let start = Instant::now();
 
-        // 1. CACHE CHECK: Fast path for repeated queries
-        let cache_key = self.compute_cache_key(query);
+        // 1. APQ CHECK
+        let query_string = if let Some(store) = &self.apq_store {
+            // We use process_apq_request helper
+            match process_apq_request(store, query, extensions) {
+                Ok(Some(q)) => q,
+                Ok(None) => {
+                    // This happens if no query text and no APQ ext or cache miss without text?
+                    // process_apq_request returns Ok(None) ONLY if extensions is None and query is None.
+                    // If extensions is present (APQ) but logic fails (miss), it returns Err.
+                    // So Ok(None) simply means "No query info provided".
+                    return Err(crate::Error::Internal("No query provided".into()));
+                }
+                Err(e) => {
+                    // Return the APQ error string so functionality works (client retries)
+                    return Err(crate::Error::Internal(e.to_string()));
+                }
+            }
+        } else {
+            query
+                .map(String::from)
+                .ok_or_else(|| crate::Error::Internal("No query provided".into()))?
+        };
+
+        // 2. CACHE CHECK: Fast path for repeated queries
+        let cache_key = self.compute_cache_key(&query_string, variables);
         if let Some(cached) = self.cache.get(&cache_key) {
             self.cache_hits.fetch_add(1, Ordering::Relaxed);
             tracing::debug!(
@@ -344,17 +396,43 @@ impl GbpRouter {
                 .map_err(|e| crate::Error::Internal(format!("Cache parse error: {}", e)));
         }
 
-        // 2. SCATTER: Fire requests using FuturesUnordered for true parallelism
+        // 3. COLLAPSE: Deduplicate
+        let broadcaster = if let Some(registry) = &self.collapsing_registry {
+            let req_key = RequestKey::new("router", "graphql", cache_key.as_bytes());
+            match registry.try_collapse(req_key).await {
+                CollapseResult::Follower(receiver) => {
+                    tracing::debug!("Request collapsed (follower)");
+                    let gql_val = receiver
+                        .recv()
+                        .await
+                        .map_err(|e| crate::Error::Internal(e))?;
+                    // Convert sync_graphql::Value -> serde_json::Value
+                    return serde_json::to_value(gql_val)
+                        .map_err(|e| crate::Error::Internal(format!("Serialization error: {}", e)));
+                }
+                CollapseResult::Leader(b) => Some(b),
+                CollapseResult::Passthrough => None,
+            }
+        } else {
+            None
+        };
+
+        // 4. SCATTER: Fire requests using FuturesUnordered for true parallelism
         let mut futures = FuturesUnordered::new();
 
         for (name, client) in &self.clients {
             let name = name.clone();
             let client = client.clone();
             let force_gbp = self.config.force_gbp;
+            let query_str = query_string.clone();
+            let variables_clone = variables.cloned();
 
             futures.push(async move {
-                let mut args = HashMap::with_capacity(1);
-                args.insert("query".to_string(), serde_json::json!(query));
+                let mut args = HashMap::with_capacity(2);
+                args.insert("query".to_string(), serde_json::json!(query_str));
+                if let Some(vars) = variables_clone {
+                    args.insert("variables".to_string(), vars);
+                }
 
                 let req_start = Instant::now();
                 let res = client.execute("query", args).await;
@@ -364,7 +442,7 @@ impl GbpRouter {
             });
         }
 
-        // 3. GATHER: Stream results as they complete (first-to-finish ordering)
+        // 5. GATHER: Stream results as they complete (first-to-finish ordering)
         let mut results = HashMap::with_capacity(self.clients.len());
         let mut errors = Vec::new();
 
@@ -390,15 +468,32 @@ impl GbpRouter {
             }
         }
 
-        // 4. MERGE: Combine results
+        // 6. MERGE: Combine results
         let response = serde_json::to_value(&results).unwrap();
+        let result = Ok(response); // We generally return Ok with partial results unless fatal?
 
-        // 5. CACHE STORE: Store for future requests
+        // 7. BROADCAST & CACHE
+        if let Some(b) = broadcaster {
+            let broadcast_res = match &result {
+                Ok(val) => {
+                    // Convert serde_json::Value -> async_graphql::Value
+                    serde_json::from_value(val.clone())
+                        .map_err(|e| format!("Conversion error: {}", e))
+                },
+                Err(e) => Err(format!("{:?}", e)),
+            };
+            b.broadcast(broadcast_res);
+        }
+
+        // Only cache if no errors (or partial success policy?)
+        // Original logic: only if errors.is_empty()
         if errors.is_empty() {
-            if let Ok(bytes) = serde_json::to_vec(&response) {
-                self.cache
-                    .insert(&cache_key, Bytes::from(bytes), self.cache_ttl);
-            }
+             if let Ok(val) = &result {
+                 if let Ok(bytes) = serde_json::to_vec(val) {
+                    self.cache
+                        .insert(&cache_key, Bytes::from(bytes), self.cache_ttl);
+                }
+             }
         }
 
         let total_duration = start.elapsed();
@@ -410,15 +505,31 @@ impl GbpRouter {
             "Federation query complete"
         );
 
-        Ok(response)
+        result
     }
 
     /// Execute with early return on first error (fail-fast mode)
-    pub async fn execute_fail_fast(&self, query: &str) -> Result<JsonValue> {
+    pub async fn execute_fail_fast(
+        &self,
+        query: Option<&str>,
+        variables: Option<&JsonValue>,
+        extensions: Option<&JsonValue>,
+    ) -> Result<JsonValue> {
         self.request_count.fetch_add(1, Ordering::Relaxed);
 
+        // 1. APQ CHECK
+        let query_string = if let Some(store) = &self.apq_store {
+            match process_apq_request(store, query, extensions) {
+                Ok(Some(q)) => q,
+                Ok(None) => return Err(crate::Error::Internal("No query provided".into())),
+                Err(e) => return Err(crate::Error::Internal(e.to_string())),
+            }
+        } else {
+             query.map(String::from).ok_or_else(|| crate::Error::Internal("No query provided".into()))?
+        };
+
         // Cache check
-        let cache_key = self.compute_cache_key(query);
+        let cache_key = self.compute_cache_key(&query_string, variables);
         if let Some(cached) = self.cache.get(&cache_key) {
             self.cache_hits.fetch_add(1, Ordering::Relaxed);
             return self
@@ -427,20 +538,42 @@ impl GbpRouter {
                 .map_err(|e| crate::Error::Internal(format!("Cache parse error: {}", e)));
         }
 
+        // Collapse
+        let broadcaster = if let Some(registry) = &self.collapsing_registry {
+             let req_key = RequestKey::new("router", "graphql", cache_key.as_bytes());
+             match registry.try_collapse(req_key).await {
+                 CollapseResult::Follower(receiver) => {
+                     let gql_val = receiver.recv().await.map_err(|e| crate::Error::Internal(e))?;
+                     return serde_json::to_value(gql_val)
+                        .map_err(|e| crate::Error::Internal(format!("Serialization error: {}", e)));
+                 }
+                 CollapseResult::Leader(b) => Some(b),
+                 CollapseResult::Passthrough => None,
+             }
+        } else {
+             None
+        };
+
         let mut futures = FuturesUnordered::new();
 
         for (name, client) in &self.clients {
             let name = name.clone();
             let client = client.clone();
+            let query_str = query_string.clone();
+            let variables_clone = variables.cloned();
 
             futures.push(async move {
-                let mut args = HashMap::with_capacity(1);
-                args.insert("query".to_string(), serde_json::json!(query));
+                let mut args = HashMap::with_capacity(2);
+                args.insert("query".to_string(), serde_json::json!(query_str));
+                if let Some(vars) = variables_clone {
+                    args.insert("variables".to_string(), vars);
+                }
                 (name, client.execute("query", args).await)
             });
         }
 
         let mut results = HashMap::with_capacity(self.clients.len());
+        let mut final_res = Ok(serde_json::Value::Null); // Placeholder
 
         while let Some((name, res)) = futures.next().await {
             match res {
@@ -449,15 +582,32 @@ impl GbpRouter {
                 }
                 Err(e) => {
                     // Fail fast: return error immediately
-                    return Err(crate::Error::Internal(format!(
+                    final_res = Err(crate::Error::Internal(format!(
                         "Subgraph {} failed: {}",
                         name, e
                     )));
+                    break;
                 }
             }
         }
 
+        if final_res.is_err() {
+            // If failed, broadcast error
+            if let Some(b) = broadcaster {
+                 b.broadcast(Err(final_res.as_ref().err().unwrap().to_string()));
+            }
+            return final_res;
+        }
+
         let response = serde_json::to_value(&results).unwrap();
+        
+        // Broadcast success
+        if let Some(b) = broadcaster {
+            let broadcast_msg = serde_json::from_value(response.clone())
+                .map_err(|e| format!("Conversion error: {}", e));
+            b.broadcast(broadcast_msg);
+        }
+
         if let Ok(bytes) = serde_json::to_vec(&response) {
             self.cache
                 .insert(&cache_key, Bytes::from(bytes), self.cache_ttl);
@@ -468,10 +618,14 @@ impl GbpRouter {
 
     /// Compute cache key using fast hashing
     #[inline]
-    fn compute_cache_key(&self, query: &str) -> String {
+    fn compute_cache_key(&self, query: &str, variables: Option<&JsonValue>) -> String {
         use std::hash::{Hash, Hasher};
         let mut hasher = ahash::AHasher::default();
         query.hash(&mut hasher);
+        if let Some(v) = variables {
+             // Hash normalized string representation of variables
+             v.to_string().hash(&mut hasher);
+        }
         format!("q:{:x}", hasher.finish())
     }
 
@@ -549,6 +703,8 @@ mod tests {
                 url: "http://localhost:4002".into(),
             }],
             force_gbp: true,
+            apq: None,
+            request_collapsing: None,
         };
         assert_eq!(config.subgraphs.len(), 1);
         assert!(config.force_gbp);
@@ -645,6 +801,8 @@ mod tests {
                 url: "http://localhost:8080".into(),
             }],
             force_gbp: true,
+            apq: None,
+            request_collapsing: None,
         };
         let router = GbpRouter::new(config);
         
@@ -662,6 +820,8 @@ mod tests {
             port: 4000,
             subgraphs: vec![],
             force_gbp: false,
+            apq: None,
+            request_collapsing: None,
         };
         let router = GbpRouter::new(config);
         
@@ -677,6 +837,8 @@ mod tests {
             port: 4000,
             subgraphs: vec![],
             force_gbp: false,
+            apq: None,
+            request_collapsing: None,
         };
         let router = GbpRouter::new(config);
         
@@ -694,12 +856,14 @@ mod tests {
                 url: "http://localhost:9999/graphql".into(), // Likely closed port
             }],
             force_gbp: false,
+            apq: None,
+            request_collapsing: None,
         };
         let router = GbpRouter::new(config);
         
         // Should return empty success response (partial results = empty)
         // or errors if the logic changes. Current impl returns Ok with results map.
-        let result = router.execute_scatter_gather("{ hello }").await;
+        let result = router.execute_scatter_gather(Some("{ hello }"), None, None).await;
         
         assert!(result.is_ok());
         let val = result.unwrap();
@@ -722,13 +886,127 @@ mod tests {
                 url: "http://localhost:9999/graphql".into(),
             }],
             force_gbp: false,
+            apq: None,
+            request_collapsing: None,
         };
         let router = GbpRouter::new(config);
         
         // execute_fail_fast should return Err on first failure
-        let result = router.execute_fail_fast("{ hello }").await;
+        let result = router.execute_fail_fast(Some("{ hello }"), None, None).await;
         
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_integrated_apq_collapsing_cache() {
+        // 1. Setup Dummy Subgraph Server
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_request_count = Arc::new(AtomicU64::new(0));
+        let server_count_clone = server_request_count.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let server_count = server_count_clone.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0; 1024];
+                    let _ = socket.read(&mut buf).await;
+                    
+                    // Simulate processing delay for collapsing
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    
+                    server_count.fetch_add(1, Ordering::Relaxed);
+                    
+                    let response_body = r#"{"data": {"hello": "world"}}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        response_body.len(),
+                        response_body
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        // 2. Configure Router
+        let config = RouterConfig {
+            port: 0, // Unused in this test
+            subgraphs: vec![SubgraphConfig {
+                name: "test".into(),
+                url: format!("http://{}", addr),
+            }],
+            force_gbp: false,
+            apq: Some(PersistedQueryConfig::default()),
+            request_collapsing: Some(RequestCollapsingConfig::default()),
+        };
+        let router = GbpRouter::new(config);
+
+        // 3. Test APQ Registration & Collapsing
+        // Fire 2 concurrent requests:
+        // Req A: Full query + Hash (Registers APQ)
+        // Req B: Hash only (Uses APQ)
+        // Both should define "hash" extensions.
+        
+        let query = "{ hello }";
+        let hash = crate::persisted_queries::PersistedQueryStore::hash_query(query);
+        
+        let ext_with_query = serde_json::json!({
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": hash
+            }
+        });
+        
+        let ext_without_query = ext_with_query.clone();
+        
+        let router = Arc::new(router);
+        let r1 = router.clone();
+        let r2 = router.clone();
+        let q1 = query.to_string();
+        let e1 = ext_with_query.clone();
+        let e2 = ext_without_query.clone();
+
+        let t1 = tokio::spawn(async move {
+            // Request 1: Provides query to register APQ
+            r1.execute_scatter_gather(Some(&q1), None, Some(&e1)).await
+        });
+        
+        let t2 = tokio::spawn(async move {
+            // Wait for Req1 to start and become leader
+            tokio::task::yield_now().await;
+            // Request 2: No query, relies on APQ. Collapses onto T1.
+            r2.execute_scatter_gather(None, None, Some(&e2)).await
+        });
+
+        let (res1, res2) = tokio::join!(t1, t2);
+        
+        let val1 = res1.unwrap().expect("Req1 failed");
+        let val2 = res2.unwrap().expect("Req2 failed");
+
+        // Verify Responses
+        assert_eq!(val1["test"]["data"]["hello"], "world");
+        assert_eq!(val2["test"]["data"]["hello"], "world");
+
+        // Verify Stats
+        // 1. Server should have received EXACTLY 1 request (Collapsing worked)
+        assert_eq!(server_request_count.load(Ordering::Relaxed), 1, "Expected 1 server request due to collapsing");
+
+        // 2. Router should see 2 total requests
+        let stats = router.stats();
+        assert_eq!(stats.total_requests, 2);
+        
+        // 4. Test Cache
+        // Fire Req 3 (Hash only). Should hit cache. Server count remains 1.
+        let val3 = router.execute_scatter_gather(None, None, Some(&ext_without_query)).await.unwrap();
+        assert_eq!(val3["test"]["data"]["hello"], "world");
+        
+        assert_eq!(server_request_count.load(Ordering::Relaxed), 1, "Expected cache hit (no new server request)");
+        
+        let stats_after = router.stats();
+        assert_eq!(stats_after.cache_hits, 1, "Expected 1 cache hit");
+        assert_eq!(stats_after.total_requests, 3);
     }
 
     #[tokio::test]
@@ -748,6 +1026,8 @@ mod tests {
             port: 4000,
             subgraphs: vec![],
             force_gbp: false,
+            apq: None,
+            request_collapsing: None,
         };
         let router = GbpRouter::with_cache_ttl(config, Duration::from_secs(123));
         

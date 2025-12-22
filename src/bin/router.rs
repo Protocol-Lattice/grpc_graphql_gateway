@@ -47,7 +47,8 @@ struct CorsConfig {
 
 #[derive(Debug, Deserialize)]
 struct GraphQlQuery {
-    query: String,
+    #[serde(default)]
+    query: Option<String>,
     #[serde(default)]
     #[allow(dead_code)]
     variables: Option<Value>,
@@ -55,6 +56,8 @@ struct GraphQlQuery {
     #[serde(rename = "operationName")]
     #[allow(dead_code)]
     operation_name: Option<String>,
+    #[serde(default)]
+    extensions: Option<Value>,
 }
 
 struct AppState {
@@ -138,6 +141,8 @@ async fn async_main(yaml_config: YamlConfig, _config_path: String) {
         port,
         subgraphs: yaml_config.subgraphs.clone(),
         force_gbp: true, // Always enable GBP for this high-perf router
+        apq: Some(grpc_graphql_gateway::persisted_queries::PersistedQueryConfig::default()),
+        request_collapsing: Some(grpc_graphql_gateway::request_collapsing::RequestCollapsingConfig::default()),
     };
 
     // Setup DDoS protection
@@ -213,7 +218,12 @@ async fn graphql_handler(
         .unwrap_or(false);
 
     // Execute federated query
-    match state.router.execute_scatter_gather(&payload.query).await {
+    // Execute federated query
+    match state.router.execute_scatter_gather(
+            payload.query.as_deref(), 
+            payload.variables.as_ref(), 
+            payload.extensions.as_ref()
+    ).await {
         Ok(data) => {
             let duration = start.elapsed();
 
@@ -256,10 +266,24 @@ async fn graphql_handler(
 
             Json(response_data).into_response()
         }
-        Err(e) => Json(json!({
-            "errors": [{"message": e.to_string()}]
-        }))
-        .into_response(),
+        Err(e) => {
+             // Handle APQ errors or standard errors
+             let mut payload = json!({
+                 "errors": [{"message": e.to_string()}]
+             });
+             
+             // Check if it's an APQ error to add proper extensions
+             if e.to_string() == "PersistedQueryNotFound" {
+                 payload = json!({
+                     "errors": [{
+                         "message": "PersistedQueryNotFound",
+                         "extensions": { "code": "PERSISTED_QUERY_NOT_FOUND" }
+                     }]
+                 });
+             }
+             
+             Json(payload).into_response()
+        },
     }
 }
 
