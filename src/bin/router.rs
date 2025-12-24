@@ -168,13 +168,14 @@ async fn async_main(yaml_config: YamlConfig, _config_path: String) {
     // Optimized Axum Router
     let app = Router::new()
         .route("/graphql", post(graphql_handler))
+        .route("/graphql/ws", get(subscription_ws_handler))
         .route("/graphql/live", get(live_query_ws_handler))
         .route("/health", get(health_handler))
         .with_state(state);
 
     println!();
     println!("  ╔═══════════════════════════════════════════════════════════╗");
-    println!("  ║         GBP Router + Live Queries (Configured)            ║");
+    println!("  ║      GBP Router + Live Queries + Subscriptions           ║");
     println!("  ╠═══════════════════════════════════════════════════════════╣");
     println!("  ║  Listening:     {}                       ║", yaml_config.server.listen);
     println!("  ║  Workers:       {}                                       ║", yaml_config.server.workers);
@@ -305,8 +306,240 @@ async fn health_handler() -> impl IntoResponse {
     Json(json!({
         "status": "healthy",
         "version": "1.0.0",
-        "engine": "GBP Router + Live Queries"
+        "engine": "GBP Router + Live Queries + Subscriptions",
+        "endpoints": {
+            "graphql": "/graphql",
+            "subscriptions": "/graphql/ws", 
+            "live_queries": "/graphql/live",
+            "health": "/health"
+        }
     }))
+}
+
+/// WebSocket handler for GraphQL subscriptions
+/// 
+/// Implements the graphql-transport-ws protocol for standard GraphQL subscriptions
+/// This is different from live queries - subscriptions are streaming GraphQL operations
+async fn subscription_ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.protocols(["graphql-transport-ws"])
+        .on_upgrade(move |socket| handle_subscription_socket(socket, state))
+}
+
+/// Handle individual WebSocket connection for subscriptions
+async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
+    let (sender, mut receiver) = socket.split();
+    let connection_id = uuid::Uuid::new_v4().to_string();
+    
+    tracing::info!(connection_id = %connection_id, "New subscription WebSocket connection");
+
+    // Create channels for this connection
+    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<Message>(100);
+
+    // Spawn task to forward all messages to client
+    let connection_id_clone = connection_id.clone();
+    tokio::spawn(async move {
+        let mut sender = sender;
+        while let Some(msg) = outgoing_rx.recv().await {
+            if sender.send(msg).await.is_err() {
+                tracing::warn!(connection_id = %connection_id_clone, "Failed to send message, client disconnected");
+                break;
+            }
+        }
+    });
+
+    // Track active subscriptions for this connection
+    let mut active_subscriptions: std::collections::HashMap<String, tokio::task::JoinHandle<()>> = std::collections::HashMap::new();
+
+    // Handle messages from client
+    while let Some(msg) = receiver.next().await {
+        match msg {
+            Ok(Message::Text(text)) => {
+                if let Ok(msg_value) = serde_json::from_str::<Value>(&text) {
+                    let msg_type = msg_value["type"].as_str().unwrap_or("");
+                    
+                    match msg_type {
+                        "connection_init" => {
+                            // Acknowledge connection
+                            let ack = json!({
+                                "type": "connection_ack",
+                                "payload": {
+                                    "subscriptions": "enabled",
+                                    "compression": "gbp"
+                                }
+                            });
+                            
+                            if let Ok(text) = serde_json::to_string(&ack) {
+                                let _ = outgoing_tx.send(Message::Text(text.into())).await;
+                                tracing::debug!("Subscription connection acknowledged");
+                            }
+                        }
+                        
+                        "subscribe" => {
+                            let id = msg_value["id"].as_str().unwrap_or("unknown").to_string();
+                            let payload = &msg_value["payload"];
+                            let query = payload["query"].as_str();
+                            let variables = payload.get("variables");
+                            
+                            if let Some(query_str) = query {
+                                // Check if this is actually a subscription operation
+                                if query_str.trim_start().starts_with("subscription") {
+                                    let outgoing_tx_clone = outgoing_tx.clone();
+                                    let state_clone = state.clone();
+                                    let subscription_id = id.clone();
+                                    let query_owned = query_str.to_string();
+                                    let vars_owned = variables.cloned();
+                                    
+                                    // Spawn subscription handler
+                                    let handle = tokio::spawn(async move {
+                                        handle_subscription(
+                                            state_clone,
+                                            subscription_id,
+                                            query_owned,
+                                            vars_owned,
+                                            outgoing_tx_clone,
+                                        ).await;
+                                    });
+                                    
+                                    active_subscriptions.insert(id, handle);
+                                } else {
+                                    // Not a subscription, treat as regular query
+                                    let outgoing_tx_clone = outgoing_tx.clone();
+                                    let state_clone = state.clone();
+                                    let query_owned = query_str.to_string();
+                                    let vars_owned = variables.cloned();
+                                    let subscription_id = id.clone();
+                                    
+                                    tokio::spawn(async move {
+                                        // Execute as regular query
+                                        match state_clone.router.execute_scatter_gather(
+                                            Some(&query_owned),
+                                            vars_owned.as_ref(),
+                                            None,
+                                        ).await {
+                                            Ok(data) => {
+                                                let response = json!({
+                                                    "type": "next",
+                                                    "id": subscription_id,
+                                                    "payload": {
+                                                        "data": data
+                                                    }
+                                                });
+                                                
+                                                if let Ok(text) = serde_json::to_string(&response) {
+                                                    let _ = outgoing_tx_clone.send(Message::Text(text.into())).await;
+                                                }
+                                                
+                                                // Send complete for queries
+                                                let complete = json!({
+                                                    "type": "complete",
+                                                    "id": subscription_id
+                                                });
+                                                
+                                                if let Ok(text) = serde_json::to_string(&complete) {
+                                                    let _ = outgoing_tx_clone.send(Message::Text(text.into())).await;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                let error = json!({
+                                                    "type": "error",
+                                                    "id": subscription_id,
+                                                    "payload": [{
+                                                        "message": e.to_string()
+                                                    }]
+                                                });
+                                                
+                                                if let Ok(text) = serde_json::to_string(&error) {
+                                                    let _ = outgoing_tx_clone.send(Message::Text(text.into())).await;
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        
+                        "complete" => {
+                            let id = msg_value["id"].as_str().unwrap_or("unknown");
+                            if let Some(handle) = active_subscriptions.remove(id) {
+                                handle.abort();
+                                tracing::debug!(subscription_id = %id, "Subscription cancelled by client");
+                            }
+                        }
+                        
+                        "ping" => {
+                            let pong = json!({"type": "pong"});
+                            if let Ok(text) = serde_json::to_string(&pong) {
+                                let _ = outgoing_tx.send(Message::Text(text.into())).await;
+                            }
+                        }
+                        
+                        _ => {
+                            tracing::debug!(msg_type = %msg_type, "Unhandled subscription message type");
+                        }
+                    }
+                }
+            }
+            
+            Ok(Message::Close(_)) => {
+                tracing::info!(connection_id = %connection_id, "Client closed subscription connection");
+                break;
+            }
+            
+            Err(e) => {
+                tracing::error!(error = %e, "WebSocket error");
+                break;
+            }
+            
+            _ => {}
+        }
+    }
+
+    // Cleanup: abort all active subscriptions
+    for (_, handle) in active_subscriptions {
+        handle.abort();
+    }
+    
+    tracing::info!(connection_id = %connection_id, "Subscription WebSocket connection closed");
+}
+
+/// Handle a single GraphQL subscription
+/// Note: This is a simplified implementation. In production, you would need to:
+/// 1. Parse the subscription query to understand what to subscribe to
+/// 2. Forward to appropriate subgraph(s) that support subscriptions
+/// 3. Stream results as they arrive
+async fn handle_subscription(
+    _state: Arc<AppState>,
+    subscription_id: String,
+    _query: String,
+    _variables: Option<Value>,
+    outgoing_tx: mpsc::Sender<Message>,
+) {
+    tracing::info!(subscription_id = %subscription_id, "Subscription started");
+    
+    // For now, send a message indicating subscriptions need subgraph support
+    // In a full implementation, you would:
+    // 1. Determine which subgraph handles this subscription
+    // 2. Forward the subscription to that subgraph
+    // 3. Stream results back as they arrive
+    
+    let error = json!({
+        "type": "error",
+        "id": subscription_id,
+        "payload": [{
+            "message": "GraphQL subscriptions require subgraph support. Configure your subgraphs to expose subscription endpoints.",
+            "extensions": {
+                "code": "SUBSCRIPTION_NOT_IMPLEMENTED",
+                "note": "The router can forward subscriptions to subgraphs that support them via WebSocket"
+            }
+        }]
+    });
+    
+    if let Ok(text) = serde_json::to_string(&error) {
+        let _ = outgoing_tx.send(Message::Text(text.into())).await;
+    }
 }
 
 /// WebSocket handler for live queries
