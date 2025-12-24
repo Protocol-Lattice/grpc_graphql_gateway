@@ -266,6 +266,97 @@ pub struct LiveQueryUpdate {
     pub is_initial: bool,
     /// Revision number (increments with each update)
     pub revision: u64,
+    /// Cache control directives (optional, for advanced features)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
+    /// Fields that changed (optional, for field-level invalidation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changed_fields: Option<Vec<String>>,
+    /// Whether this update was batched with others
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batched: Option<bool>,
+    /// Server timestamp
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<u64>,
+}
+
+/// Cache control directive for live query responses
+/// Enables client-side caching hints for better performance
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheControl {
+    /// Maximum age the client can cache this data (seconds)
+    pub max_age: u32,
+    /// Whether the data can be cached in shared caches
+    pub public: bool,
+    /// Whether the data must be revalidated before use
+    pub must_revalidate: bool,
+    /// ETag for efficient caching
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+}
+
+impl Default for CacheControl {
+    fn default() -> Self {
+        Self {
+            max_age: 0, // No caching by default for live data
+            public: false,
+            must_revalidate: true,
+            etag: None,
+        }
+    }
+}
+
+/// Field-level change information
+/// Used to track which specific fields changed in an update
+#[derive(Debug, Clone, Serialize)]
+pub struct FieldChange {
+    /// Field path (e.g., "user.name", "users[0].email")
+    pub field_path: String,
+    /// Old value (JSON, None if field was added)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_value: Option<serde_json::Value>,
+    /// New value (JSON)
+    pub new_value: serde_json::Value,
+}
+
+/// Configuration for batch invalidation
+/// Merges multiple rapid updates into a single push to reduce network traffic
+#[derive(Debug, Clone)]
+pub struct BatchInvalidationConfig {
+    /// Enable batching
+    pub enabled: bool,
+    /// Wait duration before flushing batch (milliseconds)
+    pub debounce_ms: u64,
+    /// Maximum batch size (flush when reached)
+    pub max_batch_size: usize,
+    /// Maximum wait time before forcing flush (milliseconds)
+    pub max_wait_ms: u64,
+}
+
+impl Default for BatchInvalidationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            debounce_ms: 50, // 50ms debounce
+            max_batch_size: 100,
+            max_wait_ms: 500, // Force flush after 500ms
+        }
+    }
+}
+
+/// Data volatility classification for cache control hints
+#[derive(Debug, Clone, Copy)]
+pub enum DataVolatility {
+    /// Changes multiple times per second (e.g., stock prices)
+    VeryHigh,
+    /// Changes every few seconds (e.g., online status)
+    High,
+    /// Changes every minute (e.g., message counts)
+    Medium,
+    /// Changes hourly (e.g., user profiles)
+    Low,
+    /// Changes daily or less (e.g., settings)
+    VeryLow,
 }
 
 /// Statistics about live query usage
@@ -506,6 +597,13 @@ impl LiveQueryStore {
             data,
             is_initial,
             revision,
+            cache_control: None,  // Can be set by caller for advanced features
+            changed_fields: None, // Can be set by caller for field-level invalidation
+            batched: None,        // Can be set by caller for batch invalidation
+            timestamp: Some(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()),
         };
 
         sender
@@ -765,6 +863,250 @@ pub fn strip_live_directive(query: &str) -> String {
     }
     
     result
+}
+
+/// Detect field-level changes between two JSON values
+/// Returns a list of changed fields with their old and new values
+/// 
+/// # Example
+/// ```
+/// use grpc_graphql_gateway::live_query::detect_field_changes;
+/// 
+/// let old = serde_json::json!({"name": "Alice", "age": 30});
+/// let new = serde_json::json!({"name": "Alice", "age": 31});
+/// let changes = detect_field_changes(&old, &new, "", 0, 10);
+/// assert_eq!(changes.len(), 1);
+/// assert_eq!(changes[0].field_path, "age");
+/// ```
+pub fn detect_field_changes(
+    old: &serde_json::Value,
+    new: &serde_json::Value,
+    path: &str,
+    depth: usize,
+    max_depth: usize,
+) -> Vec<FieldChange> {
+    if depth >= max_depth {
+        return Vec::new();
+    }
+
+    let mut changes = Vec::new();
+
+    match (old, new) {
+        (serde_json::Value::Object(old_map), serde_json::Value::Object(new_map)) => {
+            use std::collections::HashSet;
+            // Track all keys from both objects
+            let mut all_keys: HashSet<String> = old_map.keys().cloned().collect();
+            all_keys.extend(new_map.keys().cloned());
+
+            for key in all_keys {
+                let field_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{}.{}", path, key)
+                };
+
+                let old_val = old_map.get(&key);
+                let new_val = new_map.get(&key);
+
+                match (old_val, new_val) {
+                    (Some(old_v), Some(new_v)) => {
+                        if old_v != new_v {
+                            // Recurse for nested objects/arrays
+                            let nested = detect_field_changes(old_v, new_v, &field_path, depth + 1, max_depth);
+                            if nested.is_empty() {
+                                // Leaf change
+                                changes.push(FieldChange {
+                                    field_path: field_path.clone(),
+                                    old_value: Some(old_v.clone()),
+                                    new_value: new_v.clone(),
+                                });
+                            } else {
+                                changes.extend(nested);
+                            }
+                        }
+                    }
+                    (None, Some(new_v)) => {
+                        // Field added
+                        changes.push(FieldChange {
+                            field_path: field_path.clone(),
+                            old_value: None,
+                            new_value: new_v.clone(),
+                        });
+                    }
+                    (Some(old_v), None) => {
+                        // Field removed
+                        changes.push(FieldChange {
+                            field_path: field_path.clone(),
+                            old_value: Some(old_v.clone()),
+                            new_value: serde_json::Value::Null,
+                        });
+                    }
+                    (None, None) => {}
+                }
+            }
+        }
+        (serde_json::Value::Array(old_arr), serde_json::Value::Array(new_arr)) => {
+            let max_len = old_arr.len().max(new_arr.len());
+            for i in 0..max_len {
+                let field_path = format!("{}[{}]", path, i);
+                let old_val = old_arr.get(i);
+                let new_val = new_arr.get(i);
+
+                match (old_val, new_val) {
+                    (Some(old_v), Some(new_v)) if old_v != new_v => {
+                        let nested = detect_field_changes(old_v, new_v, &field_path, depth + 1, max_depth);
+                        if nested.is_empty() {
+                            changes.push(FieldChange {
+                                field_path: field_path.clone(),
+                                old_value: Some(old_v.clone()),
+                                new_value: new_v.clone(),
+                            });
+                        } else {
+                            changes.extend(nested);
+                        }
+                    }
+                    (None, Some(new_v)) => {
+                        changes.push(FieldChange {
+                            field_path: field_path.clone(),
+                            old_value: None,
+                            new_value: new_v.clone(),
+                        });
+                    }
+                    (Some(old_v), None) => {
+                        changes.push(FieldChange {
+                            field_path: field_path.clone(),
+                            old_value: Some(old_v.clone()),
+                            new_value: serde_json::Value::Null,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {
+            // Primitive value change
+            if old != new {
+                changes.push(FieldChange {
+                    field_path: path.to_string(),
+                    old_value: Some(old.clone()),
+                    new_value: new.clone(),
+                });
+            }
+        }
+    }
+
+    changes
+}
+
+/// Generate cache control hints based on data volatility
+/// 
+/// # Example
+/// ```
+/// use grpc_graphql_gateway::live_query::{generate_cache_control, DataVolatility};
+/// 
+/// let cache = generate_cache_control(DataVolatility::Low, None);
+/// assert_eq!(cache.max_age, 300); // 5 minutes
+/// ```
+pub fn generate_cache_control(
+    volatility: DataVolatility,
+    etag: Option<String>,
+) -> CacheControl {
+    let max_age = match volatility {
+        DataVolatility::VeryHigh => 0,           // No caching
+        DataVolatility::High => 5,               // 5 seconds
+        DataVolatility::Medium => 30,            // 30 seconds
+        DataVolatility::Low => 300,              // 5 minutes
+        DataVolatility::VeryLow => 3600,         // 1 hour
+    };
+
+    CacheControl {
+        max_age,
+        public: false, // Live data is typically private
+        must_revalidate: true,
+        etag,
+    }
+}
+
+/// Parse query arguments for filtered live queries
+/// Supports simple key:value parsing for filters
+/// 
+/// # Example
+/// ```
+/// use grpc_graphql_gateway::live_query::parse_query_arguments;
+/// 
+/// let query = "users(status: ONLINE, limit: 10)";
+/// let args = parse_query_arguments(query);
+/// assert_eq!(args.get("status"), Some(&"ONLINE".to_string()));
+/// assert_eq!(args.get("limit"), Some(&"10".to_string()));
+/// ```
+pub fn parse_query_arguments(query: &str) -> AHashMap<String, String> {
+    let mut args = AHashMap::new();
+
+    // Find the arguments section (between parentheses)
+    if let Some(start) = query.find('(') {
+        if let Some(end) = query[start..].find(')') {
+            let args_str = &query[start + 1..start + end];
+
+            // Simple parser for key: value pairs
+            for pair in args_str.split(',') {
+                let parts: Vec<&str> = pair.split(':').map(|s| s.trim()).collect();
+                if parts.len() == 2 {
+                    args.insert(parts[0].to_string(), parts[1].to_string());
+                }
+            }
+        }
+    }
+
+    args
+}
+
+/// Check if query result matches filter criteria
+/// Supports filtered live queries like: users(status: ONLINE) @live
+/// 
+/// # Example
+/// ```
+/// use grpc_graphql_gateway::live_query::matches_filter;
+/// use ahash::AHashMap;
+/// 
+/// let mut filter = AHashMap::new();
+/// filter.insert("status".to_string(), "ONLINE".to_string());
+/// 
+/// let data = serde_json::json!({"status": "ONLINE", "name": "Alice"});
+/// assert!(matches_filter(&filter, &data));
+/// 
+/// let data2 = serde_json::json!({"status": "OFFLINE", "name": "Bob"});
+/// assert!(!matches_filter(&filter, &data2));
+/// ```
+pub fn matches_filter(
+    filter: &AHashMap<String, String>,
+    entity_data: &serde_json::Value,
+) -> bool {
+    if filter.is_empty() {
+        return true; // No filter = match all
+    }
+
+    if let serde_json::Value::Object(entity_map) = entity_data {
+        for (key, expected_value) in filter {
+            if let Some(actual_value) = entity_map.get(key) {
+                // Compare as strings for simplicity
+                let actual_str = match actual_value {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::Bool(b) => b.to_string(),
+                    _ => actual_value.to_string(),
+                };
+                
+                if &actual_str != expected_value {
+                    return false;
+                }
+            } else {
+                return false; // Key not found
+            }
+        }
+        true
+    } else {
+        false
+    }
 }
 
 /// Generate a unique subscription ID

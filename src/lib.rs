@@ -122,6 +122,9 @@ pub use live_query::{
     global_live_query_store, has_live_directive, strip_live_directive, ActiveLiveQuery, 
     InvalidationEvent, LiveQueryConfig, LiveQueryConfigInfo, LiveQueryError, LiveQueryStats, 
     LiveQueryStore, LiveQueryStrategy, LiveQueryUpdate, SharedLiveQueryStore,
+    // Advanced features
+    BatchInvalidationConfig, CacheControl, DataVolatility, FieldChange,
+    detect_field_changes, generate_cache_control, matches_filter, parse_query_arguments,
 };
 pub use lz4_compression::{
     compress_lz4, decompress_lz4, lz4_compression_middleware, Lz4CacheCompressor,
