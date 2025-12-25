@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.8] - 2025-12-25
+
+### Security
+- **Router Security Tests**: added a comprehensive suite of security tests for the GBP Router to ensure resilience against common attack vectors.
+  - **Input Fuzzing**: Validated router stability against massive input queries (10MB+).
+  - **Deep Nesting**: Verified handling of deeply nested queries (500+ levels) to prevent stack overflow.
+  - **Response Validation**: ensured graceful handling of malformed and huge JSON responses from subgraphs.
+  - **DDoS Protection**: Verified concurrent flooding protection and per-IP rate limiting.
+  - **Slow Loris Isolation**: tested resilience against slow subgraphs to prevent system-wide lockups.
+
 ## [0.7.7] - 2025-12-25
 
 ### Security

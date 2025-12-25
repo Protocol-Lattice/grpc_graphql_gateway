@@ -7,6 +7,25 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.7.8] - 2025-12-25
+
+**Router Security Verification** 🕵️‍♂️
+
+Added a robust security test suite to the GBP Router, validating its resilience against extreme conditions and attack vectors.
+
+**Verified Protections:**
+
+1.  **Input Resilience**:
+    *   **Massive Queries**: Validated stability with 10MB+ input payloads.
+    *   **Deep Nesting**: Verified handling of 500+ deep nested queries.
+
+2.  **Subgraph Isolation**:
+    *   **Slow Loris**: Verified that slow subgraphs do not impact healthy ones.
+    *   **Malformed Data**: Graceful handling of invalid or huge subgraph responses.
+
+3.  **DDoS Verification**:
+    *   **Concurrent Flooding**: Validated token bucket effectiveness under load.
+
 ### [0.7.7] - 2025-12-25
 
 **Router Security Hardening** 🛡️
