@@ -13,6 +13,14 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use tower_http::{
+    cors::{CorsLayer, Any},
+    set_header::SetResponseHeaderLayer,
+    timeout::TimeoutLayer,
+};
+use axum::extract::DefaultBodyLimit;
+use axum::http::{Method, HeaderValue, header};
+use std::time::Duration;
 use grpc_graphql_gateway::{
     global_live_query_store, has_live_directive, strip_live_directive,
     live_query::{ActiveLiveQuery, LiveQueryStrategy, SharedLiveQueryStore},
@@ -32,7 +40,7 @@ use futures::SinkExt;
 struct YamlConfig {
     server: ServerConfig,
     #[allow(dead_code)]
-    cors: CorsConfig,
+    cors: Option<CorsConfig>,
     subgraphs: Vec<SubgraphConfig>,
     #[serde(default)]
     rate_limit: Option<DdosConfig>,
@@ -49,9 +57,8 @@ fn default_workers() -> usize {
     16
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct CorsConfig {
-    #[allow(dead_code)]
     allow_origins: Vec<String>,
 }
 
@@ -166,12 +173,62 @@ async fn async_main(yaml_config: YamlConfig, _config_path: String) {
     let state = Arc::new(AppState::new(router, ddos, 64));
 
     // Optimized Axum Router
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/graphql", post(graphql_handler))
         .route("/graphql/ws", get(subscription_ws_handler))
         .route("/graphql/live", get(live_query_ws_handler))
         .route("/health", get(health_handler))
-        .with_state(state);
+        .with_state(state)
+        .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 2MB limit
+        .layer(
+            tower::ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::X_CONTENT_TYPE_OPTIONS,
+                    HeaderValue::from_static("nosniff"),
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::X_FRAME_OPTIONS,
+                    HeaderValue::from_static("DENY"),
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::X_XSS_PROTECTION,
+                    HeaderValue::from_static("1; mode=block"),
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::REFERRER_POLICY,
+                    HeaderValue::from_static("strict-origin-when-cross-origin"),
+                ))
+        );
+
+    // Apply CORS based on configuration
+    let cors_config = yaml_config.cors.clone().unwrap_or(CorsConfig {
+        allow_origins: vec!["*".to_string()],
+    });
+
+    if cors_config.allow_origins.iter().any(|o| o == "*") {
+        app = app.layer(
+            CorsLayer::new()
+                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
+                .allow_origin(Any)
+        );
+    } else {
+        let origins: Vec<HeaderValue> = cors_config.allow_origins
+            .iter()
+            .map(|s| s.parse::<HeaderValue>().unwrap_or(HeaderValue::from_static("")))
+            .filter(|h| !h.is_empty())
+            .collect();
+            
+        app = app.layer(
+            CorsLayer::new()
+                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
+                .allow_origin(origins)
+        );
+    }
+
+    // Apply Timeout
+    let app = app.layer(TimeoutLayer::new(Duration::from_secs(30)));
 
     println!();
     println!("  ╔═══════════════════════════════════════════════════════════╗");
