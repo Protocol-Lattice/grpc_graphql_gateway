@@ -183,7 +183,7 @@ async fn async_main(yaml_config: YamlConfig, _config_path: String) {
     for sg in &yaml_config.subgraphs {
         println!("  ║   - {:<12} {} ║", sg.name, sg.url);
     }
-    println!("  ║  GBP Enabled:   ✅ (99% compression)                      ║");
+    println!("  ║  GBP Binary:    ✅ Bidirectional (99% compression)        ║");
     println!("  ║  DDoS Shield:   {} global RPS, {} per-IP            ║", ddos_config.global_rps, ddos_config.per_ip_rps);
     println!("  ╚═══════════════════════════════════════════════════════════╝");
     println!();
@@ -198,12 +198,14 @@ async fn async_main(yaml_config: YamlConfig, _config_path: String) {
     .unwrap();
 }
 
+/// Binary-aware GraphQL handler
+/// Supports both JSON and GBP (GraphQL Binary Protocol) for requests and responses
 #[inline(always)]
 async fn graphql_handler(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
-    Json(payload): Json<GraphQlQuery>,
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
     // Extract client IP (fast path)
     let client_ip = headers
@@ -225,14 +227,61 @@ async fn graphql_handler(
 
     let start = std::time::Instant::now();
 
-    // Check for GBP client
+    // Check Content-Type to determine request format
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("application/json");
+
+    let is_binary_request = content_type.contains("application/x-gbp") 
+        || content_type.contains("application/graphql-request+gbp");
+
+    // Parse request payload based on Content-Type
+    let payload: GraphQlQuery = if is_binary_request {
+        // Decode GBP binary request
+        match grpc_graphql_gateway::gbp::GbpDecoder::new().decode(&body) {
+            Ok(value) => match serde_json::from_value(value) {
+                Ok(query) => query,
+                Err(e) => {
+                    return Json(json!({
+                        "errors": [{
+                            "message": format!("Invalid GBP request structure: {}", e),
+                            "extensions": {"code": "BAD_REQUEST"}
+                        }]
+                    })).into_response();
+                }
+            },
+            Err(e) => {
+                return Json(json!({
+                    "errors": [{
+                        "message": format!("Failed to decode GBP request: {}", e),
+                        "extensions": {"code": "BAD_REQUEST"}
+                    }]
+                })).into_response();
+            }
+        }
+    } else {
+        // Parse JSON request (default)
+        match serde_json::from_slice(&body) {
+            Ok(query) => query,
+            Err(e) => {
+                return Json(json!({
+                    "errors": [{
+                        "message": format!("Invalid JSON request: {}", e),
+                        "extensions": {"code": "BAD_REQUEST"}
+                    }]
+                })).into_response();
+            }
+        }
+    };
+
+    // Check for GBP response preference
     let accept_gbp = headers
         .get("accept")
         .and_then(|h| h.to_str().ok())
-        .map(|s| s.contains("application/x-gbp"))
-        .unwrap_or(false);
+        .map(|s| s.contains("application/x-gbp") || s.contains("application/graphql-response+gbp"))
+        .unwrap_or(is_binary_request); // If request was binary, default to binary response
 
-    // Execute federated query
     // Execute federated query
     match state.router.execute_scatter_gather(
             payload.query.as_deref(), 
@@ -246,19 +295,13 @@ async fn graphql_handler(
                 "data": data,
                 "extensions": {
                     "duration_ms": duration.as_secs_f64() * 1000.0,
-                    "powered_by": "GBP Ultra - Configurable"
+                    "powered_by": "GBP Ultra - Bidirectional Binary Protocol",
+                    "format": if accept_gbp { "binary" } else { "json" }
                 }
             });
 
             if accept_gbp {
-                // Use pooled encoder
-                // We access the lock briefly to get/return encoder
-                // Ideally this would be a thread-local or pure stack if inexpensive construction
-                // But GbpEncoder reuses buffers, so pooling is good.
-                
-                // Note: In a real "Speed of Light" implementation, we might stick to thread-local
-                // encoders to avoid this mutex entirely.
-                // For now, minimal locking.
+                // Use pooled encoder for binary response
                 let mut encoders = state.encoder_pool.write().await;
                 let mut encoder = encoders.pop().unwrap_or_else(grpc_graphql_gateway::gbp::GbpEncoder::new);
                 drop(encoders); // release lock ASAP
@@ -283,13 +326,13 @@ async fn graphql_handler(
         }
         Err(e) => {
              // Handle APQ errors or standard errors
-             let mut payload = json!({
+             let mut error_payload = json!({
                  "errors": [{"message": e.to_string()}]
              });
              
              // Check if it's an APQ error to add proper extensions
              if e.to_string() == "PersistedQueryNotFound" {
-                 payload = json!({
+                 error_payload = json!({
                      "errors": [{
                          "message": "PersistedQueryNotFound",
                          "extensions": { "code": "PERSISTED_QUERY_NOT_FOUND" }
@@ -297,7 +340,28 @@ async fn graphql_handler(
                  });
              }
              
-             Json(payload).into_response()
+             // Return error in requested format
+             if accept_gbp {
+                 let mut encoders = state.encoder_pool.write().await;
+                 let mut encoder = encoders.pop().unwrap_or_else(grpc_graphql_gateway::gbp::GbpEncoder::new);
+                 drop(encoders);
+
+                 let bytes = encoder.encode(&error_payload);
+                 
+                 let mut encoders = state.encoder_pool.write().await;
+                 if encoders.len() < 64 {
+                     encoders.push(encoder);
+                 }
+                 drop(encoders);
+
+                 return (
+                     StatusCode::BAD_REQUEST,
+                     [(axum::http::header::CONTENT_TYPE, "application/x-gbp")],
+                     bytes,
+                 ).into_response();
+             }
+             
+             (StatusCode::BAD_REQUEST, Json(error_payload)).into_response()
         },
     }
 }

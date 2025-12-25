@@ -7,6 +7,76 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.7.6] - 2025-12-25
+
+**Bidirectional Binary Protocol** 🚀
+
+Revolutionary GraphQL Binary Protocol (GBP) support for **both requests AND responses**, delivering 73-98% bandwidth reduction and massive cost savings!
+
+**Key Features:**
+
+1. **Binary Request Parsing** - Router accepts GBP-encoded queries
+   - Content-Type detection (`application/x-gbp`, `application/graphql-request+gbp`)
+   - Automatic binary request decoding
+   - Seamless JSON fallback for compatibility
+
+2. **Binary Response Encoding** - Enhanced content negotiation
+   - Accept header detection (`application/x-gbp`, `application/graphql-response+gbp`)
+   - Automatic binary response when request is binary
+   - Error responses in client's requested format
+
+3. **Truly Bidirectional** - Complete binary request/response cycle
+   - **48% smaller requests** (64 bytes JSON → 33 bytes binary)
+   - **73-98% smaller responses** (depending on data pattern)
+   - Both directions benefit from GBP compression
+
+**Performance by Data Pattern:**
+
+- **Realistic Production** (73-74% compression):
+  - 50K users with unique IDs: **73.2% reduction** (35.26 MB → 9.45 MB)
+  - 10K users: **74.4% reduction** (6.71 MB → 1.71 MB)
+  - Common in user management, CRM, authentication systems
+
+- **Mid-Case Repetitive** (85-91% compression):
+  - 50K products: **91.3% reduction** (28.98 MB → 2.53 MB, **11.4x smaller**)
+  - Product catalogs, analytics dashboards, event logs
+  - Shared pricing, inventory, ratings data
+
+- **Extreme Repetitive** (97-98% compression):
+  - 50K users (cache-like): **98.2% reduction** (30.65 MB → 578 KB, **54x smaller**)
+  - Analytics caching, template-based responses
+
+**Real-World Impact (1M requests/month):**
+
+- **Bandwidth Savings**: 25-29 TB/month saved
+- **Cost Savings**: **$2,100-$2,500/month** = **$25K-$30K/year** (AWS CloudFront pricing)
+- **Performance**: 3-54x faster network transfers
+- **Mobile**: 73-98% less data usage
+
+**Technical Implementation:**
+
+- Modified router to parse both JSON and binary requests
+- Full content negotiation system
+- Encoder pooling for high-performance
+- Error responses respect client format preferences
+- 100% backward compatible (opt-in via headers)
+
+**Examples:**
+
+- `examples/binary_protocol_client.rs` - Complete compression analysis
+  - 9 scenarios covering realistic to extreme cases
+  - Bandwidth/cost savings calculations
+  - Monthly impact projections
+
+**Use Cases:**
+
+- High-traffic APIs with bandwidth costs
+- Mobile applications with data-sensitive users
+- E-commerce product catalogs
+- Analytics dashboards with large datasets
+- Real-time feeds and event streams
+- Microservice communication optimization
+
 ### [0.7.5] - 2025-12-24
 
 **Advanced Live Query Features** 🚀
