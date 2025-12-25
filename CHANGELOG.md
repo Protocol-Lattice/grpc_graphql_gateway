@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.7] - 2025-12-25
+
+### Security
+- **Hardened Router Security**: Implemented a suite of security enhancements for the GBP Router.
+  - **Security Headers**: Added defensive headers to all responses:
+    - `X-Frame-Options: DENY` (Clickjacking protection)
+    - `X-Content-Type-Options: nosniff` (MIME sniffing prevention)
+    - `X-XSS-Protection: 1; mode=block` (XSS filtering)
+    - `Referrer-Policy: strict-origin-when-cross-origin` (Privacy protection)
+  - **Robust CORS**: Dynamic CORS configuration via `router.yaml`.
+    - Support for strict origin allowlists or wildcard `*`.
+    - Configurable methods and headers.
+  - **Resource Limits**:
+    - **Body Size Limit**: Enforced 2MB maximum request size to prevent DoS.
+    - **Timeouts**: Added 30-second global request timeout to prevent resource exhaustion.
+  - **Dependencies**: Updated `tower-http` to include `set-header` and `timeout` features.
+
+### Cleanup
+- **Code Quality**: Removed dead code warnings in configuration structs.
+- **Maintainability**: centralized CORS and middleware configuration in `router.rs`.
+
+
 ## [0.7.6] - 2025-12-25
 
 ### Added

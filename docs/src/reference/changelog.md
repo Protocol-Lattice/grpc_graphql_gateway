@@ -7,6 +7,31 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.7.7] - 2025-12-25
+
+**Router Security Hardening** 🛡️
+
+Major security upgrades for the GBP Router, hardening it for production deployments.
+
+**Security Enhancements:**
+
+1.  **Defensive Headers**:
+    *   `X-Frame-Options: DENY`
+    *   `X-Content-Type-Options: nosniff`
+    *   `X-XSS-Protection: 1; mode=block`
+    *   `Referrer-Policy: strict-origin-when-cross-origin`
+
+2.  **Resource Protection**:
+    *   **2MB Body Limit**: Prevents large payload DoS attacks.
+    *   **30s Timeout**: Protects against slow-loris and resource exhaustion.
+
+3.  **Dynamic CORS**:
+    *   Full configuration support via `router.yaml`.
+    *   Strict origin allowlists for production security.
+
+**Maintainability**:
+*   Cleaned up dead code and improved middleware organization.
+
 ### [0.7.6] - 2025-12-25
 
 **Bidirectional Binary Protocol** 🚀
