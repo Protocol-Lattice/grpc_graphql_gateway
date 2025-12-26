@@ -64,6 +64,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
+use crate::waf::{WafConfig, validate_raw, is_introspection};
+use crate::query_cost_analyzer::{QueryCostConfig, QueryCostAnalyzer};
+
 /// Configuration for DDoS protection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DdosConfig {
@@ -282,6 +285,15 @@ pub struct RouterConfig {
     /// Request collapsing configuration
     #[serde(skip)]
     pub request_collapsing: Option<RequestCollapsingConfig>,
+    /// WAF Configuration
+    #[serde(default)]
+    pub waf: Option<WafConfig>,
+    /// Query Cost Analysis Configuration
+    #[serde(skip)] // Complex config, usually code-defined
+    pub query_cost: Option<QueryCostConfig>,
+    /// Disable introspection in production
+    #[serde(default)]
+    pub disable_introspection: bool,
 }
 
 /// Configuration for a single subgraph
@@ -326,6 +338,8 @@ pub struct GbpRouter {
     apq_store: Option<SharedPersistedQueryStore>,
     /// Request Collapsing Registry
     collapsing_registry: Option<SharedRequestCollapsingRegistry>,
+    /// Query Cost Analyzer
+    cost_analyzer: Option<Arc<QueryCostAnalyzer>>,
 }
 
 impl GbpRouter {
@@ -374,6 +388,11 @@ impl GbpRouter {
             .clone()
             .map(create_request_collapsing_registry);
 
+        let cost_analyzer = config
+            .query_cost
+            .clone()
+            .map(|c| Arc::new(QueryCostAnalyzer::new(c)));
+
         Self {
             config,
             clients,
@@ -384,6 +403,7 @@ impl GbpRouter {
             cache_ttl,
             apq_store,
             collapsing_registry,
+            cost_analyzer,
         }
     }
 
@@ -436,6 +456,28 @@ impl GbpRouter {
                 .map(String::from)
                 .ok_or_else(|| crate::Error::Internal("No query provided".into()))?
         };
+
+        // SECURITY CHECKS
+        // 1. Introspection Check
+        if self.config.disable_introspection && is_introspection(&query_string) {
+            tracing::warn!("Introspection query blocked");
+            return Err(crate::Error::Validation("Introspection is disabled".into()));
+        }
+
+        // 2. WAF Check
+        if let Some(waf_config) = &self.config.waf {
+            validate_raw(&query_string, variables, waf_config)
+                .map_err(|e| crate::Error::Validation(e.to_string()))?;
+        }
+
+        // 3. Cost Analysis
+        if let Some(analyzer) = &self.cost_analyzer {
+            // Note: In a real APQ scenario, we might want to cache cost, but for now calculate it
+            analyzer
+                .calculate_query_cost(&query_string)
+                .await
+                .map_err(|e| crate::Error::Validation(e))?;
+        }
 
         // 2. CACHE CHECK: Fast path for repeated queries
         let cache_key = self.compute_cache_key(&query_string, variables);
@@ -587,6 +629,26 @@ impl GbpRouter {
                 .map(String::from)
                 .ok_or_else(|| crate::Error::Internal("No query provided".into()))?
         };
+
+        // SECURITY CHECKS
+        // 1. Introspection Check
+        if self.config.disable_introspection && is_introspection(&query_string) {
+            return Err(crate::Error::Validation("Introspection is disabled".into()));
+        }
+
+        // 2. WAF Check
+        if let Some(waf_config) = &self.config.waf {
+            validate_raw(&query_string, variables, waf_config)
+                .map_err(|e| crate::Error::Validation(e.to_string()))?;
+        }
+
+        // 3. Cost Analysis
+        if let Some(analyzer) = &self.cost_analyzer {
+            analyzer
+                .calculate_query_cost(&query_string)
+                .await
+                .map_err(|e| crate::Error::Validation(e))?;
+        }
 
         // Cache check
         let cache_key = self.compute_cache_key(&query_string, variables);

@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 /// Configuration for query cost analysis and enforcement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct QueryCostConfig {
     /// Maximum allowed cost for a single query (reject if exceeded)
     pub max_cost_per_query: u64,

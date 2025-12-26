@@ -17,3 +17,22 @@ rate_limit:
   global_rps: 100000
   per_ip_rps: 1000
   per_ip_burst: 2000
+
+# Security Configuration
+waf:
+  enabled: true
+  block_sqli: true
+  block_xss: true
+  block_nosqli: true
+  block_cmdi: true
+  block_traversal: true
+  block_ldap: true
+  block_ssti: true
+
+query_cost:
+  max_cost_per_query: 1000
+  base_cost_per_field: 1
+  expensive_percentile: 0.95
+  adaptive_costs: true
+
+disable_introspection: false # Set to true in production

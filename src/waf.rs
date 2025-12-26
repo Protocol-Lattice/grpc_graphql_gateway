@@ -531,3 +531,52 @@ pub fn validate_request(req: &async_graphql::Request) -> Result<()> {
 
     Ok(())
 }
+
+/// Validate raw query and variables against WAF rules
+pub fn validate_raw(query: &str, variables: Option<&serde_json::Value>, config: &WafConfig) -> Result<()> {
+    if !config.enabled {
+        return Ok(());
+    }
+
+    // Check query string
+    if config.block_sqli && sqli_regex().is_match(query) {
+        tracing::warn!("SQL Injection attempt detected in query string");
+        return Err(Error::Validation("Potential SQL Injection detected".to_string()));
+    }
+    if config.block_xss && xss_regex().is_match(query) {
+        tracing::warn!("XSS attempt detected in query string");
+        return Err(Error::Validation("Potential XSS detected".to_string()));
+    }
+    if config.block_nosqli && nosqli_regex().is_match(query) {
+        tracing::warn!("NoSQL Injection attempt detected in query string");
+         return Err(Error::Validation("Potential NoSQL Injection detected".to_string()));
+    }
+    if config.block_cmdi && cmdi_regex().is_match(query) {
+        tracing::warn!("Command Injection attempt detected in query string");
+         return Err(Error::Validation("Potential Command Injection detected".to_string()));
+    }
+    if config.block_traversal && traversal_regex().is_match(query) {
+        tracing::warn!("Path Traversal attempt detected in query string");
+         return Err(Error::Validation("Potential Path Traversal detected".to_string()));
+    }
+    if config.block_ldap && ldap_regex().is_match(query) {
+        tracing::warn!("LDAP Injection attempt detected in query string");
+         return Err(Error::Validation("Potential LDAP Injection detected".to_string()));
+    }
+    if config.block_ssti && ssti_regex().is_match(query) {
+        tracing::warn!("SSTI attempt detected in query string");
+         return Err(Error::Validation("Potential SSTI detected".to_string()));
+    }
+
+    // Check variables
+    if let Some(vars) = variables {
+        validate_json_with_config(vars, config)?;
+    }
+
+    Ok(())
+}
+
+/// Check for introspection queries
+pub fn is_introspection(query: &str) -> bool {
+    query.contains("__schema") || query.contains("__type")
+}

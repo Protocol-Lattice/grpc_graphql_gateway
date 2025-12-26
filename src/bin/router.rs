@@ -46,6 +46,10 @@ struct YamlConfig {
     rate_limit: Option<DdosConfig>,
     #[serde(default)]
     waf: Option<grpc_graphql_gateway::waf::WafConfig>,
+    #[serde(default)]
+    query_cost: Option<grpc_graphql_gateway::query_cost_analyzer::QueryCostConfig>,
+    #[serde(default)]
+    disable_introspection: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +186,9 @@ async fn async_main(yaml_config: YamlConfig, _config_path: String) {
         force_gbp: true, // Always enable GBP for this high-perf router
         apq: Some(grpc_graphql_gateway::persisted_queries::PersistedQueryConfig::default()),
         request_collapsing: Some(grpc_graphql_gateway::request_collapsing::RequestCollapsingConfig::default()),
+        waf: yaml_config.waf.clone(),
+        query_cost: yaml_config.query_cost.clone(),
+        disable_introspection: yaml_config.disable_introspection,
     };
 
     // Setup DDoS protection
