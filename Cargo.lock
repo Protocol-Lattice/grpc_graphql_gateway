@@ -1002,7 +1002,7 @@ dependencies = [
 
 [[package]]
 name = "grpc_graphql_gateway"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1042,6 +1042,7 @@ dependencies = [
  "rand 0.8.5",
  "rayon",
  "redis",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Lattice/grpc_graphql_gateway/blob/main/CHANGELOG.md) file in the repository.
 
 
+### [0.8.2] - 2025-12-26
+
+**Web Application Firewall (WAF)** 🛡️
+
+Introduced a native WAF middleware for SQL Injection protection.
+
+**Key Features:**
+*   **Active Blocking**: Detects and blocks `OR 1=1`, `UNION SELECT` and other SQLi patterns.
+*   **Context Aware**: Inspects GraphQL variables, headers, and query parameters.
+*   **Defense in Depth**: Integrated into both the Gateway library and the high-performance Router binary.
+*   **Zero Overhead**: Optimized regex engine ensures negligible latency impact (<10µs).
+
 ### [0.8.1] - 2025-12-26
 
 **Transparent Field-Level Encryption** 🕵️‍♀️

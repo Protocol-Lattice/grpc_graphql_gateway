@@ -85,6 +85,7 @@ pub mod smart_ttl;
 pub mod subscription;
 pub mod tracing_otel;
 pub mod types;
+pub mod waf;
 
 pub use analytics::{
     create_analytics, AnalyticsConfig, AnalyticsGuard, AnalyticsSnapshot, ErrorStats, FieldStats,
@@ -177,4 +178,5 @@ pub use subscription::{
     SubscriptionPayload, SubscriptionRegistry, SubscriptionResolver, SubscriptionState,
 };
 pub use tracing_otel::{init_tracer, shutdown_tracer, GraphQLSpan, GrpcSpan, TracingConfig};
+pub use waf::{validate_request, WafMiddleware};
 

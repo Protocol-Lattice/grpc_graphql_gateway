@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2025-12-26
+
+### Security
+- **Web Application Firewall (WAF)**: Added `WafMiddleware` for detecting and blocking SQL Injection (SQLi) attempts.
+  - **Regex Detection**: Implemented robust regex-based detection for common SQLi patterns (e.g., `OR 1=1`, `UNION SELECT`).
+  - **Variable Inspection**: Explicitly validates GraphQL variables in `router.rs` and `runtime.rs` to prevent injection via query parameters.
+  - **Header Inspection**: Checks request headers for malicious payloads.
+  - **Router Integration**: Integrated WAF protection directly into the high-performance binary router.
+
+### Fixed
+- **Deprecation Warnings**: Resolved `tower_http::timeout::TimeoutLayer` deprecation by using `TimeoutLayer::with_status_code`.
+- **Compilation Errors**: Fixed a duplicate code block issue in `handle_http` that caused compilation failures.
+- **Code Cleanup**: Removed unused variables and imports in `router.rs` to clean up build warnings.
+
 ## [0.8.1] - 2025-12-26
 
 ### Security

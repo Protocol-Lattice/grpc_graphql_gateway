@@ -334,6 +334,19 @@ impl ServeMux {
             processed_request
         };
 
+
+        // WAF Security Check: Validate request for SQL Injection patterns
+        if let Err(err) = crate::waf::validate_request(&processed_request) {
+            tracing::warn!("WAF blocked request: {}", err);
+            let mut server_err = ServerError::new(err.to_string(), None);
+            server_err.extensions = Some({
+                let mut ext = async_graphql::ErrorExtensionValues::default();
+                ext.set("code", "VALIDATION_ERROR");
+                ext
+            });
+            return async_graphql::Response::from_errors(vec![server_err]);
+        }
+
         // Validate query against whitelist if enabled
         if let Some(ref whitelist) = self.query_whitelist {
             // Extract operation ID from extensions if present
