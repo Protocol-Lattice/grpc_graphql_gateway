@@ -44,6 +44,8 @@ struct YamlConfig {
     subgraphs: Vec<SubgraphConfig>,
     #[serde(default)]
     rate_limit: Option<DdosConfig>,
+    #[serde(default)]
+    waf: Option<grpc_graphql_gateway::waf::WafConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,10 +88,12 @@ struct AppState {
     live_query_store: SharedLiveQueryStore,
     // Secret for decrypting subgraph responses
     gateway_secret: Option<String>,
+    // WAF Configuration
+    waf_config: grpc_graphql_gateway::waf::WafConfig,
 }
 
 impl AppState {
-    fn new(router: GbpRouter, ddos: DdosProtection, pool_size: usize) -> Self {
+    fn new(router: GbpRouter, ddos: DdosProtection, pool_size: usize, waf_config: grpc_graphql_gateway::waf::WafConfig) -> Self {
         // Pre-allocate encoder pool
         let mut encoders = Vec::with_capacity(pool_size);
         for _ in 0..pool_size {
@@ -104,6 +108,7 @@ impl AppState {
             encoder_pool: Arc::new(RwLock::new(encoders)),
             live_query_store: global_live_query_store(),
             gateway_secret,
+            waf_config,
         }
     }
 }
@@ -193,8 +198,13 @@ async fn async_main(yaml_config: YamlConfig, _config_path: String) {
         }
     });
 
+    // Setup WAF
+    let waf_config = yaml_config.waf.clone().unwrap_or_default();
+    println!("🛡️  WAF Enabled: {} [SQLi: {}, XSS: {}, NoSQLi: {}]", 
+        waf_config.enabled, waf_config.block_sqli, waf_config.block_xss, waf_config.block_nosqli);
+
     let router = GbpRouter::new(router_config.clone());
-    let state = Arc::new(AppState::new(router, ddos, 64));
+    let state = Arc::new(AppState::new(router, ddos, 64, waf_config));
 
     // Optimized Axum Router
     let mut app = Router::new()
@@ -364,7 +374,7 @@ async fn graphql_handler(
     // For now, let's check variables which is the most critical part.
 
     if let Some(vars) = &payload.variables {
-        if let Err(e) = grpc_graphql_gateway::waf::validate_json(vars) {
+        if let Err(e) = grpc_graphql_gateway::waf::validate_json_with_config(vars, &state.waf_config) {
             return Json(json!({
                 "errors": [{
                     "message": e.to_string(),
