@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] - 2025-12-26
+
+### Security
+- **Router Security Hardening**: Enhanced WAF protection and configuration safety.
+  - **Comprehensive WAF Verification**: Verified strict blocking of SQLi, XSS, and NoSQLi attacks in the live router environment.
+  - **Configuration Safety**: Updated `QueryCostConfig` to gracefully handle deprecated or missing configuration fields, preventing startup panics during upgrades.
+  - **Test Suite Expansion**: Added specific test cases for SQL Injection, XSS, and NoSQL Injection.
+
+### Fixed
+- **Configuration Parsing**: Fixed a panic in `QueryCostConfig` deserialization when optional fields were missing in `router.yaml`.
+- **Startup Stability**: Improved error handling during router initialization to provide clear feedback on configuration errors.
+
 ## [0.8.3] - 2025-12-26
 
 ### Security

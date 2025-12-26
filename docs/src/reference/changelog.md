@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Lattice/grpc_graphql_gateway/blob/main/CHANGELOG.md) file in the repository.
 
 
+### [0.8.4] - 2025-12-26
+
+**Router Security Hardening** 🛡️
+
+Verified and hardened the router's WAF and configuration systems for production stability.
+
+**Key Improvements:**
+*   **Verified WAF Protection**: Validated blocking of major attack vectors (SQLi, XSS, NoSQLi) with live security tests.
+*   **Robust Configuration**: hardened `router.yaml` parsing to gracefully handle deprecated or missing fields (specifically in `QueryCostConfig`).
+*   **Startup Stability**: Resolved startup panics caused by configuration mismatches, ensuring smoother upgrades.
+
 ### [0.8.3] - 2025-12-26
 
 **WAF Massive Expansion** 🛡️
