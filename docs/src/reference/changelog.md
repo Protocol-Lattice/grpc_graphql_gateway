@@ -7,6 +7,28 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 ## Recent Releases
 
+### [0.8.0] - 2025-12-26
+
+**Service-to-Service Authentication** 🔐
+
+Implemented a comprehensive security layer for internal federation traffic.
+
+**Key Features:**
+*   **Zero-Trust Subgraphs**: Subgraphs now verify the origin of requests using `X-Gateway-Secret`.
+*   **Dynamic Secrets**: Secrets are loaded from the `GATEWAY_SECRET` environment variable, eliminating hardcoded credentials.
+*   **Header Injection**: The Router dynamically signs every outbound request with the authorized secret.
+
+### [0.7.9] - 2025-12-26
+
+**DDoS Protection Hardening** 🛡️
+
+Addressed a critical resource management issue in the rate limiting system.
+
+**Improvements:**
+*   **Memory Leak Patched**: Fixed a potential DoS vector where stale IP rate limiters were never cleaned up.
+*   **Active Lifecycle Management**: Rate limiters are now tracked by `last_seen` timestamp and actively purged after inactivity.
+*   **Background Maintenance**: A new background task ensures consistent memory usage under long-running operation.
+
 ### [0.7.8] - 2025-12-25
 
 **Router Security Verification** 🕵️‍♂️

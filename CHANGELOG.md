@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2025-12-26
+
+### Security
+- **Service-to-Service Authentication**: Implemented strict authentication for subgraph communication.
+  - **Dynamic Secret Injection**: The Router now injects an `X-Gateway-Secret` header into all subgraph requests.
+  - **Environment Variable Support**: The secret is loaded securely from the `GATEWAY_SECRET` environment variable, removing hardcoded secrets from configuration files.
+  - **Subgraph Verification**: Updated `users`, `products`, and `reviews` subgraphs to verify incoming requests against the expected secret, blocking unauthorized access.
+- **Configuration Security**: `SubgraphConfig` now supports a `headers` map for defining custom per-subgraph headers (e.g., auth tokens).
+
+### Changed
+- **Router Configuration**: Removed hardcoded secrets from `router.yaml`. Use `GATEWAY_SECRET` env var instead.
+
+## [0.7.9] - 2025-12-26
+
+### Security
+- **DDoS Protection**: Implemented a robust cleanup mechanism for stale rate limiters.
+  - **Memory Leak Fix**: The `DdosProtection` struct now actively tracks and removes IP rate limiters that haven't been accessed recently (`cleanup_stale_limiters`), preventing potential memory exhaustion attacks.
+  - **Background Task**: Added a background task to the router to periodically sweep for stale entries.
+  - **TrackedLimiter**: Introduced a wrapper struct to track `last_seen` timestamps for granular lifecycle management.
+
+### Fixed
+- **Development Experience**: Reduced mock data size in example subgraphs (20k -> 10 items) to prevent massive payload overhead during local development and testing.
+
 ## [0.7.8] - 2025-12-25
 
 ### Security
