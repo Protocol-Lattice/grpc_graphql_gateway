@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2025-12-26
+
+### Security
+- **WAF Massive Expansion**: Significantly expanded the Web Application Firewall rule set to cover over 200+ attack patterns across 7 categories.
+  - **New Categories**: Added protection for **Command Injection (CMDI)**, **Path Traversal (LFI/RFI)**, **LDAP Injection**, and **Server-Side Template Injection (SSTI)**.
+  - **Enhanced SQLi**: Added checks for Blind SQLi, time-based attacks (`pg_sleep`, `waitfor delay`), file system access (`load_file`, `into outfile`), and execution vectors (`xp_cmdshell`).
+  - **Enhanced XSS**: Expanded coverage for event handlers (`onmouseover`, `onerror`), dangerous tags (`object`, `embed`), and obfuscated URI schemes.
+  - **Enhanced NoSQLi**: Added support for advanced MongoDB operators (`$where`, `$regex`, `$function`) and JavaScript execution.
+  - **Validation**: Added `test_waf_security.sh` comprehensive test suite verifying all 7 attack categories against the running router.
+
 ## [0.8.2] - 2025-12-26
 
 ### Security

@@ -5,6 +5,23 @@ All notable changes to this project are documented here.
 For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Lattice/grpc_graphql_gateway/blob/main/CHANGELOG.md) file in the repository.
 
 
+### [0.8.3] - 2025-12-26
+
+**WAF Massive Expansion** 🛡️
+
+Significantly expanded the Web Application Firewall rule set to cover over **200+ attack patterns** across 7 distinct security categories, turning the Router into a hardened security edge.
+
+**New Protections:**
+*   **Command Injection (CMDI)**: Blocks shell execution attempts (`| ls`, `; cat`, `$(...)`, `cmd.exe`).
+*   **Path Traversal**: Prevents unauthorized file access (`../`, `/etc/passwd`, `c:\windows`).
+*   **LDAP Injection**: Filters malicious LDAP queries (`*`, `(|`, `&)`).
+*   **SSTI**: Detects Server-Side Template Injection payloads (`{{}}`, `<%=`, `#{}`).
+
+**Enhanced Protections:**
+*   **Advanced SQLi**: Added Blind SQLi, time-based attacks, and file system access checks.
+*   **Deep XSS**: Expanded regex to catch obfuscated event handlers and dangerous tags.
+*   **NoSQLi**: Covered advanced MongoDB operators and JavaScript execution vectors.
+
 ### [0.8.2] - 2025-12-26
 
 **Web Application Firewall (WAF)** 🛡️
