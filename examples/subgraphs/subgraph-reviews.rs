@@ -9,7 +9,7 @@ async fn main() {
         .and(warp::header::optional::<String>("accept"))
         .map(|accept: Option<String>| {
             // Generate 20k reviews mocking real-time GraphQL dataset
-            let reviews: Vec<_> = (0..20000)
+            let reviews: Vec<_> = (0..10)
                 .map(|i| {
                     json!({
                         "id": i,  // Only unique field

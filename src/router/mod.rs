@@ -105,6 +105,47 @@ impl DdosConfig {
     }
 }
 
+/// Wrapper for per-IP rate limiter that tracks usage time
+struct TrackedLimiter {
+    limiter: Arc<
+        RateLimiter<
+            governor::state::NotKeyed,
+            governor::state::InMemoryState,
+            governor::clock::DefaultClock,
+        >,
+    >,
+    last_seen_secs: AtomicU64,
+}
+
+impl TrackedLimiter {
+    fn new(
+        limiter: Arc<
+            RateLimiter<
+                governor::state::NotKeyed,
+                governor::state::InMemoryState,
+                governor::clock::DefaultClock,
+            >,
+        >,
+    ) -> Self {
+        Self {
+            limiter,
+            last_seen_secs: AtomicU64::new(Self::current_secs()),
+        }
+    }
+
+    fn touch(&self) {
+        self.last_seen_secs.store(Self::current_secs(), Ordering::Relaxed);
+    }
+
+    fn current_secs() -> u64 {
+        use std::time::SystemTime;
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+}
+
 /// Two-tier DDoS protection with token bucket algorithm
 ///
 /// # Architecture
@@ -135,20 +176,7 @@ pub struct DdosProtection {
     >,
     /// Per-IP rate limiters (prevents single-source attacks)
     /// Uses RwLock for async-safe, lock-free reads
-    ip_limiters: Arc<
-        RwLock<
-            HashMap<
-                IpAddr,
-                Arc<
-                    RateLimiter<
-                        governor::state::NotKeyed,
-                        governor::state::InMemoryState,
-                        governor::clock::DefaultClock,
-                    >,
-                >,
-            >,
-        >,
-    >,
+    ip_limiters: Arc<RwLock<HashMap<IpAddr, Arc<TrackedLimiter>>>>,
     /// Configuration
     config: DdosConfig,
 }
@@ -179,26 +207,35 @@ impl DdosProtection {
         }
 
         // Tier 2: Check per-IP limit
-        let limiter = {
+        let tracked = {
             let limiters = self.ip_limiters.read().await;
             limiters.get(&ip).cloned()
         };
 
-        let limiter = match limiter {
-            Some(l) => l,
+        let tracked = match tracked {
+            Some(t) => {
+                t.touch();
+                t
+            }
             None => {
                 // Create new limiter for this IP (token bucket algorithm)
                 let quota = Quota::per_second(NonZeroU32::new(self.config.per_ip_rps).unwrap())
                     .allow_burst(NonZeroU32::new(self.config.per_ip_burst).unwrap());
                 let new_limiter = Arc::new(RateLimiter::direct(quota));
+                let new_tracked = Arc::new(TrackedLimiter::new(new_limiter));
 
                 let mut limiters = self.ip_limiters.write().await;
-                limiters.insert(ip, new_limiter.clone());
-                new_limiter
+                // Double check race condition
+                if let Some(existing) = limiters.get(&ip) {
+                    existing.clone()
+                } else {
+                    limiters.insert(ip, new_tracked.clone());
+                    new_tracked
+                }
             }
         };
 
-        if limiter.check().is_err() {
+        if tracked.limiter.check().is_err() {
             tracing::warn!(
                 client_ip = %ip,
                 limit = self.config.per_ip_rps,
@@ -212,12 +249,21 @@ impl DdosProtection {
     }
 
     /// Clean up stale IP limiters (call periodically)
-    pub async fn cleanup_stale_limiters(&self) {
-        let limiters = self.ip_limiters.write().await;
+    /// Removes limiters that haven't been used in the last `max_age_secs`
+    pub async fn cleanup_stale_limiters(&self, max_age_secs: u64) {
+        let mut limiters = self.ip_limiters.write().await;
         let before = limiters.len();
-        // In production, you'd track last access time and remove old entries
-        // For now, we just log the count
-        tracing::debug!("IP limiters in memory: {}", before);
+        
+        let now = TrackedLimiter::current_secs();
+        limiters.retain(|_, v| {
+            let last_seen = v.last_seen_secs.load(Ordering::Relaxed);
+            now.saturating_sub(last_seen) < max_age_secs
+        });
+        
+        let after = limiters.len();
+        if before != after {
+            tracing::debug!("🧹 Cleaned up stale IP limiters: {} -> {}", before, after);
+        }
     }
 }
 
@@ -799,7 +845,7 @@ mod tests {
         ddos.check(ip).await;
 
         // Just verify it runs without panic and logs
-        ddos.cleanup_stale_limiters().await;
+        ddos.cleanup_stale_limiters(60).await;
     }
 
     #[test]

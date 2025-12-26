@@ -10,7 +10,7 @@ async fn main() {
         .map(|accept: Option<String>| {
             // Generate 20k products mocking real-time GraphQL dataset
             // Matches production patterns: user profiles, org data, permissions, nested metadata
-            let products: Vec<_> = (0..20000)
+            let products: Vec<_> = (0..10)
                 .map(|i| {
                     json!({
                         "id": i,  // Only unique field (integer for realistic DB IDs)

@@ -169,6 +169,16 @@ async fn async_main(yaml_config: YamlConfig, _config_path: String) {
     let ddos_config = yaml_config.rate_limit.clone().unwrap_or(DdosConfig::relaxed());
     let ddos = DdosProtection::new(ddos_config.clone());
 
+    // Spawn background task to clean up stale IP rate limiters every minute
+    let ddos_cleanup = ddos.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            // Remove limiters not used in last 5 minutes
+            ddos_cleanup.cleanup_stale_limiters(300).await;
+        }
+    });
+
     let router = GbpRouter::new(router_config.clone());
     let state = Arc::new(AppState::new(router, ddos, 64));
 
