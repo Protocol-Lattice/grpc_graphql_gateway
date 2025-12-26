@@ -67,6 +67,10 @@ pub enum Error {
     #[error("Query complexity limit exceeded: {0}")]
     QueryTooComplex(String),
 
+    /// Validation errors
+    #[error("Validation error: {0}")]
+    Validation(String),
+
     /// Any other error
     #[error("Error: {0}")]
     Other(#[from] anyhow::Error),
@@ -103,6 +107,7 @@ impl Error {
                 Error::TooManyRequests(msg) => msg.clone(),
                 Error::QueryTooDeep(msg) => msg.clone(),
                 Error::QueryTooComplex(msg) => msg.clone(),
+                Error::Validation(msg) => format!("Validation error: {}", msg),
                 Error::Other(_) => "An unexpected error occurred".to_string(),
             }
         } else {
@@ -134,6 +139,7 @@ impl Error {
             Error::TooManyRequests(_) => "TOO_MANY_REQUESTS",
             Error::QueryTooDeep(_) => "QUERY_TOO_DEEP",
             Error::QueryTooComplex(_) => "QUERY_TOO_COMPLEX",
+            Error::Validation(_) => "VALIDATION_ERROR",
             Error::Other(_) => "UNKNOWN_ERROR",
         };
         map.insert("code".to_string(), serde_json::json!(code));

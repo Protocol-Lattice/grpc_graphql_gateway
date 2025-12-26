@@ -32,6 +32,9 @@ pub struct Context {
 
     /// Client IP address (if available)
     pub client_ip: Option<String>,
+
+    /// Encryption key for field-level encryption
+    pub encryption_key: Option<Vec<u8>>,
 }
 
 impl Context {
@@ -75,7 +78,18 @@ impl Context {
             request_start: Instant::now(),
             request_id,
             client_ip,
+            encryption_key: None,
         }
+    }
+
+    /// Set encryption key for the request scope
+    pub fn set_encryption_key(&mut self, key: Vec<u8>) {
+        self.encryption_key = Some(key);
+    }
+
+    /// Get encryption key if set
+    pub fn encryption_key(&self) -> Option<&[u8]> {
+        self.encryption_key.as_deref()
     }
 
     /// Validate IP address format
@@ -132,6 +146,46 @@ impl Context {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Encrypt a value if an encryption key is present
+    pub fn encrypt_value(&self, value: &str) -> crate::error::Result<String> {
+        if let Some(key) = &self.encryption_key {
+            // Simple XOR encryption for demonstration
+            // In production, use AES-GCM or ChaCha20-Poly1305
+            // This is just a placeholder to demonstrate the architecture
+            let encrypted: Vec<u8> = value
+                .bytes()
+                .enumerate()
+                .map(|(i, b)| b ^ key[i % key.len()])
+                .collect();
+            use base64::Engine;
+            Ok(base64::engine::general_purpose::STANDARD.encode(encrypted))
+        } else {
+            Ok(value.to_string())
+        }
+    }
+
+    /// Decrypt a value if an encryption key is present
+    pub fn decrypt_value(&self, value: &str) -> crate::error::Result<String> {
+        if let Some(key) = &self.encryption_key {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD.decode(value).map_err(|e| {
+                crate::error::Error::Validation(format!("Failed to decode base64: {}", e))
+            })?;
+            
+            let decrypted: Vec<u8> = bytes
+                .iter()
+                .enumerate()
+                .map(|(i, b)| b ^ key[i % key.len()])
+                .collect();
+                
+            String::from_utf8(decrypted).map_err(|e| {
+                crate::error::Error::Validation(format!("Failed to decode UTF-8: {}", e))
+            })
+        } else {
+            Ok(value.to_string())
+        }
     }
 }
 

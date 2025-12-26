@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2025-12-26
+
+### Security
+- **Transparent Field-Level Encryption**: Implemented a Zero-Trust architecture for sensitive data.
+  - **Context Support**: Added `encryption_key` and crypto utilities (`encrypt_value`/`decrypt_value`) to the middleware context.
+  - **Subgraph Encryption**: Subgraphs can now encrypt sensitive fields (e.g., PII like emails) using the shared gateway secret.
+  - **Router Decryption**: The Router automatically detects and decrypts these fields (`recursive_decrypt`) at the edge, ensuring data is encrypted in transit between services but readable by the authorized client.
+  - **Validation Errors**: Added `Validation` variant to standard error types for better error reporting during decryption failures.
+
 ## [0.8.0] - 2025-12-26
 
 ### Security

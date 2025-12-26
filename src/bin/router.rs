@@ -84,6 +84,8 @@ struct AppState {
     encoder_pool: Arc<RwLock<Vec<grpc_graphql_gateway::gbp::GbpEncoder>>>,
     // Live query store for WebSocket subscriptions
     live_query_store: SharedLiveQueryStore,
+    // Secret for decrypting subgraph responses
+    gateway_secret: Option<String>,
 }
 
 impl AppState {
@@ -93,11 +95,15 @@ impl AppState {
         for _ in 0..pool_size {
             encoders.push(grpc_graphql_gateway::gbp::GbpEncoder::new());
         }
+        
+        let gateway_secret = std::env::var("GATEWAY_SECRET").ok();
+
         Self {
             router,
             ddos,
             encoder_pool: Arc::new(RwLock::new(encoders)),
             live_query_store: global_live_query_store(),
+            gateway_secret,
         }
     }
 }
@@ -375,6 +381,13 @@ async fn graphql_handler(
                 }
             });
 
+            // Decrypt any encrypted fields using the Gateway Secret
+            // This enables "Transparent Encryption": Data is encrypted at rest/transit
+            // from subgraph -> gateway, but decrypted by gateway -> client.
+            let mut response_data_mut = response_data;
+            recursive_decrypt(&mut response_data_mut, state.gateway_secret.as_deref());
+            let response_data = response_data_mut;
+
             if accept_gbp {
                 // Use pooled encoder for binary response
                 let mut encoders = state.encoder_pool.write().await;
@@ -640,8 +653,53 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
     for (_, handle) in active_subscriptions {
         handle.abort();
     }
-    
-    tracing::info!(connection_id = %connection_id, "Subscription WebSocket connection closed");
+}
+
+/// Recursively scan JSON and decrypt marked fields
+fn recursive_decrypt(value: &mut serde_json::Value, secret: Option<&str>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            // Check if this object is an encrypted container
+            if let (Some(serde_json::Value::Bool(true)), Some(serde_json::Value::String(encrypted_val))) = 
+                (map.get("encrypted"), map.get("value")) 
+            {
+                if let Some(key_str) = secret {
+                    // It's an encrypted field - try to decrypt
+                    // We need to clone encrypted_val to use it while mutating map
+                    let enc_val = encrypted_val.clone();
+                    
+                    // Decrypt logic: Base64 decode -> XOR with key
+                    let decrypted_res = (|| -> Option<String> {
+                        use base64::Engine;
+                        let bytes = base64::engine::general_purpose::STANDARD.decode(&enc_val).ok()?;
+                        let key = key_str.as_bytes();
+                        let decrypted_bytes: Vec<u8> = bytes.iter()
+                            .enumerate()
+                            .map(|(i, b)| b ^ key[i % key.len()])
+                            .collect();
+                        String::from_utf8(decrypted_bytes).ok()
+                    })();
+
+                    if let Some(decrypted) = decrypted_res {
+                        // Replace the entire object with the decrypted string value
+                        *value = serde_json::Value::String(decrypted);
+                        return;
+                    }
+                }
+            }
+            
+            // Otherwise recurse into children
+            for (_, v) in map.iter_mut() {
+                recursive_decrypt(v, secret);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                recursive_decrypt(v, secret);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Handle a single GraphQL subscription

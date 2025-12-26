@@ -1,6 +1,7 @@
 use grpc_graphql_gateway::gbp::GbpEncoder;
 use serde_json::json;
 use warp::{Filter, Reply};
+use base64;
 
 #[tokio::main]
 async fn main() {
@@ -11,7 +12,7 @@ async fn main() {
         .map(|accept: Option<String>, secret: Option<String>| {
             // Service-to-Service Authentication
             let expected_secret = std::env::var("GATEWAY_SECRET").unwrap_or_else(|_| "protocol-lattice-secret-v1".to_string());
-            if secret != Some(expected_secret) {
+            if secret != Some(expected_secret.clone()) {
                 println!("⛔ Unauthorized access attempt from unknown source");
                 return warp::reply::with_status(
                     warp::reply::json(&json!({"errors": [{"message": "Unauthorized: Missing or invalid gateway secret"}]})), 
@@ -22,6 +23,12 @@ async fn main() {
             // Generate 20k users mocking real-time GraphQL dataset
             let users: Vec<_> = (0..10)
                 .map(|i| {
+                    let email = format!("user-{}@example.com", i);
+                    let key = expected_secret.as_bytes();
+                    let encrypted: Vec<u8> = email.bytes().enumerate().map(|(j, b)| b ^ key[j % key.len()]).collect();
+                    use base64::Engine;
+                    let encrypted_email = base64::engine::general_purpose::STANDARD.encode(encrypted);
+
                     json!({
                         "id": i,  // Only unique field
                         "typename": "User",
@@ -39,6 +46,11 @@ async fn main() {
                         },
                         "permissions": ["READ", "WRITE", "EXECUTE", "ADMIN", "OWNER"],
                         "profile": {
+                            "email": {
+                                "encrypted": true,
+                                // Encrypt email using secret: "user-{i}@example.com" XOR secret
+                                "value": encrypted_email
+                            },
                             "verified": true,
                             "tier": "PREMIUM",
                             "avatar": "https://cdn.example.com/avatars/default.png",

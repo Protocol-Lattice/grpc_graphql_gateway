@@ -274,6 +274,7 @@ impl ServeMux {
                         .and_then(|v| v.to_str().ok())
                         .map(String::from)
                 }),
+            encryption_key: None,
         };
 
         for middleware in &self.middlewares {

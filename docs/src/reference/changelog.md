@@ -5,7 +5,16 @@ All notable changes to this project are documented here.
 For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Lattice/grpc_graphql_gateway/blob/main/CHANGELOG.md) file in the repository.
 
 
-## Recent Releases
+### [0.8.1] - 2025-12-26
+
+**Transparent Field-Level Encryption** 🕵️‍♀️
+
+Introduced a Zero-Trust data protection layer for federated graphs.
+
+**Key Features:**
+*   **Encrypted Transport**: Sensitive fields (like PII) are encrypted by subgraphs using the gateway secret.
+*   **Edge Decryption**: The Router acts as a secure cryptographic edge, automatically decrypting data before final delivery to the client.
+*   **Seamless Integration**: Works transparently with existing resolvers via the new `recursive_decrypt` pipeline.
 
 ### [0.8.0] - 2025-12-26
 
