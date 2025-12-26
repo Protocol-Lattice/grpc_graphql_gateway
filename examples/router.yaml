@@ -13,8 +13,9 @@ subgraphs:
   - name: "reviews"
     url: "http://localhost:4004/graphql"
 
+
 rate_limit:
-  global_rps: 100000
+  global_rps: 50000
   per_ip_rps: 1000
   per_ip_burst: 2000
 

@@ -35,6 +35,8 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, RwLock};
 use futures::stream::StreamExt;
 use futures::SinkExt;
+use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
+use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 struct YamlConfig {
@@ -83,38 +85,82 @@ struct GraphQlQuery {
     extensions: Option<Value>,
 }
 
-struct AppState {
+struct InnerState {
     router: GbpRouter,
     ddos: DdosProtection,
-    // Pre-allocated encoder for hot path
-    encoder_pool: Arc<RwLock<Vec<grpc_graphql_gateway::gbp::GbpEncoder>>>,
-    // Live query store for WebSocket subscriptions
-    live_query_store: SharedLiveQueryStore,
-    // Secret for decrypting subgraph responses
     gateway_secret: Option<String>,
-    // WAF Configuration
     waf_config: grpc_graphql_gateway::waf::WafConfig,
 }
 
+struct AppState {
+    // Dynamic configurations that can be reloaded
+    inner: RwLock<Arc<InnerState>>,
+    
+    // Shared resources that persist across reloads
+    encoder_pool: Arc<RwLock<Vec<grpc_graphql_gateway::gbp::GbpEncoder>>>,
+    live_query_store: SharedLiveQueryStore,
+}
+
 impl AppState {
-    fn new(router: GbpRouter, ddos: DdosProtection, pool_size: usize, waf_config: grpc_graphql_gateway::waf::WafConfig) -> Self {
+    fn new(inner: InnerState, pool_size: usize) -> Self {
         // Pre-allocate encoder pool
         let mut encoders = Vec::with_capacity(pool_size);
         for _ in 0..pool_size {
             encoders.push(grpc_graphql_gateway::gbp::GbpEncoder::new());
         }
         
-        let gateway_secret = std::env::var("GATEWAY_SECRET").ok();
-
         Self {
-            router,
-            ddos,
+            inner: RwLock::new(Arc::new(inner)),
             encoder_pool: Arc::new(RwLock::new(encoders)),
             live_query_store: global_live_query_store(),
-            gateway_secret,
-            waf_config,
         }
     }
+}
+
+/// Helper to load configuration and build InnerState
+fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig)> {
+    let config_content = std::fs::read_to_string(config_path).map_err(|e| anyhow::anyhow!("Failed to read config: {}", e))?;
+    let mut yaml_config: YamlConfig = serde_yaml::from_str(&config_content).map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
+
+    // Allow overriding Gateway Secret from environment variable for security
+    let gateway_secret = std::env::var("GATEWAY_SECRET").ok();
+    if let Some(secret) = &gateway_secret {
+        for subgraph in &mut yaml_config.subgraphs {
+            subgraph.headers.insert("X-Gateway-Secret".to_string(), secret.clone());
+        }
+    }
+
+    // Parse port from listen address for RouterConfig
+    let port = yaml_config.server.listen
+        .split(':')
+        .last()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(4000);
+
+    let router_config = RouterConfig {
+        port,
+        subgraphs: yaml_config.subgraphs.clone(),
+        force_gbp: true,
+        apq: Some(grpc_graphql_gateway::persisted_queries::PersistedQueryConfig::default()),
+        request_collapsing: Some(grpc_graphql_gateway::request_collapsing::RequestCollapsingConfig::default()),
+        waf: yaml_config.waf.clone(),
+        query_cost: yaml_config.query_cost.clone(),
+        disable_introspection: yaml_config.disable_introspection,
+    };
+
+    let ddos_config = yaml_config.rate_limit.clone().unwrap_or(DdosConfig::relaxed());
+    let ddos = DdosProtection::new(ddos_config);
+
+    let waf_config = yaml_config.waf.clone().unwrap_or_default();
+
+    let router = GbpRouter::new(router_config);
+
+    Ok((InnerState {
+        router,
+        ddos,
+        gateway_secret,
+        waf_config,
+    }, yaml_config))
 }
 
 fn main() {
@@ -132,29 +178,14 @@ fn main() {
 
     println!("📝 Loading configuration from: {}", config_path);
 
-    // We use a custom runtime builder to support configuration of worker threads
-    // First, load config to see how many workers we need
-    let config_content = std::fs::read_to_string(&config_path).unwrap_or_else(|_| {
-        eprintln!("⚠️  Could not read {}, using defaults", config_path);
-        r#"
-server:
-  listen: "0.0.0.0:4000"
-  workers: 16
-cors:
-  allow_origins: ["*"]
-subgraphs: []
-        "#.to_string()
+    // Initial load
+    let (initial_inner, config) = load_inner_state(&config_path).unwrap_or_else(|e| {
+        eprintln!("❌ Fatal startup error: {}", e);
+        std::process::exit(1);
     });
 
-    let mut config: YamlConfig = serde_yaml::from_str(&config_content).expect("Failed to parse router configuration");
-
-    // Allow overriding Gateway Secret from environment variable for security
-    if let Ok(secret) = std::env::var("GATEWAY_SECRET") {
-        println!("🔑 Injecting Gateway Secret from environment");
-        for subgraph in &mut config.subgraphs {
-            subgraph.headers.insert("X-Gateway-Secret".to_string(), secret.clone());
-        }
-    }
+    // Create state with initial config
+    let state = Arc::new(AppState::new(initial_inner, 64));
 
     // Configure and start Tokio runtime
     tokio::runtime::Builder::new_multi_thread()
@@ -162,56 +193,119 @@ subgraphs: []
         .enable_all()
         .build()
         .unwrap()
-        .block_on(async_main(config, config_path));
+        .block_on(async_main(config, config_path, state));
 }
 
-async fn async_main(yaml_config: YamlConfig, _config_path: String) {
+fn start_config_watcher(config_path: String, state: Arc<AppState>) {
+    tokio::spawn(async move {
+        // Channel to bridge blocking watcher to async world
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        
+        let path = config_path.clone();
+        
+        // Spawn blocking thread for file watching
+        std::thread::spawn(move || {
+            let (std_tx, std_rx) = std::sync::mpsc::channel();
+            
+            let mut watcher = match RecommendedWatcher::new(std_tx, NotifyConfig::default()) {
+               Ok(w) => w,
+               Err(e) => {
+                   tracing::error!("Failed to create watcher: {}", e);
+                   return;
+               }
+            };
+
+            if let Err(e) = watcher.watch(Path::new(&path), RecursiveMode::NonRecursive) {
+                tracing::error!("Failed to watch config file: {}", e);
+                return;
+            }
+
+            for res in std_rx {
+                match res {
+                    Ok(event) => {
+                        // Only care if something changed
+                        if event.kind.is_modify() {
+                             let _ = tx.send(());
+                        }
+                    },
+                    Err(e) => tracing::error!("Watch error: {:?}", e),
+                }
+            }
+        });
+
+        tracing::info!("👀 Watching for config changes in {}", config_path);
+
+        while let Some(_) = rx.recv().await {
+            // Debounce: wait 100ms and drain any other events
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            while rx.try_recv().is_ok() {}
+
+            tracing::info!("📝 Config change detected, reloading...");
+            
+            match load_inner_state(&config_path) {
+                Ok((new_inner, new_config)) => {
+                    {
+                        let mut inner = state.inner.write().await;
+                        *inner = Arc::new(new_inner);
+                    } // Release write lock immediately
+                    
+                    tracing::info!("♻️  Configuration reloaded successfully!");
+                    
+                    // Log new state summary
+                    tracing::info!(
+                        "   Active Subgraphs: {}, DDoS: {}/{} RPS, WAF: {}", 
+                        new_config.subgraphs.len(),
+                        new_config.rate_limit.as_ref().map(|r| r.global_rps).unwrap_or(0),
+                        new_config.rate_limit.as_ref().map(|r| r.per_ip_rps).unwrap_or(0),
+                        new_config.waf.map(|w| w.enabled).unwrap_or(false)
+                    );
+                },
+                Err(e) => {
+                    tracing::error!("❌ Failed to reload config (keeping previous version): {}", e);
+                }
+            }
+        }
+    });
+}
+
+async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<AppState>) {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_target(false)
         .init();
 
-    // Parse port from listen address
-    let port = yaml_config.server.listen
-        .split(':')
-        .last()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(4000);
-
-    // Convert YamlConfig to RouterConfig
-    let router_config = RouterConfig {
-        port,
-        subgraphs: yaml_config.subgraphs.clone(),
-        force_gbp: true, // Always enable GBP for this high-perf router
-        apq: Some(grpc_graphql_gateway::persisted_queries::PersistedQueryConfig::default()),
-        request_collapsing: Some(grpc_graphql_gateway::request_collapsing::RequestCollapsingConfig::default()),
-        waf: yaml_config.waf.clone(),
-        query_cost: yaml_config.query_cost.clone(),
-        disable_introspection: yaml_config.disable_introspection,
-    };
-
-    // Setup DDoS protection
-    let ddos_config = yaml_config.rate_limit.clone().unwrap_or(DdosConfig::relaxed());
-    let ddos = DdosProtection::new(ddos_config.clone());
-
-    // Spawn background task to clean up stale IP rate limiters every minute
-    let ddos_cleanup = ddos.clone();
+    // Start background cleanup task (this needs to be updated to use inner state too!)
+    let ddos_state = state.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
-            // Remove limiters not used in last 5 minutes
-            ddos_cleanup.cleanup_stale_limiters(300).await;
+            // Access current DDOS protection instance
+            let inner = ddos_state.inner.read().await;
+            inner.ddos.cleanup_stale_limiters(300).await;
         }
     });
 
-    // Setup WAF
-    let waf_config = yaml_config.waf.clone().unwrap_or_default();
-    println!("🛡️  WAF Enabled: {} [SQLi: {}, XSS: {}, NoSQLi: {}]", 
-        waf_config.enabled, waf_config.block_sqli, waf_config.block_xss, waf_config.block_nosqli);
+    // Start Config Watcher
+    start_config_watcher(config_path, state.clone());
 
-    let router = GbpRouter::new(router_config.clone());
-    let state = Arc::new(AppState::new(router, ddos, 64, waf_config));
+    // Print Banner based on initial config
+     let ddos_config = yaml_config.rate_limit.unwrap_or(DdosConfig::relaxed());
+     println!();
+     println!("  ╔═══════════════════════════════════════════════════════════╗");
+     println!("  ║      GBP Router + Hot Reloading + Live Queries           ║");
+     println!("  ╠═══════════════════════════════════════════════════════════╣");
+     println!("  ║  Listening:     {}                       ║", yaml_config.server.listen);
+     println!("  ║  Workers:       {}                                       ║", yaml_config.server.workers);
+     println!("  ║  Subgraphs:     {}                                       ║", yaml_config.subgraphs.len());
+     for sg in &yaml_config.subgraphs {
+         println!("  ║   - {:<12} {} ║", sg.name, sg.url);
+     }
+     println!("  ║  GBP Binary:    ✅ Bidirectional (99% compression)        ║");
+     println!("  ║  DDoS Shield:   {} global RPS, {} per-IP            ║", ddos_config.global_rps, ddos_config.per_ip_rps);
+     println!("  ╚═══════════════════════════════════════════════════════════╝");
+     println!();
+
 
     // Optimized Axum Router
     let mut app = Router::new()
@@ -242,6 +336,8 @@ async fn async_main(yaml_config: YamlConfig, _config_path: String) {
         );
 
     // Apply CORS based on configuration
+    // Note: CORS config is part of server setup, difficult to hot-reload without rebuilding Axum router.
+    // For now, CORS changes will require restart, but other runtime configs (WAF, Subgraphs) will reload.
     let cors_config = yaml_config.cors.clone().unwrap_or(CorsConfig {
         allow_origins: vec!["*".to_string()],
     });
@@ -269,23 +365,7 @@ async fn async_main(yaml_config: YamlConfig, _config_path: String) {
     }
 
     // Apply Timeout
-    // Use with_status_code to handle timeout gracefully (returns 408 Request Timeout)
     let app = app.layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(30)));
-
-    println!();
-    println!("  ╔═══════════════════════════════════════════════════════════╗");
-    println!("  ║      GBP Router + Live Queries + Subscriptions           ║");
-    println!("  ╠═══════════════════════════════════════════════════════════╣");
-    println!("  ║  Listening:     {}                       ║", yaml_config.server.listen);
-    println!("  ║  Workers:       {}                                       ║", yaml_config.server.workers);
-    println!("  ║  Subgraphs:     {}                                       ║", yaml_config.subgraphs.len());
-    for sg in &yaml_config.subgraphs {
-        println!("  ║   - {:<12} {} ║", sg.name, sg.url);
-    }
-    println!("  ║  GBP Binary:    ✅ Bidirectional (99% compression)        ║");
-    println!("  ║  DDoS Shield:   {} global RPS, {} per-IP            ║", ddos_config.global_rps, ddos_config.per_ip_rps);
-    println!("  ╚═══════════════════════════════════════════════════════════╝");
-    println!();
 
     let listener = TcpListener::bind(&yaml_config.server.listen).await.unwrap();
 
@@ -314,8 +394,11 @@ async fn graphql_handler(
         .and_then(|s| s.trim().parse::<IpAddr>().ok())
         .unwrap_or(addr.ip());
 
+    // Acquire read lock for current configuration state
+    let inner = state.inner.read().await;
+
     // DDoS check (< 1µs for allowed requests)
-    if !state.ddos.check(client_ip).await {
+    if !inner.ddos.check(client_ip).await {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({
@@ -381,7 +464,7 @@ async fn graphql_handler(
     // For now, let's check variables which is the most critical part.
 
     if let Some(vars) = &payload.variables {
-        if let Err(e) = grpc_graphql_gateway::waf::validate_json_with_config(vars, &state.waf_config) {
+        if let Err(e) = grpc_graphql_gateway::waf::validate_json_with_config(vars, &inner.waf_config) {
             return Json(json!({
                 "errors": [{
                     "message": e.to_string(),
@@ -406,7 +489,7 @@ async fn graphql_handler(
         .unwrap_or(is_binary_request); // If request was binary, default to binary response
 
     // Execute federated query
-    match state.router.execute_scatter_gather(
+    match inner.router.execute_scatter_gather(
             payload.query.as_deref(), 
             payload.variables.as_ref(), 
             payload.extensions.as_ref()
@@ -427,7 +510,7 @@ async fn graphql_handler(
             // This enables "Transparent Encryption": Data is encrypted at rest/transit
             // from subgraph -> gateway, but decrypted by gateway -> client.
             let mut response_data_mut = response_data;
-            recursive_decrypt(&mut response_data_mut, state.gateway_secret.as_deref());
+            recursive_decrypt(&mut response_data_mut, inner.gateway_secret.as_deref());
             let response_data = response_data_mut;
 
             if accept_gbp {
@@ -608,7 +691,10 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
                                     
                                     tokio::spawn(async move {
                                         // Execute as regular query
-                                        match state_clone.router.execute_scatter_gather(
+                                        // Acquire lock
+                                        let inner = state_clone.inner.read().await;
+                                        
+                                        match inner.router.execute_scatter_gather(
                                             Some(&query_owned),
                                             vars_owned.as_ref(),
                                             None,
@@ -936,11 +1022,15 @@ async fn handle_live_query_subscription(
     let clean_query = strip_live_directive(&query);
     
     // Execute the initial query through the router
-    let initial_result = state.router.execute_scatter_gather(
+    // Execute the initial query through the router
+    // Acquire read lock for router
+    let inner = state.inner.read().await;
+    let initial_result = inner.router.execute_scatter_gather(
         Some(&clean_query),
         variables.as_ref(),
         None,
     ).await;
+    // Release lock by dropping inner (happens automatically at end of scope, but scoping explicitely if needed)
 
     match initial_result {
         Ok(data) => {
@@ -1005,7 +1095,8 @@ async fn handle_live_query_subscription(
                         if let Some(query_info) = state.live_query_store.get(&subscription_id) {
                             if query_info.should_update(&event) && query_info.throttle_elapsed() {
                                 // Re-execute the query
-                                match state.router.execute_scatter_gather(
+                                // Re-execute the query
+                                match inner.router.execute_scatter_gather(
                                     Some(&clean_query),
                                     variables.as_ref(),
                                     None,

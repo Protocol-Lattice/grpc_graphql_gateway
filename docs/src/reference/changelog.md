@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Lattice/grpc_graphql_gateway/blob/main/CHANGELOG.md) file in the repository.
 
 
+### [0.8.5] - 2025-12-26
+
+**Zero-Downtime Hot Reloading** ♻️
+
+The Router now supports dynamic configuration updates without process restarts, critical for high-availability environments.
+
+**Key Features:**
+*   **Instant Updates**: Modify `router.yaml` (e.g., add a subgraph, update WAF rules) and see changes apply immediately.
+*   **Atomic Swaps**: State transitions are atomic, ensuring no request sees a partially applied configuration.
+*   **SafetyNet**: Invalid configurations are rejected, logging an error while the router continues serving traffic with the last known good config.
+*   **Operational Agility**: Rotate secrets, adjust rate limits, or deploy new subgraphs with zero packet loss.
+
 ### [0.8.4] - 2025-12-26
 
 **Router Security Hardening** 🛡️

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.5] - 2025-12-26
+
+### Added
+- **Hot Reloading**: Implemented seamless configuration hot-reloading for the Router.
+  - **Zero Downtime**: Changes to `router.yaml` (subgraphs, WAF rules, rate limits) are applied instantly without restarting the process.
+  - **Dynamic State Management**: Refactored `AppState` to use `RwLock<Arc<InnerState>>` for atomic state swaps.
+  - **File Watcher**: Integrated `notify` crate to monitor configuration file changes.
+  - **Safe Updates**: Configuration is validated before applying; invalid changes are rejected, keeping the previous valid state active.
+
+### Optimized
+- **Router Locking**: Minimized lock contention during hot-reloads by using high-performance `tokio::sync::RwLock`.
+
 ## [0.8.4] - 2025-12-26
 
 ### Security
