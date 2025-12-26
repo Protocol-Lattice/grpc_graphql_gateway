@@ -131,7 +131,15 @@ subgraphs: []
         "#.to_string()
     });
 
-    let config: YamlConfig = serde_yaml::from_str(&config_content).expect("Failed to parse router configuration");
+    let mut config: YamlConfig = serde_yaml::from_str(&config_content).expect("Failed to parse router configuration");
+
+    // Allow overriding Gateway Secret from environment variable for security
+    if let Ok(secret) = std::env::var("GATEWAY_SECRET") {
+        println!("🔑 Injecting Gateway Secret from environment");
+        for subgraph in &mut config.subgraphs {
+            subgraph.headers.insert("X-Gateway-Secret".to_string(), secret.clone());
+        }
+    }
 
     // Configure and start Tokio runtime
     tokio::runtime::Builder::new_multi_thread()

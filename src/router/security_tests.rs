@@ -125,6 +125,7 @@ async fn test_security_subgraph_response_validation() {
         subgraphs: vec![SubgraphConfig {
             name: "bad_subgraph".into(),
             url: format!("http://{}/graphql", mock_addr),
+            headers: std::collections::HashMap::new(),
         }],
         force_gbp: false,
         apq: None,
@@ -170,6 +171,7 @@ async fn test_security_huge_response_handling() {
         subgraphs: vec![SubgraphConfig {
             name: "huge_subgraph".into(),
             url: format!("http://{}/graphql", mock_addr),
+            headers: std::collections::HashMap::new(),
         }],
         force_gbp: false,
         apq: None,
@@ -236,10 +238,12 @@ async fn test_isolate_slow_loris_subgraph() {
             SubgraphConfig {
                 name: "fast".into(),
                 url: format!("http://{}/graphql", fast_addr),
+                headers: std::collections::HashMap::new(),
             },
             SubgraphConfig {
                 name: "slow".into(),
                 url: format!("http://{}/graphql", slow_addr),
+                headers: std::collections::HashMap::new(),
             },
         ],
         force_gbp: false,

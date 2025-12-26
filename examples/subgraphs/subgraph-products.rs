@@ -7,7 +7,17 @@ async fn main() {
     let products_route = warp::path("graphql")
         .and(warp::post())
         .and(warp::header::optional::<String>("accept"))
-        .map(|accept: Option<String>| {
+        .and(warp::header::optional::<String>("x-gateway-secret"))
+        .map(|accept: Option<String>, secret: Option<String>| {
+             // Service-to-Service Authentication
+             let expected_secret = std::env::var("GATEWAY_SECRET").unwrap_or_else(|_| "protocol-lattice-secret-v1".to_string());
+             if secret != Some(expected_secret) {
+                return warp::reply::with_status(
+                    warp::reply::json(&json!({"errors": [{"message": "Unauthorized"}]})), 
+                    warp::http::StatusCode::UNAUTHORIZED
+                ).into_response();
+            }
+
             // Generate 20k products mocking real-time GraphQL dataset
             // Matches production patterns: user profiles, org data, permissions, nested metadata
             let products: Vec<_> = (0..10)

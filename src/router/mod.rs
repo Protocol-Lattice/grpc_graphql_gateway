@@ -291,6 +291,9 @@ pub struct SubgraphConfig {
     pub name: String,
     /// URL of the subgraph (e.g., "http://localhost:4002/graphql")
     pub url: String,
+    /// Optional headers to send to this subgraph (e.g., Auth tokens)
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
 }
 
 /// A high-performance GBP-enabled Federation Router
@@ -352,6 +355,11 @@ impl GbpRouter {
                     gbp = true,
                     "🚀 High-performance subgraph configured"
                 );
+            }
+
+            // Apply custom headers (Auth, etc.)
+            for (key, value) in &subgraph.headers {
+                builder = builder.default_header(key, value);
             }
 
             clients.insert(
@@ -757,6 +765,7 @@ mod tests {
             subgraphs: vec![SubgraphConfig {
                 name: "users".into(),
                 url: "http://localhost:4002".into(),
+                headers: HashMap::new(),
             }],
             force_gbp: true,
             apq: None,
@@ -855,6 +864,7 @@ mod tests {
             subgraphs: vec![SubgraphConfig {
                 name: "test".into(),
                 url: "http://localhost:8080".into(),
+                headers: HashMap::new(),
             }],
             force_gbp: true,
             apq: None,
@@ -910,6 +920,7 @@ mod tests {
             subgraphs: vec![SubgraphConfig {
                 name: "failing".into(),
                 url: "http://localhost:9999/graphql".into(), // Likely closed port
+                headers: HashMap::new(),
             }],
             force_gbp: false,
             apq: None,
@@ -942,6 +953,7 @@ mod tests {
             subgraphs: vec![SubgraphConfig {
                 name: "failing".into(),
                 url: "http://localhost:9999/graphql".into(),
+                headers: HashMap::new(),
             }],
             force_gbp: false,
             apq: None,
@@ -996,6 +1008,7 @@ mod tests {
             subgraphs: vec![SubgraphConfig {
                 name: "test".into(),
                 url: format!("http://{}", addr),
+                headers: HashMap::new(),
             }],
             force_gbp: false,
             apq: Some(PersistedQueryConfig::default()),
