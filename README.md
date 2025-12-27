@@ -117,6 +117,7 @@ cargo run --bin router router.yaml
 - ✅ **Request Collapsing** - Deduplicate identical in-flight requests
 
 **Live Query Example:**
+
 ```javascript
 const ws = new WebSocket('ws://localhost:4000/graphql/live', 'graphql-transport-ws');
 
@@ -128,6 +129,20 @@ ws.send(JSON.stringify({
   }
 }));
 ```
+
+### ✅ Configuration Validation
+
+You can validate your `router.yaml` without starting the server, useful for CI/CD pipelines:
+
+```bash
+cargo run --bin router -- --check router.yaml
+# Output:
+# 🔍 Validating configuration: router.yaml
+# ✅ Configuration is valid!
+#    - Subgraphs: 3
+#    - Listen:    0.0.0.0:4000
+```
+
 
 ## 🔧 Production Config
 

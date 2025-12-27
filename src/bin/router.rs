@@ -169,6 +169,36 @@ fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig
 fn main() {
     // Determine config path from args or defaults
     let args: Vec<String> = std::env::args().collect();
+    
+    // Check for validation mode
+    if args.len() > 1 && (args[1] == "--check" || args[1] == "validate") {
+        let config_path = if args.len() > 2 {
+            args[2].clone()
+        } else if std::path::Path::new("router.yaml").exists() {
+            "router.yaml".to_string()
+        } else if std::path::Path::new("examples/router.yaml").exists() {
+            "examples/router.yaml".to_string()
+        } else {
+             eprintln!("❌ Usage: router --check <config_path>");
+             std::process::exit(1);
+        };
+        
+        println!("🔍 Validating configuration: {}", config_path);
+        match load_inner_state(&config_path) {
+            Ok((_, config)) => {
+                 println!("✅ Configuration is valid!");
+                 println!("   - Subgraphs: {}", config.subgraphs.len());
+                 println!("   - Listen:    {}", config.server.listen);
+                 println!("   - Workers:   {}", config.server.workers);
+                 std::process::exit(0);
+            },
+            Err(e) => {
+                eprintln!("❌ Configuration is invalid: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
     let config_path = if args.len() > 1 {
         args[1].clone()
     } else if std::path::Path::new("router.yaml").exists() {
@@ -385,8 +415,35 @@ async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<App
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await
     .unwrap();
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    println!("🛑 Signal received, starting graceful shutdown...");
 }
 
 /// Binary-aware GraphQL handler
@@ -1044,14 +1101,15 @@ async fn handle_live_query_subscription(
     
     // Execute the initial query through the router
     // Execute the initial query through the router
-    // Acquire read lock for router
-    let inner = state.inner.read().await;
-    let initial_result = inner.router.execute_scatter_gather(
-        Some(&clean_query),
-        variables.as_ref(),
-        None,
-    ).await;
-    // Release lock by dropping inner (happens automatically at end of scope, but scoping explicitely if needed)
+    let initial_result = {
+        // Acquire read lock for router (scoped to drop immediately after use)
+        let inner = state.inner.read().await;
+        inner.router.execute_scatter_gather(
+            Some(&clean_query),
+            variables.as_ref(),
+            None,
+        ).await
+    };
 
     match initial_result {
         Ok(data) => {
@@ -1116,12 +1174,17 @@ async fn handle_live_query_subscription(
                         if let Some(query_info) = state.live_query_store.get(&subscription_id) {
                             if query_info.should_update(&event) && query_info.throttle_elapsed() {
                                 // Re-execute the query
-                                // Re-execute the query
-                                match inner.router.execute_scatter_gather(
-                                    Some(&clean_query),
-                                    variables.as_ref(),
-                                    None,
-                                ).await {
+                                // Re-acquire lock only for execution
+                                let execution_result = {
+                                    let inner = state.inner.read().await;
+                                    inner.router.execute_scatter_gather(
+                                        Some(&clean_query),
+                                        variables.as_ref(),
+                                        None,
+                                    ).await
+                                };
+
+                                match execution_result {
                                     Ok(updated_data) => {
                                         if let Err(e) = state.live_query_store.send_update(
                                             &subscription_id,
