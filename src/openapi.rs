@@ -36,13 +36,15 @@
 //! ```
 
 use crate::rest_connector::{
-    HttpMethod, RestConnector, RestEndpoint, RestFieldType, RestResponseField, RestResponseSchema,
+    ApiKeyInterceptor, BearerAuthInterceptor, HttpMethod, RestConnector, RestEndpoint,
+    RestFieldType, RestResponseField, RestResponseSchema,
 };
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// OpenAPI specification parser
@@ -56,6 +58,7 @@ pub struct OpenApiParser {
     operation_filter: Option<Box<dyn Fn(&str, &str) -> bool + Send + Sync>>,
     tag_filter: Option<Vec<String>>,
     prefix: Option<String>,
+    auth_config: HashMap<String, String>,
 }
 
 impl std::fmt::Debug for OpenApiParser {
@@ -94,9 +97,16 @@ pub struct OpenApiSpec {
     /// Component schemas
     #[serde(default)]
     pub components: Option<Components>,
+    /// Global security requirements
+    #[serde(default)]
+    pub security: Vec<HashMap<String, Vec<String>>>,
     /// Swagger 2.0 definitions (equivalent to components.schemas)
     #[serde(default)]
     pub definitions: Option<HashMap<String, SchemaObject>>,
+    /// Swagger 2.0 security definitions
+    #[serde(default)]
+    #[serde(rename = "securityDefinitions")]
+    pub security_definitions: Option<HashMap<String, SecurityScheme>>,
     /// Swagger 2.0 host
     #[serde(default)]
     pub host: Option<String>,
@@ -179,6 +189,9 @@ pub struct Operation {
     /// Response definitions
     #[serde(default)]
     pub responses: HashMap<String, Response>,
+    /// Security requirements override
+    #[serde(default)]
+    pub security: Option<Vec<HashMap<String, Vec<String>>>>,
     /// Whether the operation is deprecated
     #[serde(default)]
     pub deprecated: bool,
@@ -248,6 +261,10 @@ pub struct Components {
     /// Schema definitions
     #[serde(default)]
     pub schemas: HashMap<String, SchemaObject>,
+    /// Security schemes
+    #[serde(default)]
+    #[serde(rename = "securitySchemes")]
+    pub security_schemes: HashMap<String, SecurityScheme>,
 }
 
 /// Schema object definition
@@ -289,6 +306,31 @@ pub struct SchemaObject {
     /// AnyOf composition
     #[serde(rename = "anyOf")]
     pub any_of: Option<Vec<SchemaObject>>,
+}
+
+/// Security scheme definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityScheme {
+    /// Scheme type (apiKey, http, oauth2, openIdConnect)
+    #[serde(rename = "type")]
+    pub scheme_type: String,
+    /// Scheme description
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Header/query parameter name (for apiKey)
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Location (query, header, cookie) (for apiKey)
+    #[serde(default)]
+    #[serde(rename = "in")]
+    pub location: Option<String>,
+    /// HTTP scheme (bearer, basic) (for http)
+    #[serde(default)]
+    pub scheme: Option<String>,
+    /// Bearer format hint (for http/bearer)
+    #[serde(default)]
+    #[serde(rename = "bearerFormat")]
+    pub bearer_format: Option<String>,
 }
 
 impl OpenApiParser {
@@ -337,6 +379,7 @@ impl OpenApiParser {
             operation_filter: None,
             tag_filter: None,
             prefix: None,
+            auth_config: HashMap::new(),
         })
     }
 
@@ -352,6 +395,7 @@ impl OpenApiParser {
             operation_filter: None,
             tag_filter: None,
             prefix: None,
+            auth_config: HashMap::new(),
         })
     }
 
@@ -413,6 +457,19 @@ impl OpenApiParser {
         self
     }
 
+    /// Set credentials for a security scheme
+    ///
+    /// The `scheme_name` must match the security scheme name in the OpenAPI spec.
+    ///
+    /// # Info
+    /// - For `apiKey` (header): The value is the key itself
+    /// - For `http` (bearer): The value is the token (without "Bearer " prefix)
+    /// - For `http` (basic): The value is the encoded string or unused (not yet fully supported)
+    pub fn with_auth(mut self, scheme_name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.auth_config.insert(scheme_name.into(), value.into());
+        self
+    }
+
     /// Get the parsed OpenAPI spec
     pub fn spec(&self) -> &OpenApiSpec {
         &self.spec
@@ -429,6 +486,38 @@ impl OpenApiParser {
         let mut builder = RestConnector::builder()
             .base_url(&base_url)
             .timeout(self.timeout);
+
+        // Configure authentication
+        let security_schemes = self.get_security_schemes();
+        for (name, scheme) in &security_schemes {
+            if let Some(value) = self.auth_config.get(name) {
+                match scheme.scheme_type.as_str() {
+                    "apiKey" => {
+                        if let (Some(ref param_name), Some(ref location)) =
+                            (&scheme.name, &scheme.location)
+                        {
+                            if location == "header" {
+                                builder = builder.interceptor(Arc::new(ApiKeyInterceptor::new(
+                                    param_name.clone(),
+                                    value.clone(),
+                                )));
+                            }
+                            // TODO: Support query param auth if needed
+                        }
+                    }
+                    "http" => {
+                        if let Some(ref auth_scheme) = scheme.scheme {
+                            if auth_scheme.eq_ignore_ascii_case("bearer") {
+                                builder = builder.interceptor(Arc::new(
+                                    BearerAuthInterceptor::new(value.clone()),
+                                ));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         // Get schemas for reference resolution
         let schemas = self.get_schemas();
@@ -522,6 +611,23 @@ impl OpenApiParser {
         }
 
         schemas
+    }
+
+    /// Get all security schemes (from components or definitions)
+    fn get_security_schemes(&self) -> HashMap<String, SecurityScheme> {
+        let mut schemes = HashMap::new();
+
+        // OpenAPI 3.0+ components.securitySchemes
+        if let Some(ref components) = self.spec.components {
+            schemes.extend(components.security_schemes.clone());
+        }
+
+        // Swagger 2.0 securityDefinitions
+        if let Some(ref definitions) = self.spec.security_definitions {
+            schemes.extend(definitions.clone());
+        }
+
+        schemes
     }
 
     /// Create an endpoint from an operation
@@ -1061,4 +1167,52 @@ mod tests {
         let pet_schema = schemas.get("Pet").unwrap();
         assert_eq!(pet_schema.schema_type.as_deref(), Some("object"));
     }
+
+    #[test]
+    fn test_security_scheme_parsing_and_config() {
+        let json = r##"{
+            "openapi": "3.0.0",
+            "info": {
+                "title": "Secure API",
+                "version": "1.0.0"
+            },
+            "servers": [
+                {"url": "https://api.secure.com"}
+            ],
+            "paths": {
+                "/secure": {
+                    "get": {
+                        "operationId": "getSecure",
+                        "responses": {
+                            "200": {"description": "OK"}
+                        }
+                    }
+                }
+            },
+            "components": {
+                "securitySchemes": {
+                    "apiKeyAuth": {
+                        "type": "apiKey",
+                        "in": "header",
+                        "name": "X-API-Key"
+                    },
+                    "bearerAuth": {
+                        "type": "http",
+                        "scheme": "bearer"
+                    }
+                }
+            }
+        }"##;
+
+        let parser = OpenApiParser::from_string(json, false)
+            .unwrap()
+            .with_auth("apiKeyAuth", "secret-key")
+            .with_auth("bearerAuth", "some-token");
+
+        let connector = parser.build().unwrap();
+
+        assert_eq!(connector.base_url(), "https://api.secure.com");
+    }
+    
+
 }
