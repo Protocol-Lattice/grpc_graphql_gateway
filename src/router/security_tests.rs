@@ -338,3 +338,22 @@ async fn test_circuit_breaker_integration() {
     // We expect "Circuit breaker open" message in the error output
     assert!(err_str.contains("Circuit breaker open"), "Should contain circuit breaker error, got: {}", err_str);
 }
+
+#[tokio::test]
+async fn test_security_ddos_zero_values_should_not_crash() {
+    // This test ensures that providing 0 for DDoS config values doesn't cause a panic
+    let ddos_config = DdosConfig {
+        global_rps: 0,
+        per_ip_rps: 0,
+        per_ip_burst: 0,
+    };
+
+    // This panicked in previous versions due to unwrap() on NonZeroU32
+    // We catch the panic to verification, or better, the code should just handle it (e.g. strict block or clamp)
+    // For now, let's see if it runs.
+    let protection = DdosProtection::new(ddos_config);
+    
+    // If it survives, it should block everything
+    let allowed = protection.check("1.2.3.4".parse().unwrap()).await;
+    assert!(!allowed, "Should block requests when RPS is 0");
+}

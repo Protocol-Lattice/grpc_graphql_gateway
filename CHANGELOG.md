@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.8.9] - 2025-12-27
+
+### Fixed
+- **DDoS Protection Panic**: Fixed a critical bug where configuring `global_rps` or `per_ip_rps` to `0` caused a runtime panic.
+  - **Zero Config Safety**: The router now safely handles `0` values by strictly blocking traffic instead of crashing.
+  - **Input Clamping**: Internal rate limiters are clamped to a minimum of 1 RPS to prevent initialization errors, while the logic layer enforces the zero-limit block.
+
 ## [0.8.8] - 2025-12-27
 
 ### Added

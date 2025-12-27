@@ -7,6 +7,16 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 
 
+### [0.8.9] - 2025-12-27
+
+**DDoS Protection Fixes** 🛡️
+
+Resolved a critical stability issue in the DDoS protection module.
+
+**Key Fixes:**
+*   **Zero-Config Panic**: Fixed a runtime panic that occurred when `global_rps` or `per_ip_rps` were set to `0`.
+*   **Strict Blocking**: Configuring limits to `0` now correctly blocks all traffic as intended, instead of crashing the application.
+
 ### [0.8.8] - 2025-12-27
 
 **Production Reliability & CLI Tools** 🛠️

@@ -190,7 +190,9 @@ pub struct DdosProtection {
 impl DdosProtection {
     /// Create a new DDoS protection instance
     pub fn new(config: DdosConfig) -> Self {
-        let global_quota = Quota::per_second(NonZeroU32::new(config.global_rps).unwrap());
+        // Clamp to 1 to avoid panic, but the check() method will enforce 0 if configured
+        let safe_global_rps = NonZeroU32::new(config.global_rps.max(1)).unwrap();
+        let global_quota = Quota::per_second(safe_global_rps);
         Self {
             global_limiter: Arc::new(RateLimiter::direct(global_quota)),
             ip_limiters: Arc::new(RwLock::new(HashMap::new())),
@@ -203,6 +205,11 @@ impl DdosProtection {
     /// Returns `true` if allowed, `false` if rate limited.
     /// Logs warnings when limits are exceeded.
     pub async fn check(&self, ip: IpAddr) -> bool {
+        // 0. Zero config check (strict refusal)
+        if self.config.global_rps == 0 || self.config.per_ip_rps == 0 {
+            return false;
+        }
+
         // Tier 1: Check global limit first (fast path)
         if self.global_limiter.check().is_err() {
             tracing::warn!(
@@ -225,8 +232,11 @@ impl DdosProtection {
             }
             None => {
                 // Create new limiter for this IP (token bucket algorithm)
-                let quota = Quota::per_second(NonZeroU32::new(self.config.per_ip_rps).unwrap())
-                    .allow_burst(NonZeroU32::new(self.config.per_ip_burst).unwrap());
+                // Clamp to 1 to avoid panic on creation
+                let safe_rps = NonZeroU32::new(self.config.per_ip_rps.max(1)).unwrap();
+                let safe_burst = NonZeroU32::new(self.config.per_ip_burst.max(1)).unwrap();
+                
+                let quota = Quota::per_second(safe_rps).allow_burst(safe_burst);
                 let new_limiter = Arc::new(RateLimiter::direct(quota));
                 let new_tracked = Arc::new(TrackedLimiter::new(new_limiter));
 
@@ -565,7 +575,17 @@ impl GbpRouter {
                 // Update Circuit Breaker
                 if let Some(cb) = &circuit_breaker {
                     match &res {
-                        Ok(_) => cb.record_success(),
+                        Ok(val) => {
+                            // Check for severe GraphQL errors (errors present + no data)
+                            let has_errors = val.get("errors").and_then(|e| e.as_array()).map_or(false, |a| !a.is_empty());
+                            let has_data = val.get("data").map_or(false, |d| !d.is_null());
+                            
+                            if has_errors && !has_data {
+                                cb.record_failure();
+                            } else {
+                                cb.record_success();
+                            }
+                        },
                         Err(_) => cb.record_failure(),
                     }
                 }
@@ -740,7 +760,17 @@ impl GbpRouter {
                  // Update Circuit Breaker
                 if let Some(cb) = &circuit_breaker {
                     match &res {
-                        Ok(_) => cb.record_success(),
+                        Ok(val) => {
+                            // Check for severe GraphQL errors (errors present + no data)
+                            let has_errors = val.get("errors").and_then(|e| e.as_array()).map_or(false, |a| !a.is_empty());
+                            let has_data = val.get("data").map_or(false, |d| !d.is_null());
+                            
+                            if has_errors && !has_data {
+                                cb.record_failure();
+                            } else {
+                                cb.record_success();
+                            }
+                        },
                         Err(_) => cb.record_failure(),
                     }
                 }
