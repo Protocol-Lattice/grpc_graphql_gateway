@@ -62,6 +62,9 @@ async fn test_security_input_fuzzing_massive_query() {
         force_gbp: false,
         apq: None,
         request_collapsing: None,
+        waf: None,
+        query_cost: None,
+        disable_introspection: false,
     };
     let router = GbpRouter::new(config);
 
@@ -130,6 +133,9 @@ async fn test_security_subgraph_response_validation() {
         force_gbp: false,
         apq: None,
         request_collapsing: None,
+        waf: None,
+        query_cost: None,
+        disable_introspection: false,
     };
 
     let router = GbpRouter::new(config);
@@ -176,6 +182,9 @@ async fn test_security_huge_response_handling() {
         force_gbp: false,
         apq: None,
         request_collapsing: None,
+        waf: None,
+        query_cost: None,
+        disable_introspection: false,
     };
 
     let router = GbpRouter::new(config);
@@ -215,6 +224,9 @@ async fn test_security_deeply_nested_query() {
         force_gbp: false,
         apq: None,
         request_collapsing: None,
+        waf: None,
+        query_cost: None,
+        disable_introspection: false,
     };
     let router = GbpRouter::new(config);
 
@@ -249,6 +261,9 @@ async fn test_isolate_slow_loris_subgraph() {
         force_gbp: false,
         apq: None,
         request_collapsing: None,
+        waf: None,
+        query_cost: None,
+        disable_introspection: false,
     };
 
     let router = GbpRouter::new(config);

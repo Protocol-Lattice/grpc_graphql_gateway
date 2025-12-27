@@ -832,6 +832,9 @@ mod tests {
             force_gbp: true,
             apq: None,
             request_collapsing: None,
+            waf: None,
+            query_cost: None,
+            disable_introspection: false,
         };
         assert_eq!(config.subgraphs.len(), 1);
         assert!(config.force_gbp);
@@ -931,6 +934,9 @@ mod tests {
             force_gbp: true,
             apq: None,
             request_collapsing: None,
+            waf: None,
+            query_cost: None,
+            disable_introspection: false,
         };
         let router = GbpRouter::new(config);
 
@@ -950,6 +956,9 @@ mod tests {
             force_gbp: false,
             apq: None,
             request_collapsing: None,
+            waf: None,
+            query_cost: None,
+            disable_introspection: false,
         };
         let router = GbpRouter::new(config);
 
@@ -967,6 +976,9 @@ mod tests {
             force_gbp: false,
             apq: None,
             request_collapsing: None,
+            waf: None,
+            query_cost: None,
+            disable_introspection: false,
         };
         let router = GbpRouter::new(config);
 
@@ -987,6 +999,9 @@ mod tests {
             force_gbp: false,
             apq: None,
             request_collapsing: None,
+            waf: None,
+            query_cost: None,
+            disable_introspection: false,
         };
         let router = GbpRouter::new(config);
 
@@ -1020,6 +1035,9 @@ mod tests {
             force_gbp: false,
             apq: None,
             request_collapsing: None,
+            waf: None,
+            query_cost: None,
+            disable_introspection: false,
         };
         let router = GbpRouter::new(config);
 
@@ -1075,6 +1093,9 @@ mod tests {
             force_gbp: false,
             apq: Some(PersistedQueryConfig::default()),
             request_collapsing: Some(RequestCollapsingConfig::default()),
+            waf: None,
+            query_cost: None,
+            disable_introspection: false,
         };
         let router = GbpRouter::new(config);
 
@@ -1174,6 +1195,9 @@ mod tests {
             force_gbp: false,
             apq: None,
             request_collapsing: None,
+            waf: None,
+            query_cost: None,
+            disable_introspection: false,
         };
         let router = GbpRouter::with_cache_ttl(config, Duration::from_secs(123));
 
