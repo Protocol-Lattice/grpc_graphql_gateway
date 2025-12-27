@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2025-12-27
+
+### Added
+- Enhanced WAF with user‑provided custom regex patterns for flexible security rule extensions.
+- Updated `WafConfig` to include `custom_patterns` field and default implementation.
+- Added `check_custom` helper and integrated custom pattern checks into JSON, header, query, and raw validation functions.
+- Updated documentation and examples to demonstrate custom WAF usage.
+
 ## [0.9.1] - 2025-12-27
 
 ### Added

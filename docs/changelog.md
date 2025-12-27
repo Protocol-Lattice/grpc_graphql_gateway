@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [0.9.2] - 2025-12-27
+
+### Added
+- Enhanced WAF with custom regex patterns support.
+- Updated `WafConfig` with `custom_patterns` field.
+- Added `check_custom` helper and integrated into validation functions.
+- Updated documentation and examples.
+
 ## [0.9.1] - 2025-12-27
 
 ### Added
