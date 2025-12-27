@@ -5,7 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.5] - 2025-12-26
+## [0.8.7] - 2025-12-27
+
+### Security
+- **Circuit Breaker Pattern**: Integrated a robust Circuit Breaker into the GBP Router to prevent cascading failures.
+  - **Fail Fast**: Immediately rejects requests to unhealthy subgraphs when the circuit is "Open", preventing resource exhaustion.
+  - **Automatic Recovery**: Periodically allows test requests in "Half-Open" state to check for service recovery without overwhelming the backend.
+  - **Configurable**: Fully configurable via `router.yaml` (failure threshold, recovery timeout, half-open limit).
+  - **State Management**: Tracks success/failure rates per subgraph with atomic counters.
+
+## [0.8.6] - 2025-12-27
+
+### Security
+- **WAF Header Validation**: Implemented comprehensive WAF scanning for HTTP headers.
+  - **Attack Detection**: Scans all request headers for SQLi, XSS, NoSQLi, CMDI, Path Traversal, LDAP Injection, and SSTI patterns.
+  - **Early Blocking**: Malicious headers are rejected before processing the request body.
+  - **Logging**: detailed alerts with header name and matched pattern.
+- **Improved Query Validation**: Exposed specific `validate_query_string()` function for direct WAF checks on raw GraphQL queries before parsing.
+- **Enhanced Security Headers**: 
+  - **Content-Security-Policy (CSP)**: Added strict CSP protecting against XSS while allowing safe GraphiQL usage (`default-src 'self'`).
+  - **Permissions-Policy**: Added restrictive policy disabling sensitive browser features (camera, mic, geolocation, payment) by default.
 
 ### Added
 - **Hot Reloading**: Implemented seamless configuration hot-reloading for the Router.

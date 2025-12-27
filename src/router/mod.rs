@@ -24,16 +24,18 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use grpc_graphql_gateway::router::{GbpRouter, RouterConfig, SubgraphConfig, DdosConfig};
+//! use grpc_graphql_gateway::router::{GbpRouter, RouterConfig, SubgraphConfig};
+//! use grpc_graphql_gateway::circuit_breaker::CircuitBreakerConfig;
 //!
 //! let config = RouterConfig {
 //!     port: 4000,
 //!     subgraphs: vec![
-//!         SubgraphConfig { name: "users".into(), url: "http://localhost:4002/graphql".into() },
-//!         SubgraphConfig { name: "products".into(), url: "http://localhost:4003/graphql".into() },
+//!         SubgraphConfig { name: "users".into(), url: "http://localhost:4002/graphql".into(), headers: Default::default() },
 //!     ],
 //!     force_gbp: true,
-//!     ddos: Some(DdosConfig::default()),
+//!     // DDoS config is handled separately in binary, not part of RouterConfig
+//!     circuit_breaker: Some(CircuitBreakerConfig::default()),
+//!     ..Default::default() // Use defaults for APQ, WAF, etc.
 //! };
 //!
 //! let router = GbpRouter::new(config);
@@ -66,6 +68,7 @@ use tokio::sync::RwLock;
 
 use crate::waf::{WafConfig, validate_raw, is_introspection};
 use crate::query_cost_analyzer::{QueryCostConfig, QueryCostAnalyzer};
+use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
 
 /// Configuration for DDoS protection
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -294,6 +297,9 @@ pub struct RouterConfig {
     /// Disable introspection in production
     #[serde(default)]
     pub disable_introspection: bool,
+    /// Circuit Breaker Configuration
+    #[serde(default)]
+    pub circuit_breaker: Option<CircuitBreakerConfig>,
 }
 
 /// Configuration for a single subgraph
@@ -340,6 +346,8 @@ pub struct GbpRouter {
     collapsing_registry: Option<SharedRequestCollapsingRegistry>,
     /// Query Cost Analyzer
     cost_analyzer: Option<Arc<QueryCostAnalyzer>>,
+    /// Circuit Breakers per subgraph
+    circuit_breakers: HashMap<String, Arc<CircuitBreaker>>,
 }
 
 impl GbpRouter {
@@ -351,6 +359,8 @@ impl GbpRouter {
     /// Create a router with custom cache TTL
     pub fn with_cache_ttl(config: RouterConfig, cache_ttl: Duration) -> Self {
         let mut clients = AHashMap::with_capacity(config.subgraphs.len());
+        let mut circuit_breakers = HashMap::with_capacity(config.subgraphs.len());
+        let cb_config = config.circuit_breaker.clone().unwrap_or_default();
 
         for subgraph in &config.subgraphs {
             let mut builder = RestConnector::builder()
@@ -380,6 +390,11 @@ impl GbpRouter {
                 subgraph.name.clone(),
                 builder.build().expect("invalid connector config"),
             );
+            
+            circuit_breakers.insert(
+                subgraph.name.clone(),
+                Arc::new(CircuitBreaker::new(subgraph.name.clone(), cb_config.clone()))
+            );
         }
 
         let apq_store = config.apq.clone().map(create_apq_store);
@@ -404,6 +419,7 @@ impl GbpRouter {
             apq_store,
             collapsing_registry,
             cost_analyzer,
+            circuit_breakers,
         }
     }
 
@@ -526,8 +542,16 @@ impl GbpRouter {
             let force_gbp = self.config.force_gbp;
             let query_str = query_string.clone();
             let variables_clone = variables.cloned();
+            let circuit_breaker = self.circuit_breakers.get(&name).cloned();
 
             futures.push(async move {
+                // Check Circuit Breaker
+                if let Some(cb) = &circuit_breaker {
+                    if let Err(e) = cb.allow_request() {
+                        return (name, Err(crate::Error::Internal(e.to_string())), Duration::from_secs(0), force_gbp);
+                    }
+                }
+
                 let mut args = HashMap::with_capacity(2);
                 args.insert("query".to_string(), serde_json::json!(query_str));
                 if let Some(vars) = variables_clone {
@@ -537,6 +561,14 @@ impl GbpRouter {
                 let req_start = Instant::now();
                 let res = client.execute("query", args).await;
                 let duration = req_start.elapsed();
+                
+                // Update Circuit Breaker
+                if let Some(cb) = &circuit_breaker {
+                    match &res {
+                        Ok(_) => cb.record_success(),
+                        Err(_) => cb.record_failure(),
+                    }
+                }
 
                 (name, res, duration, force_gbp)
             });
@@ -687,14 +719,33 @@ impl GbpRouter {
             let client = client.clone();
             let query_str = query_string.clone();
             let variables_clone = variables.cloned();
+            let circuit_breaker = self.circuit_breakers.get(&name).cloned();
 
             futures.push(async move {
+                // Check Circuit Breaker
+                if let Some(cb) = &circuit_breaker {
+                    if let Err(e) = cb.allow_request() {
+                        return (name, Err(crate::Error::Internal(e.to_string())));
+                    }
+                }
+            
                 let mut args = HashMap::with_capacity(2);
                 args.insert("query".to_string(), serde_json::json!(query_str));
                 if let Some(vars) = variables_clone {
                     args.insert("variables".to_string(), vars);
                 }
-                (name, client.execute("query", args).await)
+                
+                let res = client.execute("query", args).await;
+                
+                 // Update Circuit Breaker
+                if let Some(cb) = &circuit_breaker {
+                    match &res {
+                        Ok(_) => cb.record_success(),
+                        Err(_) => cb.record_failure(),
+                    }
+                }
+                
+                (name, res)
             });
         }
 
@@ -835,6 +886,7 @@ mod tests {
             waf: None,
             query_cost: None,
             disable_introspection: false,
+            circuit_breaker: None,
         };
         assert_eq!(config.subgraphs.len(), 1);
         assert!(config.force_gbp);
@@ -937,6 +989,7 @@ mod tests {
             waf: None,
             query_cost: None,
             disable_introspection: false,
+            circuit_breaker: None,
         };
         let router = GbpRouter::new(config);
 
@@ -959,6 +1012,7 @@ mod tests {
             waf: None,
             query_cost: None,
             disable_introspection: false,
+            circuit_breaker: None,
         };
         let router = GbpRouter::new(config);
 
@@ -979,6 +1033,7 @@ mod tests {
             waf: None,
             query_cost: None,
             disable_introspection: false,
+            circuit_breaker: None,
         };
         let router = GbpRouter::new(config);
 
@@ -1002,6 +1057,7 @@ mod tests {
             waf: None,
             query_cost: None,
             disable_introspection: false,
+            circuit_breaker: None,
         };
         let router = GbpRouter::new(config);
 
@@ -1038,6 +1094,7 @@ mod tests {
             waf: None,
             query_cost: None,
             disable_introspection: false,
+            circuit_breaker: None,
         };
         let router = GbpRouter::new(config);
 
@@ -1096,6 +1153,7 @@ mod tests {
             waf: None,
             query_cost: None,
             disable_introspection: false,
+            circuit_breaker: None,
         };
         let router = GbpRouter::new(config);
 
@@ -1198,6 +1256,7 @@ mod tests {
             waf: None,
             query_cost: None,
             disable_introspection: false,
+            circuit_breaker: None,
         };
         let router = GbpRouter::with_cache_ttl(config, Duration::from_secs(123));
 

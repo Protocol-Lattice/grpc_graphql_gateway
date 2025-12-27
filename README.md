@@ -95,6 +95,12 @@ subgraphs:
 rate_limit:
   global_rps: 100000
   per_ip_rps: 1000
+
+# Circuit Breaker Configuration
+circuit_breaker:
+  failure_threshold: 10      # Open after 10 failures
+  recovery_timeout: 30000    # Wait 30s (in ms) before retry
+  half_open_max_requests: 5  # Allow 5 test requests
 ```
 
 ```bash

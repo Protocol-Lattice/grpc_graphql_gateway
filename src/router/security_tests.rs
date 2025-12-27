@@ -65,6 +65,7 @@ async fn test_security_input_fuzzing_massive_query() {
         waf: None,
         query_cost: None,
         disable_introspection: false,
+        circuit_breaker: None,
     };
     let router = GbpRouter::new(config);
 
@@ -136,6 +137,7 @@ async fn test_security_subgraph_response_validation() {
         waf: None,
         query_cost: None,
         disable_introspection: false,
+        circuit_breaker: None,
     };
 
     let router = GbpRouter::new(config);
@@ -185,6 +187,7 @@ async fn test_security_huge_response_handling() {
         waf: None,
         query_cost: None,
         disable_introspection: false,
+        circuit_breaker: None,
     };
 
     let router = GbpRouter::new(config);
@@ -227,6 +230,7 @@ async fn test_security_deeply_nested_query() {
         waf: None,
         query_cost: None,
         disable_introspection: false,
+        circuit_breaker: None,
     };
     let router = GbpRouter::new(config);
 
@@ -264,6 +268,7 @@ async fn test_isolate_slow_loris_subgraph() {
         waf: None,
         query_cost: None,
         disable_introspection: false,
+        circuit_breaker: None,
     };
 
     let router = GbpRouter::new(config);
@@ -284,4 +289,52 @@ async fn test_isolate_slow_loris_subgraph() {
     let json = result.unwrap();
     assert!(json["fast"]["data"].is_object());
     assert!(json["slow"]["data"].is_string()); // Our mock returns string for "data" in slow case
+}
+
+#[tokio::test]
+async fn test_circuit_breaker_integration() {
+    use crate::circuit_breaker::CircuitBreakerConfig;
+
+    // 1. Setup mock subgraph that returns ERRORS
+    let mock_addr = spawn_mock_subgraph(0, "error").await;
+
+    let config = RouterConfig {
+        port: 0,
+        subgraphs: vec![SubgraphConfig {
+            name: "failing_service".into(),
+            url: format!("http://{}/graphql", mock_addr),
+            headers: std::collections::HashMap::new(),
+        }],
+        force_gbp: false,
+        apq: None,
+        request_collapsing: None,
+        waf: None,
+        query_cost: None,
+        disable_introspection: false,
+        circuit_breaker: Some(CircuitBreakerConfig {
+            failure_threshold: 2,
+            recovery_timeout: Duration::from_secs(10),
+            half_open_max_requests: 1,
+        }),
+    };
+
+    let router = GbpRouter::new(config);
+
+    // 2. Trigger failures to open the circuit
+    // Request 1: Fails (Count = 1)
+    let _ = router.execute_scatter_gather(Some("query { test }"), None, None).await;
+    
+    // Request 2: Fails (Count = 2) -> Circuit Opens!
+    let _ = router.execute_scatter_gather(Some("query { test }"), None, None).await;
+
+    // 3. Next request should fail FAST with Circuit Open error
+    // Use execute_fail_fast to see the error, as execute_scatter_gather swallows individual subgraph errors
+    let result = router.execute_fail_fast(Some("query { test }"), None, None).await;
+
+    // Verify error was propagated
+    assert!(result.is_err(), "Expected error when circuit is open");
+    let err_str = result.err().unwrap().to_string();
+    
+    // We expect "Circuit breaker open" message in the error output
+    assert!(err_str.contains("Circuit breaker open"), "Should contain circuit breaker error, got: {}", err_str);
 }

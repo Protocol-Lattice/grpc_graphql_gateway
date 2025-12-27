@@ -52,6 +52,8 @@ struct YamlConfig {
     query_cost: Option<grpc_graphql_gateway::query_cost_analyzer::QueryCostConfig>,
     #[serde(default)]
     disable_introspection: bool,
+    #[serde(default)]
+    circuit_breaker: Option<grpc_graphql_gateway::circuit_breaker::CircuitBreakerConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,6 +148,7 @@ fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig
         waf: yaml_config.waf.clone(),
         query_cost: yaml_config.query_cost.clone(),
         disable_introspection: yaml_config.disable_introspection,
+        circuit_breaker: yaml_config.circuit_breaker.clone(),
     };
 
     let ddos_config = yaml_config.rate_limit.clone().unwrap_or(DdosConfig::relaxed());

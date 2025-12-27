@@ -64,6 +64,8 @@ impl std::fmt::Display for CircuitState {
     }
 }
 
+use serde::{Deserialize, Serialize};
+
 /// Configuration for the Circuit Breaker
 ///
 /// # Example
@@ -78,14 +80,35 @@ impl std::fmt::Display for CircuitState {
 ///     half_open_max_requests: 3,                 // Allow 3 test requests
 /// };
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CircuitBreakerConfig {
     /// Number of consecutive failures before opening the circuit
     pub failure_threshold: u32,
     /// Time to wait before transitioning from Open to Half-Open
+    #[serde(with = "duration_ms")]
     pub recovery_timeout: Duration,
     /// Maximum requests allowed in Half-Open state before deciding
     pub half_open_max_requests: u32,
+}
+
+mod duration_ms {
+    use serde::{Deserialize, Serializer, Deserializer};
+    use std::time::Duration;
+
+    pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u64(duration.as_millis() as u64)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let millis = u64::deserialize(deserializer)?;
+        Ok(Duration::from_millis(millis))
+    }
 }
 
 impl Default for CircuitBreakerConfig {

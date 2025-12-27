@@ -5,6 +5,31 @@ All notable changes to this project are documented here.
 For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Lattice/grpc_graphql_gateway/blob/main/CHANGELOG.md) file in the repository.
 
 
+
+### [0.8.7] - 2025-12-27
+
+**Circuit Breaker Pattern** 🛡️
+
+Integrated a robust Circuit Breaker into the GBP Router to prevent cascading failures and ensure system resilience.
+
+**Key Features:**
+*   **Fail Fast**: Immediately rejects requests to unhealthy subgraphs when the circuit is "Open", preventing resource exhaustion.
+*   **Automatic Recovery**: Periodically allows test requests in "Half-Open" state to check for service recovery without overwhelming the backend.
+*   **Configurable**: Fully configurable via `router.yaml` (failure threshold, recovery timeout, half-open limit).
+*   **State Management**: Tracks success/failure rates per subgraph with atomic counters.
+
+### [0.8.6] - 2025-12-27
+
+**WAF Header Validation & Enhanced Security** 🛡️
+
+Significantly strengthened the security posture by extending WAF protection to HTTP headers and adding modern browser security policies.
+
+**Key Features:**
+*   **Header Scanning**: All incoming HTTP headers are now scanned for malicious payloads (SQLi, XSS, etc.) before processing.
+*   **CSP Header**: Added a strict `Content-Security-Policy` to mitigate XSS risks while supporting GraphiQL development tools.
+*   **Permissions Policy**: Enforced a restrictive `Permissions-Policy` to block sensitive browser features (camera, microphone, geolocation) by default.
+*   **Direct Query Validation**: Optimized checking mechanism for raw GraphQL query strings.
+
 ### [0.8.5] - 2025-12-26
 
 **Zero-Downtime Hot Reloading** ♻️
