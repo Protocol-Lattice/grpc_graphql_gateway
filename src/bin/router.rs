@@ -333,6 +333,15 @@ async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<App
                     header::REFERRER_POLICY,
                     HeaderValue::from_static("strict-origin-when-cross-origin"),
                 ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::CONTENT_SECURITY_POLICY,
+                    // Allow 'unsafe-inline' for GraphiQL/Playground scripts and styles
+                    HeaderValue::from_static("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self';"), 
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::HeaderName::from_static("permissions-policy"),
+                    HeaderValue::from_static("camera=(), microphone=(), geolocation=(), payment=()"),
+                ))
         );
 
     // Apply CORS based on configuration
@@ -458,10 +467,14 @@ async fn graphql_handler(
     };
 
     // WAF: Check headers for SQLi (e.g. User-Agent hacks)
-    // We implement a quick local check or use regex directly since we don't have Context here
-    // But since we didn't expose header validation publicly in waf.rs, let's do it manually or expose it.
-    // Ideally, we should use functionality from waf.rs.
-    // For now, let's check variables which is the most critical part.
+    if let Err(e) = grpc_graphql_gateway::waf::validate_headers(&headers, &inner.waf_config) {
+        return Json(json!({
+            "errors": [{
+                "message": e.to_string(),
+                "extensions": {"code": "VALIDATION_ERROR"}
+            }]
+        })).into_response();
+    }
 
     if let Some(vars) = &payload.variables {
         if let Err(e) = grpc_graphql_gateway::waf::validate_json_with_config(vars, &inner.waf_config) {
@@ -474,11 +487,16 @@ async fn graphql_handler(
         }
     }
 
-    if let Some(_query) = &payload.query {
+    if let Some(query) = &payload.query {
         // Quick regex check on raw query
-         // We can't access private sqli_regex, so we skip query string regex for now 
-         // or we should have exposed `validate_query_string`.
-         // Let's rely on variables check which covers 95% of attacks.
+        if let Err(e) = grpc_graphql_gateway::waf::validate_query_string(query, &inner.waf_config) {
+             return Json(json!({
+                "errors": [{
+                    "message": e.to_string(),
+                    "extensions": {"code": "VALIDATION_ERROR"}
+                }]
+            })).into_response();
+        }
     }
 
     // Check for GBP response preference
