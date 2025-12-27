@@ -832,10 +832,12 @@ impl ServeMux {
             );
 
             // Content Security Policy - restrict resource loading
+            // Added object-src 'none', base-uri 'self', frame-ancestors 'none' for stricter security
+            // Added https://cdn.jsdelivr.net and https://unpkg.com to allow playground to work
             headers.insert(
                 axum::http::header::CONTENT_SECURITY_POLICY,
                 axum::http::HeaderValue::from_static(
-                    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'",
+                    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
                 ),
             );
 
@@ -843,6 +845,32 @@ impl ServeMux {
             headers.insert(
                 axum::http::header::REFERRER_POLICY,
                 axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"),
+            );
+
+            // Permissions Policy - Limit browser features
+            headers.insert(
+                axum::http::header::HeaderName::from_static("permissions-policy"),
+                axum::http::HeaderValue::from_static("camera=(), microphone=(), geolocation=(), browsing-topics=(), payment=()"),
+            );
+
+            // DNS Prefetch Control - Privacy
+            headers.insert(
+                axum::http::header::HeaderName::from_static("x-dns-prefetch-control"),
+                axum::http::HeaderValue::from_static("off"),
+            );
+
+            // Cross-Origin policies
+            headers.insert(
+                axum::http::header::HeaderName::from_static("cross-origin-opener-policy"),
+                axum::http::HeaderValue::from_static("same-origin"),
+            );
+            headers.insert(
+                axum::http::header::HeaderName::from_static("cross-origin-embedder-policy"),
+                axum::http::HeaderValue::from_static("require-corp"),
+            );
+            headers.insert(
+                axum::http::header::HeaderName::from_static("cross-origin-resource-policy"),
+                axum::http::HeaderValue::from_static("same-origin"),
             );
 
             // CORS headers for regular requests
@@ -1932,9 +1960,64 @@ mod tests {
 
         let headers = response.headers();
         
-        // Check security headers are present
-        assert!(headers.get("x-content-type-options").is_some());
-        assert!(headers.get("x-frame-options").is_some());
+        // Check core security headers are present and have correct values
+        assert_eq!(
+            headers.get("x-content-type-options").unwrap().to_str().unwrap(),
+            "nosniff"
+        );
+        assert_eq!(
+            headers.get("x-frame-options").unwrap().to_str().unwrap(),
+            "DENY"
+        );
+        assert_eq!(
+            headers.get("x-xss-protection").unwrap().to_str().unwrap(),
+            "1; mode=block"
+        );
+        
+        // Check new 0.9.0 security headers
+        assert_eq!(
+            headers.get("strict-transport-security").unwrap().to_str().unwrap(),
+            "max-age=31536000; includeSubDomains"
+        );
+        assert_eq!(
+            headers.get("cache-control").unwrap().to_str().unwrap(),
+            "no-store, no-cache, must-revalidate"
+        );
+        assert_eq!(
+            headers.get("referrer-policy").unwrap().to_str().unwrap(),
+            "strict-origin-when-cross-origin"
+        );
+        assert_eq!(
+            headers.get("x-dns-prefetch-control").unwrap().to_str().unwrap(),
+            "off"
+        );
+
+        // Check Permissions-Policy
+        let p_policy = headers.get("permissions-policy").unwrap().to_str().unwrap();
+        assert!(p_policy.contains("camera=()"));
+        assert!(p_policy.contains("microphone=()"));
+        assert!(p_policy.contains("geolocation=()"));
+        
+        // Check Content-Security-Policy
+        let csp = headers.get("content-security-policy").unwrap().to_str().unwrap();
+        assert!(csp.contains("default-src 'self'"));
+        assert!(csp.contains("object-src 'none'"));
+        assert!(csp.contains("base-uri 'self'"));
+        assert!(csp.contains("frame-ancestors 'none'"));
+
+        // Check Isolation Headers
+        assert_eq!(
+            headers.get("cross-origin-opener-policy").unwrap().to_str().unwrap(),
+            "same-origin"
+        );
+        assert_eq!(
+            headers.get("cross-origin-embedder-policy").unwrap().to_str().unwrap(),
+            "require-corp"
+        );
+        assert_eq!(
+            headers.get("cross-origin-resource-policy").unwrap().to_str().unwrap(),
+            "same-origin"
+        );
     }
 
     #[tokio::test]

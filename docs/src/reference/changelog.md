@@ -7,6 +7,18 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 
 
+### [0.9.0] - 2025-12-27
+
+**Router Security Hardening** 🛡️
+
+Implemented a massive expansion of security headers and browser protections to ensure production-grade security.
+
+**Key Features:**
+*   **HSTS Enforcement**: Added `Strict-Transport-Security` to force HTTPS connections for 1 year.
+*   **Browser Isolation**: Added `COOP`, `COEP`, and `CORP` headers to mitigate Spectre/Meltdown class side-channel attacks.
+*   **CSP Tightening**: Further restricted `Content-Security-Policy` with `object-src 'none'`, preventing object injection attacks.
+*   **Privacy First**: Added `X-DNS-Prefetch-Control` and strict `Permissions-Policy`.
+
 ### [0.8.9] - 2025-12-27
 
 **DDoS Protection Fixes** 🛡️

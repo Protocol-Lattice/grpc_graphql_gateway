@@ -363,17 +363,42 @@ async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<App
                     HeaderValue::from_static("1; mode=block"),
                 ))
                 .layer(SetResponseHeaderLayer::overriding(
+                    header::STRICT_TRANSPORT_SECURITY,
+                    HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
                     header::REFERRER_POLICY,
                     HeaderValue::from_static("strict-origin-when-cross-origin"),
                 ))
                 .layer(SetResponseHeaderLayer::overriding(
                     header::CONTENT_SECURITY_POLICY,
                     // Allow 'unsafe-inline' for GraphiQL/Playground scripts and styles
-                    HeaderValue::from_static("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self';"), 
+                    // Added object-src 'none', base-uri 'self', frame-ancestors 'none'
+                    HeaderValue::from_static("default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"), 
                 ))
                 .layer(SetResponseHeaderLayer::overriding(
                     header::HeaderName::from_static("permissions-policy"),
-                    HeaderValue::from_static("camera=(), microphone=(), geolocation=(), payment=()"),
+                    HeaderValue::from_static("camera=(), microphone=(), geolocation=(), payment=(), browsing-topics=()"),
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::HeaderName::from_static("x-dns-prefetch-control"),
+                    HeaderValue::from_static("off"),
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::HeaderName::from_static("cross-origin-opener-policy"),
+                    HeaderValue::from_static("same-origin"),
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::HeaderName::from_static("cross-origin-embedder-policy"),
+                    HeaderValue::from_static("require-corp"),
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::HeaderName::from_static("cross-origin-resource-policy"),
+                    HeaderValue::from_static("same-origin"),
                 ))
         );
 

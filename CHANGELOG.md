@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.9.0] - 2025-12-27
+
+### Security
+- **Router Hardening**: Massive expansion of security headers and browser protections.
+  - **HSTS Enforcement**: Added `Strict-Transport-Security` (31536000 seconds, includeSubDomains) to force HTTPS.
+  - **CSP Tightening**: Hardened `Content-Security-Policy` with `object-src 'none'`, `base-uri 'self'`, and `frame-ancestors 'none'`.
+  - **Browser Isolation**: Added `Cross-Origin-Opener-Policy`, `Cross-Origin-Embedder-Policy`, and `Cross-Origin-Resource-Policy` headers to mitigate side-channel attacks.
+  - **Privacy**: Added `X-DNS-Prefetch-Control: off` and restricted strict `Permissions-Policy`.
+  - **Caching**: Enforced `no-store, no-cache` for router responses to prevent sensitive data leakage.
+
 ## [0.8.9] - 2025-12-27
 
 ### Fixed
