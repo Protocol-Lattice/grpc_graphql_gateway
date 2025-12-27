@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [0.8.8] - 2025-12-27
+
+### Added
+- **Graceful Shutdown**: Implemented `SIGTERM` and `SIGINT` (Ctrl+C) handling. The router now waits for active requests to complete before shutting down, preventing dropped connections during rolling updates.
+- **Config Validation**: Added `--check` / `validate` CLI command to validate `router.yaml` without starting the server. Essential for CI/CD pipelines.
+
+### Fixed
+- **Hot Reloading Deadlock**: Fixed a critical concurrency bug where live query subscriptions held a read lock indefinitely, preventing configuration hot-reloading.
+
 ## [0.8.7] - 2025-12-27
 
 ### Security

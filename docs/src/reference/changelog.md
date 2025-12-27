@@ -6,6 +6,18 @@ For the full changelog, see the [CHANGELOG.md](https://github.com/Protocol-Latti
 
 
 
+
+### [0.8.8] - 2025-12-27
+
+**Production Reliability & CLI Tools** 🛠️
+
+Enhanced operational maturity with graceful shutdown support and configuration validation tools.
+
+**Key Features:**
+*   **Graceful Shutdown**: Safely drains active requests on `SIGTERM`/`SIGINT` to ensure zero dropped connections during deployments.
+*   **Config Check**: New `router --check` command to validate configuration integrity in CI pipelines.
+*   **Critical Fix**: Resolved a deadlock that could freeze hot-reloading when live queries were active.
+
 ### [0.8.7] - 2025-12-27
 
 **Circuit Breaker Pattern** 🛡️
