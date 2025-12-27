@@ -1,4 +1,7 @@
-# grpc_graphql_gateway
+<p align="center">
+  <img width="512" height="512" alt="df293023-01b3-4b4f-a871-839a95d0de83" src="https://github.com/user-attachments/assets/3168e87d-b0e8-4d42-a374-685a635858ab" />
+</p>
+
 
 **High-performance Rust gateway bridging gRPC to GraphQL with Apollo Federation v2.**
 
