@@ -276,6 +276,10 @@ pub struct WafConfig {
     pub block_ldap: bool,
     #[serde(default = "default_true")]
     pub block_ssti: bool,
+    /// Optional custom regex patterns supplied by the user.
+    /// Each pattern is treated as an independent rule; they are OR‑combined.
+    #[serde(default)]
+    pub custom_patterns: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -293,6 +297,7 @@ impl Default for WafConfig {
             block_traversal: true,
             block_ldap: true,
             block_ssti: true,
+            custom_patterns: Vec::new(),
         }
     }
 }
@@ -352,7 +357,7 @@ pub fn validate_json_with_config(value: &serde_json::Value, config: &WafConfig) 
          if let Some(matched) = check_pattern(value, nosqli_regex()) {
             tracing::warn!(match_val = %matched, "NoSQL Injection attempt detected");
             return Err(Error::Validation(format!("Potential NoSQL Injection detected: {}", matched)));
-        }
+         }
     }
 
     if config.block_cmdi {
@@ -380,6 +385,17 @@ pub fn validate_json_with_config(value: &serde_json::Value, config: &WafConfig) 
         if let Some(matched) = check_pattern(value, ssti_regex()) {
             tracing::warn!(match_val = %matched, "SSTI attempt detected");
             return Err(Error::Validation(format!("Potential SSTI detected: {}", matched)));
+        }
+    }
+
+    // Custom user‑provided patterns (applied to string values only)
+    if !config.custom_patterns.is_empty() {
+        // Only check string values; other JSON types are ignored for custom rules.
+        if let serde_json::Value::String(s) = value {
+            if let Some(pat) = check_custom(s, &config.custom_patterns) {
+                tracing::warn!(match_val = %pat, "Custom WAF pattern matched");
+                return Err(Error::Validation(format!("Custom WAF rule triggered: {}", pat)));
+            }
         }
     }
 
@@ -438,6 +454,19 @@ fn check_keys(value: &serde_json::Value, regex: &Regex) -> Option<String> {
     None
 }
 
+/// Helper to evaluate user‑provided custom patterns.
+/// Returns the first matching pattern string, if any.
+fn check_custom(value: &str, patterns: &[String]) -> Option<String> {
+    for pat in patterns {
+        if let Ok(re) = Regex::new(pat) {
+            if re.is_match(value) {
+                return Some(pat.clone());
+            }
+        }
+    }
+    None
+}
+
 #[async_trait::async_trait]
 impl Middleware for WafMiddleware {
     async fn call(&self, ctx: &mut Context) -> Result<()> {
@@ -455,7 +484,6 @@ impl Middleware for WafMiddleware {
                     tracing::warn!(header = ?name, match_val = value_str, "XSS attempt detected in headers");
                     return Err(Error::Validation(format!("Potential XSS detected in header: {}", name)));
                 }
-                // NoSQLi in headers is rare but possible if headers are logged to NoSQL
                 if self.config.block_nosqli && nosqli_regex().is_match(value_str) {
                     tracing::warn!(header = ?name, match_val = value_str, "NoSQL Injection attempt detected in headers");
                      return Err(Error::Validation(format!("Potential NoSQL Injection detected in header: {}", name)));
@@ -476,9 +504,15 @@ impl Middleware for WafMiddleware {
                     tracing::warn!(header = ?name, match_val = value_str, "SSTI attempt detected in headers");
                      return Err(Error::Validation(format!("Potential SSTI detected in header: {}", name)));
                 }
+                // Custom patterns on header values
+                if !self.config.custom_patterns.is_empty() {
+                    if let Some(pat) = check_custom(value_str, &self.config.custom_patterns) {
+                        tracing::warn!(header = ?name, match_val = pat, "Custom WAF pattern matched in header");
+                        return Err(Error::Validation(format!("Custom WAF rule triggered in header {}: {}", name, pat)));
+                    }
+                }
             }
-        }
-        
+        }        
         Ok(())
     }
 
