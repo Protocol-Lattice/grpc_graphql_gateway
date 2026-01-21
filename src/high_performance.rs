@@ -818,13 +818,13 @@ pub fn pin_to_core(core_id: usize) -> Result<(), String> {
     // For now, we'll just document the pattern
     #[cfg(target_os = "linux")]
     {
-        unsafe {
+        let result = unsafe {
             let mut cpuset: libc::cpu_set_t = std::mem::zeroed();
             libc::CPU_SET(core_id, &mut cpuset);
-            let result = libc::sched_setaffinity(0, std::mem::size_of_val(&cpuset), &cpuset);
-            if result != 0 {
-                return Err(format!("Failed to set CPU affinity: {}", result));
-            }
+            libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &cpuset)
+        };
+        if result != 0 {
+            return Err(format!("Failed to set CPU affinity: {}", result));
         }
     }
 
