@@ -493,9 +493,6 @@ impl<V: Clone + Send + Sync> ShardedCache<V> {
     }
 }
 
-unsafe impl<V: Clone + Send + Sync> Send for ShardedCache<V> {}
-unsafe impl<V: Clone + Send + Sync> Sync for ShardedCache<V> {}
-
 // =============================================================================
 // Object Pool
 // =============================================================================
