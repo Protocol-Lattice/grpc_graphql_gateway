@@ -147,7 +147,7 @@ tonic-build = "0.12"
 tokio-test = "0.4"
 proptest = "1.4"
 warp = "0.4.2"
-rand = "0.8"
+rand = "0.9"
 
 
 
