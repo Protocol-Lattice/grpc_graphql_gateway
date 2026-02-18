@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.9.3"
+version = "0.9.4"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -107,7 +107,7 @@ crossbeam-skiplist = "0.1"
 mimalloc = { version = "0.1", features = ["override"] }
 
 # Zero-copy buffers
-bytes = "1.5"
+bytes = "1.11.1"
 
 # High-performance connection pooling
 bb8 = "0.8"
