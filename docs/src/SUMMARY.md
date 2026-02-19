@@ -14,6 +14,7 @@
 - [File Uploads](./core/file-uploads.md)
 - [Field-Level Control](./core/field-control.md)
 - [Multi-Descriptor Support](./core/multi-descriptor.md)
+- [Incremental Delivery (@defer)](./core/defer.md)
 
 # Apollo Federation
 
