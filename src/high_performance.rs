@@ -34,8 +34,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 // Use mimalloc as global allocator for better performance
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// #[global_allocator]
+// static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// High-performance configuration for the gateway
 #[derive(Debug, Clone)]
@@ -813,9 +813,13 @@ impl PerfMetrics {
 /// Pin current thread to a specific CPU core
 ///
 /// This can improve performance by reducing cache misses and context switches.
+///
+/// - **Linux**: Uses `sched_setaffinity` for strict CPU pinning.
+/// - **macOS**: Uses Mach `thread_policy_set` with `THREAD_AFFINITY_POLICY` to assign
+///   affinity tags. This is a *hint* to the scheduler — threads with different tags
+///   are scheduled on different cores when possible. macOS does not support strict pinning.
+/// - **Other**: No-op with a debug log.
 pub fn pin_to_core(core_id: usize) -> Result<(), String> {
-    // Note: affinity crate provides cross-platform CPU pinning
-    // For now, we'll just document the pattern
     #[cfg(target_os = "linux")]
     {
         let result = unsafe {
@@ -828,10 +832,55 @@ pub fn pin_to_core(core_id: usize) -> Result<(), String> {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
-        let _ = core_id; // Suppress unused warning
-                         // CPU pinning is platform-specific
+        // macOS uses Mach thread affinity tags via thread_policy_set.
+        // Different affinity tag values hint the scheduler to place threads
+        // on separate cores. This is the closest to CPU pinning on macOS.
+        //
+        // See: https://developer.apple.com/library/archive/releasenotes/Performance/RN-AffinityAPI/
+        extern "C" {
+            fn mach_thread_self() -> u32;
+            fn thread_policy_set(
+                thread: u32,
+                flavor: u32,
+                policy_info: *const i32,
+                count: u32,
+            ) -> i32;
+        }
+
+        const THREAD_AFFINITY_POLICY: u32 = 4;
+        const THREAD_AFFINITY_POLICY_COUNT: u32 = 1;
+
+        // The affinity tag — threads with the same tag are co-located,
+        // threads with different tags are spread across cores.
+        // We use core_id + 1 so tag 0 (default/unset) is never used.
+        let affinity_tag: i32 = (core_id + 1) as i32;
+
+        let result = unsafe {
+            let thread = mach_thread_self();
+            thread_policy_set(
+                thread,
+                THREAD_AFFINITY_POLICY,
+                &affinity_tag as *const i32,
+                THREAD_AFFINITY_POLICY_COUNT,
+            )
+        };
+
+        if result != 0 {
+            // KERN_SUCCESS = 0; non-zero means failure
+            return Err(format!(
+                "Failed to set macOS thread affinity tag for core {}: kern_return {}",
+                core_id, result
+            ));
+        }
+
+        tracing::debug!("macOS thread affinity tag set to {} (core_id={})", affinity_tag, core_id);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = core_id;
         tracing::debug!("CPU pinning not available on this platform");
     }
 
