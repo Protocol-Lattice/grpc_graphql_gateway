@@ -116,6 +116,8 @@ pub struct GatewayBuilder {
     request_collapsing_config: Option<RequestCollapsingConfig>,
     /// High-performance configuration
     high_perf_config: Option<crate::high_performance::HighPerfConfig>,
+    /// @defer incremental delivery configuration
+    defer_config: Option<crate::defer::DeferConfig>,
 }
 
 impl GatewayBuilder {
@@ -142,6 +144,7 @@ impl GatewayBuilder {
             analytics_config: None,
             request_collapsing_config: None,
             high_perf_config: None,
+            defer_config: None,
         }
     }
 
@@ -1105,6 +1108,37 @@ impl GatewayBuilder {
         self
     }
 
+    /// Enable `@defer` incremental delivery support.
+    ///
+    /// When enabled, queries containing `@defer` directives will return an
+    /// initial payload immediately followed by incremental patches streamed
+    /// over a `multipart/mixed` HTTP response.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, DeferConfig};
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .with_defer(DeferConfig::default())
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Preset Configurations
+    ///
+    /// - `DeferConfig::default()` — Balanced settings
+    /// - `DeferConfig::production()` — Strict limits
+    /// - `DeferConfig::development()` — Permissive
+    /// - `DeferConfig::disabled()` — Disabled (all fields resolved eagerly)
+    pub fn with_defer(mut self, config: crate::defer::DeferConfig) -> Self {
+        self.defer_config = Some(config);
+        self
+    }
+
     /// Build the gateway
     pub fn build(self) -> Result<Gateway> {
         let mut schema_builder = self.schema_builder;
@@ -1189,6 +1223,11 @@ impl GatewayBuilder {
         // Configure High Performance mode
         if let Some(high_perf_config) = self.high_perf_config {
             mux.enable_high_performance(high_perf_config);
+        }
+
+        // Configure @defer support
+        if let Some(defer_config) = self.defer_config {
+            mux.enable_defer(defer_config);
         }
 
         Ok(Gateway {

@@ -12,6 +12,7 @@
 //! - **Multiplex Subscriptions**: Support for multiple concurrent subscriptions per WebSocket connection
 //! - **Middleware**: Extensible middleware system for auth and logging
 //! - **Response Caching**: In-memory LRU cache with TTL and mutation-triggered invalidation
+//! - **@defer Support**: Incremental delivery of query results via multipart/mixed responses
 //!
 //! ## Main Components
 //!
@@ -56,6 +57,7 @@ pub mod graphql {
 
 pub mod analytics;
 pub mod cache;
+pub mod defer;
 pub mod circuit_breaker;
 pub mod compression;
 pub mod dataloader;
@@ -94,6 +96,12 @@ pub use analytics::{
 pub use cache::{
     create_response_cache, is_mutation, CacheConfig, CacheLookupResult, CacheStats, CachedResponse,
     ResponseCache, SharedResponseCache,
+};
+pub use defer::{
+    has_defer_directive, strip_defer_directives, extract_deferred_fragments,
+    DeferConfig, DeferError, DeferStats, DeferredExecution, DeferredFragment, DeferredPart,
+    InitialPayload, IncrementalPatch, SubsequentPayload, MULTIPART_CONTENT_TYPE,
+    format_initial_part, format_subsequent_part,
 };
 pub use circuit_breaker::{
     create_circuit_breaker_registry, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError,
