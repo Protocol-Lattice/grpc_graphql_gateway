@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.9.7"
+version = "0.9.8"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -135,6 +135,9 @@ rayon = "1.10"
 lazy_static = "1.4"
 chrono = { version = "0.4", features = ["serde"] }
 notify = { version = "8.2.0", features = ["serde"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_System_Threading", "Win32_Foundation"] }
 
 [features]
 default = []

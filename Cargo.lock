@@ -1075,6 +1075,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "warp",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
