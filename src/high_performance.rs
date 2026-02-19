@@ -878,7 +878,27 @@ pub fn pin_to_core(core_id: usize) -> Result<(), String> {
         tracing::debug!("macOS thread affinity tag set to {} (core_id={})", affinity_tag, core_id);
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadAffinityMask};
+        
+        let mask = 1usize << core_id;
+        let thread = unsafe { GetCurrentThread() };
+        
+        // SetThreadAffinityMask returns the previous affinity mask on success, or 0 on failure
+        let result = unsafe { SetThreadAffinityMask(thread, mask) };
+        
+        if result == 0 {
+            return Err(format!(
+                "Failed to set Windows thread affinity for core {}: SetThreadAffinityMask failed", 
+                core_id
+            ));
+        }
+        
+        tracing::debug!("Windows thread affinity set to mask {:b} (core_id={})", mask, core_id);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         let _ = core_id;
         tracing::debug!("CPU pinning not available on this platform");
