@@ -24,6 +24,7 @@ use crate::defer::{
     DeferConfig, DeferredExecution, DeferredPart,
     format_initial_part, format_subsequent_part, MULTIPART_CONTENT_TYPE,
 };
+use crate::plugin::PluginRegistry;
 use async_graphql::ServerError;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use axum::{
@@ -84,6 +85,8 @@ pub struct ServeMux {
     response_templates: Arc<ResponseTemplates>,
     /// @defer incremental delivery configuration
     defer_config: Option<DeferConfig>,
+    /// Plugin registry for extension hooks
+    plugins: PluginRegistry,
 }
 
 impl ServeMux {
@@ -112,6 +115,7 @@ impl ServeMux {
             perf_metrics: Arc::new(PerfMetrics::default()),
             response_templates: Arc::new(ResponseTemplates::new()),
             defer_config: None,
+            plugins: PluginRegistry::new(),
         }
     }
 
@@ -266,6 +270,10 @@ impl ServeMux {
         self.set_error_handler_arc(Arc::new(handler));
     }
 
+    pub fn set_plugins(&mut self, plugins: PluginRegistry) {
+        self.plugins = plugins;
+    }
+
     async fn execute_with_middlewares(
         &self,
         headers: HeaderMap,
@@ -299,11 +307,21 @@ impl ServeMux {
             middleware.call(&mut ctx).await?;
         }
 
+        // Plugin Hook: on_request
+        self.plugins.on_request(&ctx, &request).await?;
+
         let mut gql_request = request;
-        gql_request = gql_request.data(ctx);
+        // Make context available to resolvers via data
+        gql_request = gql_request.data(ctx.clone());
+        gql_request = gql_request.data(self.plugins.clone());
         gql_request = gql_request.data(GrpcResponseCache::default());
 
-        Ok(self.schema.execute(gql_request).await)
+        let response = self.schema.execute(gql_request).await;
+        
+        // Plugin Hook: on_response
+        self.plugins.on_response(&ctx, &response).await?;
+
+        Ok(response)
     }
 
     /// Handle GraphQL HTTP request
@@ -976,6 +994,7 @@ impl Clone for ServeMux {
             perf_metrics: self.perf_metrics.clone(),
             response_templates: self.response_templates.clone(),
             defer_config: self.defer_config.clone(),
+            plugins: self.plugins.clone(),
         }
     }
 }

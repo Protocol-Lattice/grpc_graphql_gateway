@@ -1582,6 +1582,14 @@ fn build_field(
                 }
             }
 
+            // Plugin Hook: on_subgraph_request
+            if let Some(plugins) = ctx.data_opt::<crate::plugin::PluginRegistry>() {
+                plugins
+                    .on_subgraph_request(&config.service_name, grpc_request.metadata_mut())
+                    .await
+                    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+            }
+
             let response = grpc
                 .unary(grpc_request, path, codec)
                 .await

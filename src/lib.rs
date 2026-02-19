@@ -75,6 +75,7 @@ pub mod metrics;
 pub mod middleware;
 pub mod openapi;
 pub mod persisted_queries;
+pub mod plugin;
 pub mod query_cost_analyzer;
 pub mod query_whitelist;
 pub mod request_collapsing;
@@ -152,6 +153,7 @@ pub use persisted_queries::{
     create_apq_store, process_apq_request, PersistedQueryConfig, PersistedQueryError,
     PersistedQueryExtension, PersistedQueryStore, SharedPersistedQueryStore,
 };
+pub use plugin::{Plugin, PluginRegistry};
 pub use query_cost_analyzer::{
     QueryCostAnalytics, QueryCostAnalyzer, QueryCostConfig, QueryCostResult,
 };

@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.9.9"
+version = "1.0.0"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -200,6 +200,10 @@ path = "examples/subgraphs/subgraph-reviews.rs"
 [[bin]]
 name = "live_query"
 path = "examples/live_query/main.rs"
+
+[[bin]]
+name = "plugin_system"
+path = "examples/plugin_system.rs"
 
 [[bin]]
 name = "binary_protocol_client"
