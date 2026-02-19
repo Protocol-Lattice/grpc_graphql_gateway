@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-02-19
+
+### Added
+- **Plugin System**: Introduced a comprehensive plugin system with hooks for request lifecycle and schema modification.
+  - `Plugin` trait with `on_request`, `on_response`, `on_schema_build`, and `on_subgraph_request` hooks.
+  - Capability to intercept and modify gRPC requests to subgraphs.
+  - Dynamic loading support via feature flags.
+  - New `examples/plugin_system.rs` demonstrating usage.
+- **Documentation**: Added detailed plugin system documentation in `docs/core/plugins.md` and updated summary.
+
 ## [0.9.9] - 2026-02-19
 
 ### Changed
