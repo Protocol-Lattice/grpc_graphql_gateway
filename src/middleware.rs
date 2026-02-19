@@ -16,7 +16,7 @@ use std::time::Instant;
 ///
 /// Contains request metadata and an extensible data store for middleware
 /// to communicate with each other and with resolvers.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Context {
     /// Request headers and metadata
     pub headers: axum::http::HeaderMap,

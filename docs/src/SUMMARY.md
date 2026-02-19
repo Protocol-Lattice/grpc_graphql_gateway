@@ -15,6 +15,7 @@
 - [Field-Level Control](./core/field-control.md)
 - [Multi-Descriptor Support](./core/multi-descriptor.md)
 - [Incremental Delivery (@defer)](./core/defer.md)
+- [Plugins](./core/plugins.md)
 
 # Apollo Federation
 

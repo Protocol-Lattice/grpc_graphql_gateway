@@ -74,6 +74,10 @@ pub enum Error {
     /// Any other error
     #[error("Error: {0}")]
     Other(#[from] anyhow::Error),
+
+    /// Plugin error
+    #[error("Plugin error: {0}")]
+    Plugin(String),
 }
 
 impl Error {
@@ -108,6 +112,7 @@ impl Error {
                 Error::QueryTooDeep(msg) => msg.clone(),
                 Error::QueryTooComplex(msg) => msg.clone(),
                 Error::Validation(msg) => format!("Validation error: {}", msg),
+                Error::Plugin(msg) => format!("Plugin error: {}", msg),
                 Error::Other(_) => "An unexpected error occurred".to_string(),
             }
         } else {
@@ -140,6 +145,7 @@ impl Error {
             Error::QueryTooDeep(_) => "QUERY_TOO_DEEP",
             Error::QueryTooComplex(_) => "QUERY_TOO_COMPLEX",
             Error::Validation(_) => "VALIDATION_ERROR",
+            Error::Plugin(_) => "PLUGIN_ERROR",
             Error::Other(_) => "UNKNOWN_ERROR",
         };
         map.insert("code".to_string(), serde_json::json!(code));

@@ -5,6 +5,7 @@ use crate::error::{GraphQLError, Result};
 use crate::grpc_client::{GrpcClient, GrpcClientPool};
 use crate::headers::HeaderPropagationConfig;
 use crate::middleware::Middleware;
+use crate::plugin::{Plugin, PluginRegistry};
 use crate::request_collapsing::RequestCollapsingConfig;
 use crate::rest_connector::{RestConnector, RestConnectorRegistry};
 use crate::runtime::ServeMux;
@@ -118,6 +119,8 @@ pub struct GatewayBuilder {
     high_perf_config: Option<crate::high_performance::HighPerfConfig>,
     /// @defer incremental delivery configuration
     defer_config: Option<crate::defer::DeferConfig>,
+    /// Plugin registry
+    plugins: PluginRegistry,
 }
 
 impl GatewayBuilder {
@@ -145,6 +148,7 @@ impl GatewayBuilder {
             request_collapsing_config: None,
             high_perf_config: None,
             defer_config: None,
+            plugins: PluginRegistry::new(),
         }
     }
 
@@ -173,6 +177,16 @@ impl GatewayBuilder {
     /// Add middleware
     pub fn add_middleware<M: Middleware + 'static>(mut self, middleware: M) -> Self {
         self.middlewares.push(Arc::new(middleware));
+        self
+    }
+
+    /// Register a plugin
+    pub fn register_plugin<P>(mut self, plugin: P) -> Self
+    where
+        P: Plugin + 'static,
+        P::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        self.plugins.register(plugin);
         self
     }
 
@@ -1162,8 +1176,46 @@ impl GatewayBuilder {
             schema_builder = schema_builder.with_rest_connectors(registry);
         }
 
+        // Plugin Hook: on_schema_build
+        // We need to clone plugins or pass a mutable reference. Since build consumes self,
+        // we can use the plugins directly but we need to deal with async in a synchronous build method.
+        // Wait, build is synchronous. Hooks are async.
+        //
+        // This is a problem. on_schema_build must be synchronous or build must be async.
+        // The Plugin trait defined on_schema_build as async. 
+        // 
+        // Let's check `GatewayBuilder::build` signature: public fn build(self) -> Result<Gateway>
+        // Use block_on to execute the async hook or change the signature?
+        // Changing signature is a breaking change.
+        //
+        // However, schema building is CPU intensive and usually done at startup.
+        // Let's use `futures::executor::block_on` or similar if available, or just tokio::task::block_in_place if inside runtime.
+        // But `build` might be called outside of runtime context (e.g. tests).
+        //
+        // Actually, `GatewayBuilder::serve` is async. But `build` is sync.
+        // Let's try to run it synchronously for now.
+        //
+        // Wait, I can't easily change the trait to be sync if it's already async in my definition.
+        // Let's make `on_schema_build` synchronous in the trait definition instead?
+        //
+        // Re-reading `src/plugin.rs`:
+        // async fn on_schema_build(&self, _builder: &mut crate::schema::SchemaBuilder) -> crate::error::Result<()> {
+        //
+        // It is async.
+        //
+        // I will use `futures::executor::block_on` to run the hooks.
+        // We need to add `futures` to dependencies or use `tokio::runtime::Handle::current().block_on(async { ... })`.
+
+        let plugins = self.plugins;
+        // Run on_schema_build hook
+        // Run on_schema_build hook
+        // We use futures::executor::block_on because we are in a synchronous build method.
+        // This blocks the current thread, which is acceptable during initialization.
+        futures::executor::block_on(plugins.on_schema_build(&mut schema_builder))?;
+
         let schema = schema_builder.build(&self.client_pool)?;
         let mut mux = ServeMux::new(schema.clone());
+        mux.set_plugins(plugins);
 
         // Add middlewares
         for middleware in self.middlewares {
