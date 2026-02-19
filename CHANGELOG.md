@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] - 2026-02-19
+
+### Fixed
+- **MacOS Stability**: Resolved a critical segmentation fault on macOS by disabling the `mimalloc` global allocator on Apple platforms.
+- **Thread Pinning**: Reimplemented `pin_to_core` for macOS using native Mach `thread_policy_set` API, enabling high-performance thread affinity on Apple Silicon/Intel.
+- **Authentication**: Documented the mandatory `GATEWAY_SECRET` environment variable to prevent 401 Unauthorized errors.
+
+### Documentation
+- **Incremental Delivery**: Added comprehensive guide `docs/core/defer.md` and updated summary for `@defer` usage.
+
+## [0.9.6] - 2026-02-05
+
+### Added
+- **GraphQL @defer Support**: Implemented core support for incremental delivery via the `@defer` directive.
+  - Streaming multipart responses.
+  - Gateway query splitting and execution.
+  - Integration with `async-stream` for efficient response streaming.
+
+## [0.9.5] - 2026-01-28
+
+### Fixed
+- **Thread Pinning**: Initial implementation of `pin_to_core` logic (Linux support).
+
+## [0.9.4] - 2026-01-15
+
+### Fixed
+- **Stability**: Resolved issue #67 enhancing system reliability.
+
+## [0.9.3] - 2026-01-10
+
+### Changed
+- **Dependencies**: Updated `bytes` to 1.11.1 and `audit` dependencies for security and performance.
+
 ## [0.9.2] - 2025-12-27
 
 ### Added
