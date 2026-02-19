@@ -8,7 +8,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use grpc_graphql_gateway::{
     Gateway, GrpcClient, HeaderPropagationConfig,
-    HighPerfConfig, RateLimitMiddleware,
+    HighPerfConfig, RateLimitMiddleware, DeferConfig,
 };
 use tokio::fs;
 use tokio::sync::RwLock;
@@ -86,23 +86,26 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
     const OPENAPI_YAML: &str = include_str!("jsonplaceholder.yaml");
 
     let jsonplaceholder_api = grpc_graphql_gateway::OpenApiParser::from_string(OPENAPI_YAML, true)
-        .expect("Failed to parse OpenAPI YAML")
-        .with_prefix("jp_") // Prefix all operations with jp_ to namespace them
-        .with_tags(vec!["posts".to_string(), "users".to_string()]) // Only posts and users
-        .build()
-        .expect("Failed to build REST connector from OpenAPI spec");
+        .ok()
+        .and_then(|p| {
+            p.with_prefix("jp_")
+                .with_tags(vec!["posts".to_string(), "users".to_string()])
+                .build()
+                .ok()
+        });
 
-    info!("REST connector configured from OpenAPI spec (jsonplaceholder.yaml)");
-    info!("Available operations:");
-    for (name, endpoint) in jsonplaceholder_api.endpoints() {
-        info!("  - {}: {:?} {}", name, endpoint.method, endpoint.path);
+    let mut builder = Gateway::builder()
+        .with_descriptor_set_bytes(DESCRIPTORS)
+        .add_grpc_client("greeter.Greeter", client);
+
+    if let Some(api) = jsonplaceholder_api {
+        info!("REST connector configured from OpenAPI spec (jsonplaceholder.yaml)");
+        builder = builder.add_rest_connector("jsonplaceholder", api);
+    } else {
+        info!("REST connector skipped (OpenAPI YAML feature may not be enabled)");
     }
 
-    Gateway::builder()
-        .with_descriptor_set_bytes(DESCRIPTORS)
-        .add_grpc_client("greeter.Greeter", client)
-        // Add REST connector for external API integration
-        .add_rest_connector("jsonplaceholder", jsonplaceholder_api)
+    builder
         // Add a rate limiter: 10 req/s with burst of 5
         .add_middleware(RateLimitMiddleware::new(10, 5))
         .with_high_performance(HighPerfConfig::ultra_fast())
@@ -168,6 +171,8 @@ async fn run_gateway(addr: SocketAddr) -> Result<()> {
         // .enable_analytics(AnalyticsConfig::development())
         // Enable Request Collapsing for deduplicating identical gRPC calls
         .with_request_collapsing(grpc_graphql_gateway::RequestCollapsingConfig::default())
+        // Enable @defer incremental delivery
+        .with_defer(DeferConfig::default())
         // Enable Prometheus Metrics
         .enable_metrics()
         .serve(addr.to_string())

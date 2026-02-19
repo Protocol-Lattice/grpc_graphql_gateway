@@ -19,6 +19,11 @@ use crate::persisted_queries::{
 use crate::query_whitelist::{QueryWhitelistConfig, SharedQueryWhitelist};
 use crate::request_collapsing::{RequestCollapsingConfig, SharedRequestCollapsingRegistry};
 use crate::schema::{DynamicSchema, GrpcResponseCache};
+use crate::defer::{
+    has_defer_directive, strip_defer_directives, extract_deferred_fragments,
+    DeferConfig, DeferredExecution, DeferredPart,
+    format_initial_part, format_subsequent_part, MULTIPART_CONTENT_TYPE,
+};
 use async_graphql::ServerError;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use axum::{
@@ -77,6 +82,8 @@ pub struct ServeMux {
     perf_metrics: Arc<PerfMetrics>,
     /// Pre-computed response templates
     response_templates: Arc<ResponseTemplates>,
+    /// @defer incremental delivery configuration
+    defer_config: Option<DeferConfig>,
 }
 
 impl ServeMux {
@@ -104,6 +111,7 @@ impl ServeMux {
             sharded_cache: None,
             perf_metrics: Arc::new(PerfMetrics::default()),
             response_templates: Arc::new(ResponseTemplates::new()),
+            defer_config: None,
         }
     }
 
@@ -220,6 +228,16 @@ impl ServeMux {
     /// Get high-performance metrics
     pub fn perf_metrics(&self) -> &PerfMetrics {
         &self.perf_metrics
+    }
+
+    /// Enable `@defer` incremental delivery
+    pub fn enable_defer(&mut self, config: DeferConfig) {
+        self.defer_config = Some(config);
+    }
+
+    /// Get the defer config (if enabled)
+    pub fn defer_config(&self) -> Option<&DeferConfig> {
+        self.defer_config.as_ref()
     }
 
     /// Add middleware to the execution pipeline
@@ -745,7 +763,9 @@ impl ServeMux {
 
         let router = Router::new();
         let router = if use_fast_path {
-            router.route("/graphql", post(handle_graphql_fast))
+            // When fast path is enabled, still route @defer queries through the standard handler
+            router
+                .route("/graphql", post(handle_graphql_fast_or_defer))
         } else {
             router.route("/graphql", post(handle_graphql_post))
         };
@@ -759,6 +779,7 @@ impl ServeMux {
         let mut router = router
             .route_service("/graphql/ws", get_service(subscription))
             .route("/graphql/live", get(handle_live_query_ws))
+            .route("/graphql/defer", post(handle_graphql_defer))
             .layer(Extension(state.schema.executor()))
             .with_state(state.clone());
 
@@ -954,6 +975,7 @@ impl Clone for ServeMux {
             sharded_cache: self.sharded_cache.clone(),
             perf_metrics: self.perf_metrics.clone(),
             response_templates: self.response_templates.clone(),
+            defer_config: self.defer_config.clone(),
         }
     }
 }
@@ -1018,21 +1040,319 @@ fn extract_entities_recursive(value: &serde_json::Value, entities: &mut HashSet<
 }
 
 /// Handler for POST requests to /graphql
+///
+/// This handler also supports `@defer` — when a query contains `@defer` and
+/// the `Accept` header includes `multipart/mixed`, the response is streamed
+/// as incremental delivery. Otherwise, a regular JSON response is returned.
 async fn handle_graphql_post(
     State(mux): State<Arc<ServeMux>>,
     headers: HeaderMap,
     request: GraphQLRequest,
-) -> impl IntoResponse {
-    GraphQLResponse::from(mux.handle_http(headers, request.into_inner()).await)
+) -> axum::response::Response {
+    let gql_request = request.into_inner();
+
+    // Check if the client accepts multipart/mixed and the query contains @defer
+    let accepts_multipart = headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .map_or(false, |v| v.contains("multipart/mixed"));
+
+    if accepts_multipart && has_defer_directive(&gql_request.query) {
+        if let Some(config) = mux.defer_config().cloned() {
+            if config.enabled {
+                let query = gql_request.query.clone();
+                let fragments = extract_deferred_fragments(&query);
+
+                if fragments.len() <= config.max_deferred_fragments {
+                    let stripped_query = strip_defer_directives(&query);
+                    let mut eager_request = async_graphql::Request::new(stripped_query)
+                        .variables(gql_request.variables);
+                    if let Some(op_name) = gql_request.operation_name {
+                        eager_request = eager_request.operation_name(op_name);
+                    }
+
+                    let full_response = mux.handle_http(headers, eager_request).await;
+                    let full_json = serde_json::to_value(&full_response).unwrap_or_else(|_| {
+                        serde_json::json!({"data": null, "errors": [{"message": "Serialization failed"}]})
+                    });
+
+                    let boundary = config.multipart_boundary.clone();
+                    let (exec, mut rx) = DeferredExecution::new(config, fragments);
+
+                    tokio::spawn(async move {
+                        if let Err(e) = exec.execute(full_json).await {
+                            tracing::warn!(error = %e, "Deferred execution failed");
+                        }
+                    });
+
+                    let stream = async_stream::stream! {
+                        while let Some(part) = rx.recv().await {
+                            match part {
+                                DeferredPart::Initial(payload) => {
+                                    yield Ok::<_, std::convert::Infallible>(
+                                        format_initial_part(&payload, &boundary)
+                                    );
+                                }
+                                DeferredPart::Subsequent(payload) => {
+                                    let is_last = !payload.has_next;
+                                    yield Ok::<_, std::convert::Infallible>(
+                                        format_subsequent_part(&payload, &boundary)
+                                    );
+                                    if is_last {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    };
+
+                    let body = axum::body::Body::from_stream(stream);
+                    return axum::response::Response::builder()
+                        .header("Content-Type", MULTIPART_CONTENT_TYPE)
+                        .header("Transfer-Encoding", "chunked")
+                        .header("Cache-Control", "no-cache")
+                        .body(body)
+                        .unwrap_or_else(|_| {
+                            axum::response::Response::builder()
+                                .status(500)
+                                .body(axum::body::Body::from("Internal Server Error"))
+                                .unwrap()
+                        });
+                }
+            }
+        }
+    }
+
+    // Default: regular JSON response
+    GraphQLResponse::from(mux.handle_http(headers, gql_request).await).into_response()
 }
 
 /// Handler for high-performance POST requests to /graphql
+#[allow(dead_code)]
 async fn handle_graphql_fast(
     State(mux): State<Arc<ServeMux>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
     mux.handle_fast(headers, body).await
+}
+
+/// Combined handler: fast path for normal queries, standard path for @defer.
+///
+/// When `Accept: multipart/mixed` is present, the request is parsed as a
+/// GraphQL request and routed through `handle_graphql_post` which handles
+/// `@defer`. Otherwise, the high-performance fast path is used.
+async fn handle_graphql_fast_or_defer(
+    State(mux): State<Arc<ServeMux>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> axum::response::Response {
+    let accepts_multipart = headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .map_or(false, |v| v.contains("multipart/mixed"));
+
+    if accepts_multipart && mux.defer_config().map_or(false, |c| c.enabled) {
+        // Parse the body as a GraphQL request and handle with defer support
+        if let Ok(gql_request) = serde_json::from_slice::<async_graphql::Request>(&body) {
+            if has_defer_directive(&gql_request.query) {
+                let config = mux.defer_config().unwrap().clone();
+                let query = gql_request.query.clone();
+                let fragments = extract_deferred_fragments(&query);
+
+                if fragments.len() <= config.max_deferred_fragments {
+                    let stripped_query = strip_defer_directives(&query);
+                    let mut eager_request = async_graphql::Request::new(stripped_query)
+                        .variables(gql_request.variables);
+                    if let Some(op_name) = gql_request.operation_name {
+                        eager_request = eager_request.operation_name(op_name);
+                    }
+
+                    let full_response = mux.handle_http(headers, eager_request).await;
+                    let full_json = serde_json::to_value(&full_response).unwrap_or_else(|_| {
+                        serde_json::json!({"data": null, "errors": [{"message": "Serialization failed"}]})
+                    });
+
+                    let boundary = config.multipart_boundary.clone();
+                    let (exec, mut rx) = DeferredExecution::new(config, fragments);
+
+                    tokio::spawn(async move {
+                        if let Err(e) = exec.execute(full_json).await {
+                            tracing::warn!(error = %e, "Deferred execution failed");
+                        }
+                    });
+
+                    let stream = async_stream::stream! {
+                        while let Some(part) = rx.recv().await {
+                            match part {
+                                DeferredPart::Initial(payload) => {
+                                    yield Ok::<_, std::convert::Infallible>(
+                                        format_initial_part(&payload, &boundary)
+                                    );
+                                }
+                                DeferredPart::Subsequent(payload) => {
+                                    let is_last = !payload.has_next;
+                                    yield Ok::<_, std::convert::Infallible>(
+                                        format_subsequent_part(&payload, &boundary)
+                                    );
+                                    if is_last {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    };
+
+                    let body = axum::body::Body::from_stream(stream);
+                    return axum::response::Response::builder()
+                        .header("Content-Type", MULTIPART_CONTENT_TYPE)
+                        .header("Transfer-Encoding", "chunked")
+                        .header("Cache-Control", "no-cache")
+                        .body(body)
+                        .unwrap_or_else(|_| {
+                            axum::response::Response::builder()
+                                .status(500)
+                                .body(axum::body::Body::from("Internal Server Error"))
+                                .unwrap()
+                        });
+                }
+            }
+        }
+    }
+
+    mux.handle_fast(headers, body).await.into_response()
+}
+
+/// Handler for POST requests to /graphql/defer — `@defer` incremental delivery
+///
+/// This endpoint supports the `@defer` directive by returning a
+/// `multipart/mixed` response. The first part contains the eagerly-resolved
+/// initial payload and subsequent parts contain incremental patches for
+/// deferred fragments.
+///
+/// If the query does not contain `@defer`, or if defer is disabled in the
+/// gateway configuration, it falls back to a regular JSON response.
+///
+/// # Multipart Response Format
+///
+/// ```text
+/// Content-Type: multipart/mixed; boundary="-"
+///
+/// ---
+/// Content-Type: application/json; charset=utf-8
+///
+/// {"data":{"user":{"id":"1","name":"Alice"}},"hasNext":true}
+/// ---
+/// Content-Type: application/json; charset=utf-8
+///
+/// {"incremental":[{"data":{"email":"alice@example.com"},"path":["user"],"label":"details"}],"hasNext":false}
+/// -----
+/// ```
+async fn handle_graphql_defer(
+    State(mux): State<Arc<ServeMux>>,
+    headers: HeaderMap,
+    request: GraphQLRequest,
+) -> axum::response::Response {
+    let gql_request = request.into_inner();
+    let query = gql_request.query.clone();
+
+    // Check if @defer is present and enabled
+    let defer_config = mux.defer_config().cloned();
+    let is_deferred = has_defer_directive(&query);
+
+    if !is_deferred || defer_config.as_ref().map_or(true, |c| !c.enabled) {
+        // No @defer or disabled — fall back to normal execution
+        let resp = mux.handle_http(headers, gql_request).await;
+        return GraphQLResponse::from(resp).into_response();
+    }
+
+    let config = defer_config.unwrap();
+
+    // Extract deferred fragments from the original query
+    let fragments = extract_deferred_fragments(&query);
+
+    // Validate fragment count
+    if fragments.len() > config.max_deferred_fragments {
+        let err = ServerError::new(
+            format!(
+                "Too many @defer fragments ({}/{})",
+                fragments.len(),
+                config.max_deferred_fragments
+            ),
+            None,
+        );
+        let resp = async_graphql::Response::from_errors(vec![err]);
+        return GraphQLResponse::from(resp).into_response();
+    }
+
+    // Strip @defer directives and execute the full query eagerly
+    let stripped_query = strip_defer_directives(&query);
+    let mut eager_request = async_graphql::Request::new(stripped_query)
+        .variables(gql_request.variables);
+    if let Some(op_name) = gql_request.operation_name {
+        eager_request = eager_request.operation_name(op_name);
+    }
+
+    tracing::debug!(
+        deferred_fragments = fragments.len(),
+        "Executing @defer query with eager resolution"
+    );
+
+    // Execute the full query
+    let full_response = mux.handle_http(headers, eager_request).await;
+
+    // Convert to serde_json::Value for splitting
+    let full_json = serde_json::to_value(&full_response).unwrap_or_else(|_| {
+        serde_json::json!({"data": null, "errors": [{"message": "Serialization failed"}]})
+    });
+
+    // Create the deferred execution engine
+    let boundary = config.multipart_boundary.clone();
+    let (exec, mut rx) = DeferredExecution::new(config, fragments);
+
+    // Spawn the deferred execution in the background
+    tokio::spawn(async move {
+        if let Err(e) = exec.execute(full_json).await {
+            tracing::warn!(error = %e, "Deferred execution failed");
+        }
+    });
+
+    // Build a streaming body from the receiver
+    let stream = async_stream::stream! {
+        while let Some(part) = rx.recv().await {
+            match part {
+                DeferredPart::Initial(payload) => {
+                    yield Ok::<_, std::convert::Infallible>(
+                        format_initial_part(&payload, &boundary)
+                    );
+                }
+                DeferredPart::Subsequent(payload) => {
+                    let is_last = !payload.has_next;
+                    yield Ok::<_, std::convert::Infallible>(
+                        format_subsequent_part(&payload, &boundary)
+                    );
+                    if is_last {
+                        break;
+                    }
+                }
+            }
+        }
+    };
+
+    let body = axum::body::Body::from_stream(stream);
+
+    axum::response::Response::builder()
+        .header("Content-Type", MULTIPART_CONTENT_TYPE)
+        .header("Transfer-Encoding", "chunked")
+        .header("Cache-Control", "no-cache")
+        .header("Connection", "keep-alive")
+        .body(body)
+        .unwrap_or_else(|_| {
+            axum::response::Response::builder()
+                .status(500)
+                .body(axum::body::Body::from("Internal Server Error"))
+                .unwrap()
+        })
 }
 
 /// Serve the GraphQL Playground UI for ad-hoc exploration.

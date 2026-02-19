@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "0.9.5"
+version = "0.9.6"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -35,6 +35,7 @@ tower-http = { version = "0.6", features = ["cors", "trace", "compression-full",
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = "0.1"
+async-stream = "0.3"
 futures = "0.3"
 
 # Serialization
