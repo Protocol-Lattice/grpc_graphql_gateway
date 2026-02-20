@@ -9,15 +9,15 @@ subgraphs:
   - name: "users"
     url: "http://localhost:4002/graphql"
     headers:
-      X-Gateway-Secret: "protocol-lattice-secret-v1"
+      X-Gateway-Secret: "${GATEWAY_SECRET}"
   - name: "products"
     url: "http://localhost:4003/graphql"
     headers:
-      X-Gateway-Secret: "protocol-lattice-secret-v1"
+      X-Gateway-Secret: "${GATEWAY_SECRET}"
   - name: "reviews"
     url: "http://localhost:4004/graphql"
     headers:
-      X-Gateway-Secret: "protocol-lattice-secret-v1"
+      X-Gateway-Secret: "${GATEWAY_SECRET}"
 
 
 rate_limit:

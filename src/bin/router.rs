@@ -121,7 +121,20 @@ impl AppState {
 
 /// Helper to load configuration and build InnerState
 fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig)> {
-    let config_content = std::fs::read_to_string(config_path).map_err(|e| anyhow::anyhow!("Failed to read config: {}", e))?;
+    let mut config_content = std::fs::read_to_string(config_path).map_err(|e| anyhow::anyhow!("Failed to read config: {}", e))?;
+
+    // Environment variable interpolation: replace ${ENV_VAR} or ${ENV_VAR:-default}
+    let re = regex::Regex::new(r"\$\{([^}]+)\}").unwrap();
+    config_content = re.replace_all(&config_content, |caps: &regex::Captures| {
+        let env_var = &caps[1];
+        if env_var.contains(":-") {
+            let parts: Vec<&str> = env_var.splitn(2, ":-").collect();
+            std::env::var(parts[0]).unwrap_or_else(|_| parts[1].to_string())
+        } else {
+            std::env::var(env_var).unwrap_or_else(|_| "".to_string())
+        }
+    }).to_string();
+
     let mut yaml_config: YamlConfig = serde_yaml::from_str(&config_content).map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
 
     // Allow overriding Gateway Secret from environment variable for security
