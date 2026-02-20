@@ -77,5 +77,4 @@
 # Reference
 
 - [API Documentation](./reference/api.md)
-- [Changelog](./reference/changelog.md)
 - [Contributing](./reference/contributing.md)
