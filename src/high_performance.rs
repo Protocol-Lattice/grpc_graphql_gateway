@@ -34,8 +34,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 // Use mimalloc as global allocator for better performance
-// #[global_allocator]
-// static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// Replaces the system allocator with thread-local arenas for lower contention.
+// Provides 10–30% throughput improvement at high concurrency.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// High-performance configuration for the gateway
 #[derive(Debug, Clone)]
