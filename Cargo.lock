@@ -1119,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "grpc_graphql_gateway"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1168,6 +1168,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "simd-json",
+ "socket2 0.5.10",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",

@@ -1473,6 +1473,122 @@ async fn analytics_reset_handler(
     }
 }
 
+// =============================================================================
+// SO_REUSEPORT Multi-Listener Server (High-Throughput)
+// =============================================================================
+
+/// Build a TCP listener with performance-oriented socket options.
+///
+/// Sets:
+/// - `TCP_NODELAY`: Disables Nagle's algorithm for lower latency.
+/// - `SO_REUSEADDR`: Allows reuse of the address after restart.
+/// - `SO_REUSEPORT` (Linux/macOS): Allows multiple sockets on the same port
+///   so the kernel can distribute `accept()` load across threads.
+/// - Large backlog (4096): Handles burst connection queues without dropping.
+///
+/// # Platform
+///
+/// `SO_REUSEPORT` is supported on Linux ≥ 3.9 and macOS ≥ 10.9.
+/// On other platforms this falls back to a regular `TcpListener`.
+pub fn build_tcp_listener_tuned(addr: &str) -> std::io::Result<std::net::TcpListener> {
+    use std::net::SocketAddr;
+
+    let addr: SocketAddr = addr.parse().map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("invalid addr: {e}"))
+    })?;
+
+    let socket = socket2::Socket::new(
+        if addr.is_ipv6() {
+            socket2::Domain::IPV6
+        } else {
+            socket2::Domain::IPV4
+        },
+        socket2::Type::STREAM,
+        None,
+    )?;
+
+    socket.set_reuse_address(true)?;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    socket.set_reuse_port(true)?;
+
+    socket.set_nodelay(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    // Large backlog for burst connection handling
+    socket.listen(4096)?;
+
+    Ok(socket.into())
+}
+
+/// High-throughput server using one `SO_REUSEPORT` listener per worker.
+///
+/// Creates `num_workers` independent `TcpListener`s bound to the same address
+/// with `SO_REUSEPORT`. The kernel load-balances incoming connections across
+/// them at the socket level — eliminating the single shared `accept()` queue
+/// bottleneck that exists with a single listener.
+///
+/// # Performance Impact
+///
+/// - Eliminates accept-queue lock contention at high connection rates.
+/// - Enables true per-core connection handling (same technique used by nginx).
+/// - Best combined with `HighPerfConfig::ultra_fast()` and `mimalloc`.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use grpc_graphql_gateway::runtime::serve_reuseport;
+/// use axum::Router;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let app = Router::new();
+/// serve_reuseport("0.0.0.0:8080", 8, app).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn serve_reuseport(
+    addr: &str,
+    num_workers: usize,
+    app: axum::Router,
+) -> crate::error::Result<()> {
+    let mut handles = Vec::with_capacity(num_workers);
+    let addr_owned = addr.to_string();
+
+    for i in 0..num_workers {
+        let std_listener = build_tcp_listener_tuned(addr).map_err(|e| {
+            crate::error::Error::Internal(format!(
+                "Failed to bind worker {i} listener on {addr}: {e}"
+            ))
+        })?;
+
+        std_listener.set_nonblocking(true).map_err(|e| {
+            crate::error::Error::Internal(format!("set_nonblocking failed: {e}"))
+        })?;
+
+        let listener = tokio::net::TcpListener::from_std(std_listener).map_err(|e| {
+            crate::error::Error::Internal(format!("from_std failed: {e}"))
+        })?;
+
+        let app = app.clone();
+        let addr_clone = addr_owned.clone();
+        let handle = tokio::spawn(async move {
+            tracing::info!("Worker {i} accepting on {addr_clone} (SO_REUSEPORT)");
+            if let Err(e) = axum::serve(listener, app).await {
+                tracing::error!("Worker {i} server error: {e}");
+            }
+        });
+
+        handles.push(handle);
+    }
+
+    // Wait for all workers
+    for handle in handles {
+        let _ = handle.await;
+    }
+
+    Ok(())
+}
+
 /// WebSocket handler for live queries
 ///
 /// This endpoint handles `@live` queries by:

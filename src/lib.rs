@@ -173,7 +173,7 @@ pub use rest_connector::{
     RestConnectorRegistry, RestEndpoint, RestFieldType, RestGraphQLField, RestRequest,
     RestResponse, RestResponseField, RestResponseSchema, RetryConfig,
 };
-pub use runtime::ServeMux;
+pub use runtime::{ServeMux, serve_reuseport, build_tcp_listener_tuned};
 pub use schema::SchemaBuilder;
 pub use shutdown::{
     os_signal_shutdown, run_with_graceful_shutdown, RequestGuard, ShutdownConfig,

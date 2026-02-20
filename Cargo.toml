@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -116,6 +116,9 @@ bb8 = "0.8"
 # CPU affinity for optimized thread placement (Linux only)
 libc = "0.2"
 
+# Low-level socket configuration (SO_REUSEPORT, backlog tuning)
+socket2 = { version = "0.5", features = ["all"] }
+
 # Faster hasher
 ahash = "0.8"
 
@@ -208,3 +211,7 @@ path = "examples/plugin_system.rs"
 [[bin]]
 name = "binary_protocol_client"
 path = "examples/binary_protocol_client.rs"
+
+[[bin]]
+name = "perf_compare"
+path = "src/bin/perf_compare.rs"
