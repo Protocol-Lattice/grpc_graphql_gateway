@@ -215,3 +215,7 @@ path = "examples/binary_protocol_client.rs"
 [[bin]]
 name = "perf_compare"
 path = "src/bin/perf_compare.rs"
+
+[[bin]]
+name = "decode_gbp"
+path = "src/bin/decode_gbp.rs"
