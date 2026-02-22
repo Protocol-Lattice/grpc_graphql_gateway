@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-02-22
+
+### Changed
+- **Performance**: Added `release` profile optimizations in `Cargo.toml` (`lto = "fat"`, `codegen-units = 1`, `opt-level = 3`, `panic = "abort"`, `strip = true`) for faster and smaller binaries.
+- **Code Quality**: Applied remaining `cargo clippy` suggestions and refactoring.
+
+## [1.0.5] - 2026-02-22
+
+### Security
+- **WAF Batched Query Protection**: Added protection against deep recursive GraphQL query aliases (Batched Query attacks/Server DoS) using regex-based detection in the Web Application Firewall.
+
+## [1.0.4] - 2026-02-22
+
+### Fixed
+- **Code Quality**: Fixed clippy warnings across 27 source files to improve maintainability and correctness.
+
 ## [1.0.3] - 2026-02-20
 
 ### Added
