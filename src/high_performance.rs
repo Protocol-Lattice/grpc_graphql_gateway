@@ -354,6 +354,16 @@ impl CacheStats {
     }
 }
 
+#[test]
+fn ensure_sharded_cache_is_sync_and_send() {
+    fn take_send_ref(_: &impl Send) {}
+    fn take_sync_ref(_: &impl Sync) {}
+    fn _take_sharded_cache<V: Clone + Send + Sync>(cache_ref: &ShardedCache<V>) {
+        take_send_ref(cache_ref);
+        take_sync_ref(cache_ref);
+    }
+}
+
 impl<V: Clone + Send + Sync> ShardedCache<V> {
     /// Create a new sharded cache
     pub fn new(num_shards: usize, max_entries_per_shard: usize) -> Self {
@@ -494,9 +504,6 @@ impl<V: Clone + Send + Sync> ShardedCache<V> {
         self.len() == 0
     }
 }
-
-unsafe impl<V: Clone + Send + Sync> Send for ShardedCache<V> {}
-unsafe impl<V: Clone + Send + Sync> Sync for ShardedCache<V> {}
 
 // =============================================================================
 // Object Pool
