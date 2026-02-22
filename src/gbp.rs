@@ -1063,7 +1063,7 @@ mod tests {
             json!(i64::MAX),
             json!(i64::MIN),
             json!(0.0),
-            json!(3.14159),
+            json!(std::f64::consts::PI),
             json!(-123.456),
             json!(""),
             json!("hello"),

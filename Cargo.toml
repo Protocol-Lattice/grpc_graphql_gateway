@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "1.0.5"
+version = "1.0.6"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -219,3 +219,10 @@ path = "src/bin/perf_compare.rs"
 [[bin]]
 name = "decode_gbp"
 path = "src/bin/decode_gbp.rs"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+panic = "abort"
+strip = true

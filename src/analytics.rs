@@ -850,8 +850,7 @@ mod tests {
 
     #[test]
     fn test_prune_fields() {
-        let mut config = AnalyticsConfig::default();
-        config.max_fields = 5;
+        let config = AnalyticsConfig { max_fields: 5, ..Default::default() };
         let analytics = QueryAnalytics::new(config);
 
         for i in 0..10 {
@@ -864,8 +863,7 @@ mod tests {
 
     #[test]
     fn test_prune_errors() {
-        let mut config = AnalyticsConfig::default();
-        config.max_errors = 5;
+        let config = AnalyticsConfig { max_errors: 5, ..Default::default() };
         let analytics = QueryAnalytics::new(config);
 
         for i in 0..10 {

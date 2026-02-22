@@ -789,7 +789,7 @@ mod tests {
             ext.get("code"),
             Some(&serde_json::json!("SERVICE_UNAVAILABLE"))
         );
-        assert!(ext.get("retryAfter").is_none());
+        assert!(!ext.contains_key("retryAfter"));
     }
 
     #[test]
