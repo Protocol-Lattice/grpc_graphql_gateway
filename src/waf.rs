@@ -264,6 +264,18 @@ fn ssti_regex() -> &'static Regex {
     })
 }
 
+/// Compiled regex for Batched Query (deep alias) detection
+fn batched_query_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        // Look for occurrences of word: word( or word: word{ 
+        // that are repeated more than 30 times in the whole query string.
+        // We do this by capturing the alias signature and we'll check counts manually, 
+        // but for Regex level, we just block if we see too many alias signatures overall.
+        Regex::new(r"(?is)([a-zA-Z0-9_]+\s*:\s*[a-zA-Z0-9_]+\s*[(\{].*?){30,}").expect("Invalid BatchedQuery regex pattern")
+    })
+}
+
 /// WAF Configuration
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WafConfig {
@@ -283,6 +295,8 @@ pub struct WafConfig {
     pub block_ldap: bool,
     #[serde(default = "default_true")]
     pub block_ssti: bool,
+    #[serde(default = "default_true")]
+    pub block_batched_query: bool,
     /// Optional custom regex patterns supplied by the user.
     /// Each pattern is treated as an independent rule; they are OR‑combined.
     #[serde(default)]
@@ -304,6 +318,7 @@ impl Default for WafConfig {
             block_traversal: true,
             block_ldap: true,
             block_ssti: true,
+            block_batched_query: true,
             custom_patterns: Vec::new(),
         }
     }
@@ -569,6 +584,11 @@ pub fn validate_request(req: &async_graphql::Request) -> Result<()> {
         tracing::warn!("SSTI attempt detected in query string");
         return Err(Error::Validation("Potential SSTI detected".to_string()));
     }
+    // Deep recursive alias injection / Batched Query in query string?
+    if batched_query_regex().is_match(&req.query) {
+        tracing::warn!("Batched Query (deep alias) attempt detected in query string");
+        return Err(Error::Validation("Potential Batched Query Server DOS detected".to_string()));
+    }
 
     Ok(())
 }
@@ -607,6 +627,10 @@ pub fn validate_raw(query: &str, variables: Option<&serde_json::Value>, config: 
     if config.block_ssti && ssti_regex().is_match(query) {
         tracing::warn!("SSTI attempt detected in query string");
          return Err(Error::Validation("Potential SSTI detected".to_string()));
+    }
+    if config.block_batched_query && batched_query_regex().is_match(query) {
+        tracing::warn!("Batched Query (deep alias) attempt detected in query string");
+         return Err(Error::Validation("Potential Batched Query Server DOS detected".to_string()));
     }
 
     // Check variables
@@ -697,6 +721,10 @@ pub fn validate_query_string(query: &str, config: &WafConfig) -> Result<()> {
         tracing::warn!("SSTI attempt detected in query string");
         return Err(Error::Validation("Potential SSTI detected".to_string()));
     }
+    if config.block_batched_query && batched_query_regex().is_match(query) {
+        tracing::warn!("Batched Query (deep alias) attempt detected in query string");
+        return Err(Error::Validation("Potential Batched Query Server DOS detected".to_string()));
+    }
     Ok(())
 }
 
@@ -782,5 +810,41 @@ mod tests {
                 query
             );
         }
+    }
+
+    /// Verify that deep recursive aliases are blocked
+    #[test]
+    fn test_batched_query_catch() {
+        // Construct a malicious payload string with 35 consecutive aliases
+        // e.g. "a1: node(id:1) { id } a2: node(id:2) { id } ..."
+        let mut malicious_query = String::from("query Malicious { ");
+        for i in 0..35 {
+            malicious_query.push_str(&format!("alias{}: node(id: \"{}\") {{ id }} ", i, i));
+        }
+        malicious_query.push('}');
+
+        let config = WafConfig::default();
+        let result = validate_raw(&malicious_query, None, &config);
+        
+        // Should catch the malicious alias pattern
+        assert!(
+            result.is_err(),
+            "Missed Batched Query DOS attack: {}",
+            malicious_query
+        );
+
+        // A normal query with only 5 aliases should easily pass
+        let mut normal_query = String::from("query Normal { ");
+        for i in 0..5 {
+            normal_query.push_str(&format!("alias{}: node(id: \"{}\") {{ id }} ", i, i));
+        }
+        normal_query.push('}');
+        let result_normal = validate_raw(&normal_query, None, &config);
+        
+        assert!(
+            result_normal.is_ok(),
+            "False positive on normal alias query: {}",
+            normal_query
+        );
     }
 }
