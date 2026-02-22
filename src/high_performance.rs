@@ -1221,8 +1221,8 @@ mod tests {
     #[test]
     fn test_response_templates() {
         let templates = ResponseTemplates::new();
-        assert!(templates.empty_data.len() > 0);
-        assert!(templates.null_data.len() > 0);
+        assert!(!templates.empty_data.is_empty());
+        assert!(!templates.null_data.is_empty());
         
         assert!(templates.errors.contains_key("UNAUTHORIZED"));
         assert!(templates.errors.contains_key("NOT_FOUND"));

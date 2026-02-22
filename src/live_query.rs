@@ -108,8 +108,10 @@ impl LiveQueryConfig {
 
 /// Strategy for detecting when to push live query updates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum LiveQueryStrategy {
     /// Push updates when invalidation triggers fire (recommended)
+    #[default]
     Invalidation,
     /// Poll the underlying data source at regular intervals
     Polling,
@@ -117,11 +119,6 @@ pub enum LiveQueryStrategy {
     HashDiff,
 }
 
-impl Default for LiveQueryStrategy {
-    fn default() -> Self {
-        Self::Invalidation
-    }
-}
 
 impl std::str::FromStr for LiveQueryStrategy {
     type Err = ();

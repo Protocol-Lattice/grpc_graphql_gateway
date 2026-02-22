@@ -1,3 +1,4 @@
+#![allow(clippy::should_implement_trait)]
 //! Middleware support for the gateway
 //!
 //! This module provides extensible middleware for authentication, logging, rate limiting,
@@ -1011,6 +1012,7 @@ impl MiddlewareChain {
     }
 
     /// Add a middleware to the chain
+    #[allow(clippy::should_implement_trait)]
     pub fn add<M: Middleware + 'static>(mut self, middleware: M) -> Self {
         self.middlewares.push(Arc::new(middleware));
         self
@@ -1239,7 +1241,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_logging_middleware_default() {
-        let middleware = LoggingMiddleware::default();
+        let middleware = LoggingMiddleware;
         assert_eq!(middleware.name(), "LoggingMiddleware");
     }
 

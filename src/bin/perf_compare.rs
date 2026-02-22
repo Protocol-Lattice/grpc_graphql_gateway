@@ -47,7 +47,8 @@ fn bench<F: Fn()>(label: &'static str, ops: u64, warmup: u64, f: F) -> BenchResu
     }
     let start = Instant::now();
     for _ in 0..ops {
-        black_box(f());
+        f();
+        black_box(());
     }
     BenchResult { label, ops, elapsed: start.elapsed() }
 }
@@ -65,7 +66,8 @@ where
             let f = f.clone();
             std::thread::spawn(move || {
                 for _ in 0..ops_each {
-                    black_box(f());
+                    f();
+                    black_box(());
                 }
             })
         })

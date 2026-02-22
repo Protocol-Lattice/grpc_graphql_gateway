@@ -268,9 +268,8 @@ mod tests {
         let loader2 = loader1.clone();
 
         // Verify the clone shares the same underlying data
-        assert_eq!(
-            Arc::ptr_eq(&loader1.entity_configs, &loader2.entity_configs),
-            true
+        assert!(
+            Arc::ptr_eq(&loader1.entity_configs, &loader2.entity_configs)
         );
     }
 

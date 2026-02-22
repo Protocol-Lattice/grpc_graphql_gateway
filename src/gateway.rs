@@ -1469,7 +1469,7 @@ mod tests {
             .add_grpc_client("test.Service", client);
         
         let gateway = builder.build().unwrap();
-        assert!(gateway.client_pool().names().len() >= 1);
+        assert!(!gateway.client_pool().names().is_empty());
     }
 
     #[tokio::test]
@@ -1668,7 +1668,7 @@ mod tests {
     #[tokio::test]
     async fn test_builder_empty_descriptor_fails() {
         let builder = GatewayBuilder::new()
-            .with_descriptor_set_bytes(&[]);
+            .with_descriptor_set_bytes([]);
         
         let result = builder.build();
         assert!(result.is_err());
@@ -1677,7 +1677,7 @@ mod tests {
     #[tokio::test]
     async fn test_builder_invalid_descriptor_fails() {
         let builder = GatewayBuilder::new()
-            .with_descriptor_set_bytes(&[0xFF, 0xFF, 0xFF, 0xFF]);
+            .with_descriptor_set_bytes([0xFF, 0xFF, 0xFF, 0xFF]);
         
         let result = builder.build();
         assert!(result.is_err());

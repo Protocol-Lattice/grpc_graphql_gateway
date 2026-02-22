@@ -1,7 +1,6 @@
 use grpc_graphql_gateway::gbp::GbpEncoder;
 use serde_json::json;
 use warp::{Filter, Reply};
-use base64;
 
 #[tokio::main]
 async fn main() {

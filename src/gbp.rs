@@ -947,11 +947,11 @@ mod tests {
         let mut encoder = GbpEncoder::new();
         
         // Define realistic, limited value sets for categorical fields
-        let statuses = vec!["ACTIVE", "INACTIVE", "PENDING", "SUSPENDED", "TRIAL"];
-        let roles = vec!["ADMIN", "MEMBER", "VIEWER", "OWNER", "CONTRIBUTOR", "GUEST"];
-        let tiers = vec!["FREE", "BASIC", "PREMIUM", "ENTERPRISE"];
-        let regions = vec!["US-EAST", "US-WEST", "EU-CENTRAL", "ASIA-PACIFIC", "SOUTH-AMERICA"];
-        let themes = vec!["dark", "light", "auto"];
+        let statuses = ["ACTIVE", "INACTIVE", "PENDING", "SUSPENDED", "TRIAL"];
+        let roles = ["ADMIN", "MEMBER", "VIEWER", "OWNER", "CONTRIBUTOR", "GUEST"];
+        let tiers = ["FREE", "BASIC", "PREMIUM", "ENTERPRISE"];
+        let regions = ["US-EAST", "US-WEST", "EU-CENTRAL", "ASIA-PACIFIC", "SOUTH-AMERICA"];
+        let themes = ["dark", "light", "auto"];
         
         // Simulate 10 different organizations (shared across users)
         let organizations: Vec<Value> = (0..10).map(|i| json!({

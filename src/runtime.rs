@@ -1074,7 +1074,7 @@ async fn handle_graphql_post(
     let accepts_multipart = headers
         .get("accept")
         .and_then(|v| v.to_str().ok())
-        .map_or(false, |v| v.contains("multipart/mixed"));
+        .is_some_and(|v| v.contains("multipart/mixed"));
 
     if accepts_multipart && has_defer_directive(&gql_request.query) {
         if let Some(config) = mux.defer_config().cloned() {
@@ -1169,9 +1169,9 @@ async fn handle_graphql_fast_or_defer(
     let accepts_multipart = headers
         .get("accept")
         .and_then(|v| v.to_str().ok())
-        .map_or(false, |v| v.contains("multipart/mixed"));
+        .is_some_and(|v| v.contains("multipart/mixed"));
 
-    if accepts_multipart && mux.defer_config().map_or(false, |c| c.enabled) {
+    if accepts_multipart && mux.defer_config().is_some_and(|c| c.enabled) {
         // Parse the body as a GraphQL request and handle with defer support
         if let Ok(gql_request) = serde_json::from_slice::<async_graphql::Request>(&body) {
             if has_defer_directive(&gql_request.query) {
@@ -1279,7 +1279,7 @@ async fn handle_graphql_defer(
     let defer_config = mux.defer_config().cloned();
     let is_deferred = has_defer_directive(&query);
 
-    if !is_deferred || defer_config.as_ref().map_or(true, |c| !c.enabled) {
+    if !is_deferred || defer_config.as_ref().is_none_or(|c| !c.enabled) {
         // No @defer or disabled — fall back to normal execution
         let resp = mux.handle_http(headers, gql_request).await;
         return GraphQLResponse::from(resp).into_response();

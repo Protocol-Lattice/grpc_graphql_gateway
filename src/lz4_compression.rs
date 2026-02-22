@@ -292,7 +292,7 @@ mod tests {
         let data = b"Test data for compression level comparison";
         let compressed = compress_lz4(data).unwrap();
         // Just verify it works - level is already set to 1 (fast)
-        assert!(compressed.len() > 0);
+        assert!(!compressed.is_empty());
     }
 
     #[tokio::test]

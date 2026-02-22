@@ -137,8 +137,8 @@ const NOSQLI_PATTERNS: &[&str] = &[
 /// group because they cause false positives in GraphQL queries:
 ///   - `\n` is normal multi-line formatting (e.g. `{\n  id\n  message\n}`)
 ///   - `$` is the GraphQL variable prefix (e.g. `$id`, `$name`)
-/// We also use word boundary `\b` after the command name to avoid partial
-/// matches (e.g. "identity" should not trigger on "id").
+///     We also use word boundary `\b` after the command name to avoid partial
+///     matches (e.g. "identity" should not trigger on "id").
 const CMDI_PATTERNS: &[&str] = &[
     // Separators with commands — only real shell metacharacters
     r"(?i)(;|\||\|\||&|&&|`)\s*\b(ls|cat|rm|mv|cp|echo|wget|curl|ping|nc|netcat|nmap|whoami|id|pwd|grep|awk|sed|tar|zip|unzip|python|perl|ruby|gcc|make|kill|sudo|su|ssh|scp|ftp|telnet|dig|nslookup|ifconfig|ip|route|ps|top|free|df|du|uname|hostname|env|export|alias|declare|mount|umount|chmod|chown|chgrp|touch|mkdir|rmdir)\b",

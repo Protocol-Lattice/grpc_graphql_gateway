@@ -1,3 +1,4 @@
+#![allow(clippy::field_reassign_with_default)]
 //! Response Caching for GraphQL queries
 //!
 //! This module provides an LRU-based response cache with support for:
@@ -355,17 +356,14 @@ impl ResponseCache {
     ) {
         // Calculate TTL using Smart TTL if available
         let ttl_secs = if let Some(smart_ttl) = &self.config.smart_ttl_manager {
-            match smart_ttl.calculate_ttl(query, query_type, None).await {
-                ttl_result => {
-                    tracing::debug!(
-                        cache_key = %cache_key,
-                        ttl_secs = ttl_result.ttl.as_secs(),
-                        strategy = ?ttl_result.strategy,
-                        "Smart TTL calculated"
-                    );
-                    ttl_result.ttl.as_secs()
-                }
-            }
+            let ttl_result = smart_ttl.calculate_ttl(query, query_type, None).await;
+            tracing::debug!(
+                cache_key = %cache_key,
+                ttl_secs = ttl_result.ttl.as_secs(),
+                strategy = ?ttl_result.strategy,
+                "Smart TTL calculated"
+            );
+            ttl_result.ttl.as_secs()
         } else {
             self.config.default_ttl.as_secs()
         };
@@ -821,41 +819,36 @@ impl ResponseCache {
     }
 
     fn evict_if_needed(&self) {
-        match &self.backend {
-            CacheBackend::Memory { .. } => {
-                let current_len = self.len();
-                if current_len >= self.config.max_size {
-                    // Logic continues below...
-                    let to_remove = current_len - self.config.max_size + 1;
-                    if let CacheBackend::Memory {
-                        insertion_order, ..
-                    } = &self.backend
-                    {
-                        let mut order = insertion_order.write();
-                        let drain_count = to_remove.min(order.len());
-                        let keys_to_remove: Vec<String> = order.drain(..drain_count).collect();
-                        drop(order); // Release lock before calling remove_entries_internal
-                        self.remove_entries_internal(&keys_to_remove);
-                    }
+        if let CacheBackend::Memory { .. } = &self.backend {
+            let current_len = self.len();
+            if current_len >= self.config.max_size {
+                // Logic continues below...
+                let to_remove = current_len - self.config.max_size + 1;
+                if let CacheBackend::Memory {
+                    insertion_order, ..
+                } = &self.backend
+                {
+                    let mut order = insertion_order.write();
+                    let drain_count = to_remove.min(order.len());
+                    let keys_to_remove: Vec<String> = order.drain(..drain_count).collect();
+                    drop(order); // Release lock before calling remove_entries_internal
+                    self.remove_entries_internal(&keys_to_remove);
                 }
             }
-            _ => {} // Redis handles eviction (maxmemory policy)
         }
     }
 
     fn remove_entries(&self, cache_keys: &HashSet<String>) {
-        match &self.backend {
-            CacheBackend::Memory {
-                insertion_order, ..
-            } => {
-                let keys_vec: Vec<String> = cache_keys.iter().cloned().collect();
-                self.remove_entries_internal(&keys_vec);
+        if let CacheBackend::Memory {
+            insertion_order, ..
+        } = &self.backend
+        {
+            let keys_vec: Vec<String> = cache_keys.iter().cloned().collect();
+            self.remove_entries_internal(&keys_vec);
 
-                // Update insertion order
-                let mut order = insertion_order.write();
-                order.retain(|k| !cache_keys.contains(k));
-            }
-            _ => {} // Handled elsewhere for Redis
+            // Update insertion order
+            let mut order = insertion_order.write();
+            order.retain(|k| !cache_keys.contains(k));
         }
     }
 
