@@ -167,28 +167,24 @@ pub fn strip_defer_directives(query: &str) -> String {
     let mut result = query.to_string();
 
     // Remove @defer(...) with arguments — greedy innermost-first
-    loop {
-        if let Some(start) = result.find("@defer(") {
-            let after_open = start + 7; // length of "@defer("
-            let mut depth = 1;
-            let mut end = after_open;
-            for (i, ch) in result[after_open..].char_indices() {
-                match ch {
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            end = after_open + i + 1;
-                            break;
-                        }
+    while let Some(start) = result.find("@defer(") {
+        let after_open = start + 7; // length of "@defer("
+        let mut depth = 1;
+        let mut end = after_open;
+        for (i, ch) in result[after_open..].char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = after_open + i + 1;
+                        break;
                     }
-                    _ => {}
                 }
+                _ => {}
             }
-            result = format!("{}{}", &result[..start], &result[end..]);
-        } else {
-            break;
         }
+        result = format!("{}{}", &result[..start], &result[end..]);
     }
 
     // Remove bare @defer (no args)
@@ -266,8 +262,7 @@ fn extract_arg(args: &str, name: &str) -> Option<String> {
         let after = &args[idx + pattern.len()..];
         let trimmed = after.trim_start();
         // Handle quoted strings
-        if trimmed.starts_with('"') {
-            let inner = &trimmed[1..];
+        if let Some(inner) = trimmed.strip_prefix('"') {
             if let Some(end) = inner.find('"') {
                 return Some(inner[..end].to_string());
             }

@@ -395,7 +395,7 @@ mod tests {
             Error::Connection("test".to_string()),
             Error::WebSocket("test".to_string()),
             Error::Internal("test".to_string()),
-            Error::Io(io::Error::new(io::ErrorKind::Other, "test")),
+            Error::Io(io::Error::other("test")),
             Error::TooManyRequests("test".to_string()),
             Error::QueryTooDeep("test".to_string()),
             Error::QueryTooComplex("test".to_string()),

@@ -479,10 +479,10 @@ impl SchemaBuilder {
                                 if live_opts.enabled {
                                     let strategy = crate::graphql::LiveQueryStrategy::try_from(live_opts.strategy)
                                         .ok()
-                                        .and_then(|s| match s {
-                                            crate::graphql::LiveQueryStrategy::Invalidation => Some(LiveQueryStrategy::Invalidation),
-                                            crate::graphql::LiveQueryStrategy::Polling => Some(LiveQueryStrategy::Polling),
-                                            crate::graphql::LiveQueryStrategy::HashDiff => Some(LiveQueryStrategy::HashDiff),
+                                        .map(|s| match s {
+                                            crate::graphql::LiveQueryStrategy::Invalidation => LiveQueryStrategy::Invalidation,
+                                            crate::graphql::LiveQueryStrategy::Polling => LiveQueryStrategy::Polling,
+                                            crate::graphql::LiveQueryStrategy::HashDiff => LiveQueryStrategy::HashDiff,
                                         })
                                         .unwrap_or(LiveQueryStrategy::Invalidation);
 
@@ -1519,6 +1519,7 @@ impl OperationConfig {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_field(
     name: String,
     service: &prost_reflect::ServiceDescriptor,
@@ -1612,6 +1613,7 @@ fn build_field(
     Ok(field)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_subscription_field(
     name: String,
     service: &prost_reflect::ServiceDescriptor,

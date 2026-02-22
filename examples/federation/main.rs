@@ -1,3 +1,4 @@
+#![allow(clippy::result_large_err, clippy::const_is_empty)]
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;

@@ -148,7 +148,7 @@ fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig
     // Parse port from listen address for RouterConfig
     let port = yaml_config.server.listen
         .split(':')
-        .last()
+        .next_back()
         .and_then(|p| p.parse().ok())
         .unwrap_or(4000);
 
@@ -281,7 +281,7 @@ fn start_config_watcher(config_path: String, state: Arc<AppState>) {
 
         tracing::info!("👀 Watching for config changes in {}", config_path);
 
-        while let Some(_) = rx.recv().await {
+        while rx.recv().await.is_some() {
             // Debounce: wait 100ms and drain any other events
             tokio::time::sleep(Duration::from_millis(100)).await;
             while rx.try_recv().is_ok() {}
@@ -1205,9 +1205,7 @@ async fn handle_live_query_subscription(
             // Listen for invalidation events
             let mut invalidation_rx = state.live_query_store.subscribe_invalidations();
             
-            loop {
-                match invalidation_rx.recv().await {
-                    Ok(event) => {
+            while let Ok(event) = invalidation_rx.recv().await {
                         // Check if this subscription is affected
                         if let Some(query_info) = state.live_query_store.get(&subscription_id) {
                             if query_info.should_update(&event) && query_info.throttle_elapsed() {
@@ -1243,12 +1241,6 @@ async fn handle_live_query_subscription(
                             break;
                         }
                     }
-                    Err(_) => {
-                        // Channel closed
-                        break;
-                    }
-                }
-            }
         }
         Err(e) => {
             tracing::error!(error = %e, "Initial query execution failed");

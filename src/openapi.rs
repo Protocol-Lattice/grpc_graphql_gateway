@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+#![allow(clippy::only_used_in_recursion)]
 //! OpenAPI to REST Connector Parser
 //!
 //! This module provides functionality to automatically generate REST connectors
@@ -47,6 +49,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+type OperationFilter = Box<dyn Fn(&str, &str) -> bool + Send + Sync>;
+
 /// OpenAPI specification parser
 ///
 /// Parses OpenAPI/Swagger specifications and generates REST connectors
@@ -55,7 +59,7 @@ pub struct OpenApiParser {
     spec: OpenApiSpec,
     base_url_override: Option<String>,
     timeout: Duration,
-    operation_filter: Option<Box<dyn Fn(&str, &str) -> bool + Send + Sync>>,
+    operation_filter: Option<OperationFilter>,
     tag_filter: Option<Vec<String>>,
     prefix: Option<String>,
     auth_config: HashMap<String, String>,
@@ -848,6 +852,7 @@ impl OpenApiParser {
     }
 
     /// Convert schema to REST field type
+    #[allow(clippy::only_used_in_recursion)]
     fn schema_to_field_type(
         &self,
         schema: &SchemaObject,

@@ -502,7 +502,7 @@ impl GbpRouter {
             analyzer
                 .calculate_query_cost(&query_string)
                 .await
-                .map_err(|e| crate::Error::Validation(e))?;
+                .map_err(crate::Error::Validation)?;
         }
 
         // 2. CACHE CHECK: Fast path for repeated queries
@@ -530,7 +530,7 @@ impl GbpRouter {
                     let gql_val = receiver
                         .recv()
                         .await
-                        .map_err(|e| crate::Error::Internal(e))?;
+                        .map_err(crate::Error::Internal)?;
                     // Convert sync_graphql::Value -> serde_json::Value
                     return serde_json::to_value(gql_val).map_err(|e| {
                         crate::Error::Internal(format!("Serialization error: {}", e))
@@ -577,8 +577,8 @@ impl GbpRouter {
                     match &res {
                         Ok(val) => {
                             // Check for severe GraphQL errors (errors present + no data)
-                            let has_errors = val.get("errors").and_then(|e| e.as_array()).map_or(false, |a| !a.is_empty());
-                            let has_data = val.get("data").map_or(false, |d| !d.is_null());
+                            let has_errors = val.get("errors").and_then(|e| e.as_array()).is_some_and(|a| !a.is_empty());
+                            let has_data = val.get("data").is_some_and(|d| !d.is_null());
                             
                             if has_errors && !has_data {
                                 cb.record_failure();
@@ -699,7 +699,7 @@ impl GbpRouter {
             analyzer
                 .calculate_query_cost(&query_string)
                 .await
-                .map_err(|e| crate::Error::Validation(e))?;
+                .map_err(crate::Error::Validation)?;
         }
 
         // Cache check
@@ -720,7 +720,7 @@ impl GbpRouter {
                     let gql_val = receiver
                         .recv()
                         .await
-                        .map_err(|e| crate::Error::Internal(e))?;
+                        .map_err(crate::Error::Internal)?;
                     return serde_json::to_value(gql_val).map_err(|e| {
                         crate::Error::Internal(format!("Serialization error: {}", e))
                     });
@@ -762,8 +762,8 @@ impl GbpRouter {
                     match &res {
                         Ok(val) => {
                             // Check for severe GraphQL errors (errors present + no data)
-                            let has_errors = val.get("errors").and_then(|e| e.as_array()).map_or(false, |a| !a.is_empty());
-                            let has_data = val.get("data").map_or(false, |d| !d.is_null());
+                            let has_errors = val.get("errors").and_then(|e| e.as_array()).is_some_and(|a| !a.is_empty());
+                            let has_data = val.get("data").is_some_and(|d| !d.is_null());
                             
                             if has_errors && !has_data {
                                 cb.record_failure();
@@ -954,7 +954,7 @@ mod tests {
 
         // Should have allowed ~20 (burst) and blocked some
         assert!(
-            allowed >= 15 && allowed <= 22,
+            (15..=22).contains(&allowed),
             "Expected ~20 allowed, got {}",
             allowed
         );

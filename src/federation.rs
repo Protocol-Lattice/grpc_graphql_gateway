@@ -445,10 +445,8 @@ mod tests {
     #[test]
     fn test_entity_config_composite_keys() {
         // Test that key field sets are properly parsed
-        let keys = vec![
-            vec!["id".to_string()],
-            vec!["org".to_string(), "user".to_string()],
-        ];
+        let keys = [vec!["id".to_string()],
+            vec!["org".to_string(), "user".to_string()]];
         assert_eq!(keys.len(), 2);
         assert_eq!(keys[0], vec!["id"]);
         assert_eq!(keys[1], vec!["org", "user"]);

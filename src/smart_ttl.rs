@@ -129,13 +129,15 @@ impl SmartTtlManager {
         let start = Instant::now();
 
         // 1. Check for cache control hints from schema
-        if self.config.respect_cache_hints && cache_hint.is_some() {
-            return TtlResult {
-                ttl: cache_hint.unwrap(),
-                strategy: TtlStrategy::CacheHint,
-                confidence: 1.0,
-                calculation_time: start.elapsed(),
-            };
+        if self.config.respect_cache_hints {
+            if let Some(hint) = cache_hint {
+                return TtlResult {
+                    ttl: hint,
+                    strategy: TtlStrategy::CacheHint,
+                    confidence: 1.0,
+                    calculation_time: start.elapsed(),
+                };
+            }
         }
 
         // 2. Check custom pattern matches
@@ -371,7 +373,7 @@ impl SmartTtlManager {
     fn calculate_confidence(&self, observations: u64) -> f64 {
         let min = self.config.min_observations as f64;
         let confidence = (observations as f64 - min) / (min * 10.0);
-        confidence.min(1.0).max(0.5)
+        confidence.clamp(0.5, 1.0)
     }
 
     /// Get analytics about TTL effectiveness
