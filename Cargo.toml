@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "1.0.9"
+version = "1.1.0"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -135,7 +135,7 @@ flate2 = "1.1.5"
 rayon = "1.10"
 
 # WASM Plugin Sandboxing (optional)
-wasmtime = { version = "38.0.4", optional = true }
+wasmtime = { version = "41.0.4", optional = true }
 
 # Live query example dependencies
 lazy_static = "1.4"
