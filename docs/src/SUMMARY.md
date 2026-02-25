@@ -34,6 +34,8 @@
 - [Security Headers](./security/security-headers.md)
 - [DoS Protection](./security/dos-protection.md)
 - [Query Whitelisting](./security/query-whitelisting.md)
+- [Mutual TLS (mTLS)](./security/mtls.md)
+- [WASM Plugin Sandboxing](./security/wasm-plugins.md)
 
 # Advanced Features
 
