@@ -73,6 +73,7 @@ pub mod live_query;
 pub mod lz4_compression;
 pub mod metrics;
 pub mod middleware;
+pub mod mtls;
 pub mod openapi;
 pub mod persisted_queries;
 pub mod plugin;
@@ -189,4 +190,8 @@ pub use subscription::{
 };
 pub use tracing_otel::{init_tracer, shutdown_tracer, GraphQLSpan, GrpcSpan, TracingConfig};
 pub use waf::{validate_request, WafMiddleware};
+pub use mtls::{
+    CertificateAuthority, MtlsConfig, MtlsError, MtlsProvider, MtlsStatus, Svid,
+    export_svid, issue_subgraph_svid,
+};
 

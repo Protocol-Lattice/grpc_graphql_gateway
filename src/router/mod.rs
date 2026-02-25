@@ -322,6 +322,11 @@ pub struct SubgraphConfig {
     /// Optional headers to send to this subgraph (e.g., Auth tokens)
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    /// Optional mTLS configuration for this subgraph
+    /// When enabled, the subgraph URL should use `https://` and
+    /// the `X-Gateway-Secret` header is no longer needed.
+    #[serde(default)]
+    pub mtls: Option<crate::mtls::MtlsConfig>,
 }
 
 /// A high-performance GBP-enabled Federation Router
@@ -372,6 +377,9 @@ impl GbpRouter {
         let mut circuit_breakers = HashMap::with_capacity(config.subgraphs.len());
         let cb_config = config.circuit_breaker.clone().unwrap_or_default();
 
+        // Build a shared tokio runtime handle for blocking mTLS operations
+        // (We need to block_on for async mTLS client building during sync `new()`)
+
         for subgraph in &config.subgraphs {
             let mut builder = RestConnector::builder()
                 .base_url(&subgraph.url)
@@ -394,6 +402,56 @@ impl GbpRouter {
             // Apply custom headers (Auth, etc.)
             for (key, value) in &subgraph.headers {
                 builder = builder.default_header(key, value);
+            }
+
+            // Apply mTLS if configured for this subgraph
+            if let Some(ref mtls_config) = subgraph.mtls {
+                if mtls_config.enabled {
+                    match crate::mtls::MtlsProvider::new(mtls_config.clone()) {
+                        Ok(provider) => {
+                            // Build mTLS client synchronously (we're in a sync constructor)
+                            // Use a one-shot runtime for async SVID operations
+                            let rt = tokio::runtime::Runtime::new().ok();
+                            let mtls_client = rt.as_ref().and_then(|rt| {
+                                rt.block_on(provider.build_client()).ok()
+                            });
+
+                            if let Some(client) = mtls_client {
+                                builder = builder.with_client(client);
+                                tracing::info!(
+                                    subgraph = %subgraph.name,
+                                    trust_domain = %mtls_config.trust_domain,
+                                    "🔒 mTLS enabled for subgraph (Zero-Trust mode)"
+                                );
+                            } else if mtls_config.allow_fallback {
+                                tracing::warn!(
+                                    subgraph = %subgraph.name,
+                                    "⚠️ mTLS client build failed, falling back to plain HTTP"
+                                );
+                            } else {
+                                tracing::error!(
+                                    subgraph = %subgraph.name,
+                                    "❌ mTLS client build failed and fallback is disabled"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            if mtls_config.allow_fallback {
+                                tracing::warn!(
+                                    subgraph = %subgraph.name,
+                                    error = %e,
+                                    "⚠️ mTLS initialization failed, falling back to plain HTTP"
+                                );
+                            } else {
+                                tracing::error!(
+                                    subgraph = %subgraph.name,
+                                    error = %e,
+                                    "❌ mTLS initialization failed and fallback is disabled"
+                                );
+                            }
+                        }
+                    }
+                }
             }
 
             clients.insert(

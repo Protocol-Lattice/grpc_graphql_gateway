@@ -889,6 +889,8 @@ pub struct RestConnectorBuilder {
     interceptors: Vec<Arc<dyn RequestInterceptor>>,
     enable_cache: bool,
     cache_size: usize,
+    /// Optional pre-configured HTTP client (e.g., mTLS-enabled)
+    custom_client: Option<reqwest::Client>,
 }
 
 impl RestConnectorBuilder {
@@ -961,16 +963,35 @@ impl RestConnectorBuilder {
         self
     }
 
+    /// Use a pre-configured HTTP client (e.g., mTLS-enabled)
+    ///
+    /// When set, the builder will use this client instead of creating a new default one.
+    /// This is the primary integration point for mTLS: the `MtlsProvider` builds a
+    /// reqwest::Client with the TLS identity and CA trust bundle, which is then
+    /// injected here.
+    pub fn with_client(mut self, client: reqwest::Client) -> Self {
+        self.custom_client = Some(client);
+        self
+    }
+
     /// Build the RestConnector
     pub fn build(self) -> Result<RestConnector> {
         if self.config.base_url.is_empty() {
             return Err(Error::Schema("REST connector requires a base_url".into()));
         }
 
-        let client = reqwest::Client::builder()
-            .timeout(self.config.timeout)
-            .build()
-            .map_err(|e| Error::Schema(format!("Failed to create HTTP client: {}", e)))?;
+        // Use custom client (e.g., mTLS-configured) if provided, otherwise build default
+        let client = if let Some(client) = self.custom_client {
+            info!(
+                "REST connector using pre-configured HTTP client (mTLS)",
+            );
+            client
+        } else {
+            reqwest::Client::builder()
+                .timeout(self.config.timeout)
+                .build()
+                .map_err(|e| Error::Schema(format!("Failed to create HTTP client: {}", e)))?
+        };
 
         let cache = if self.enable_cache {
             Some(Arc::new(RwLock::new(RestCache::new(self.cache_size))))

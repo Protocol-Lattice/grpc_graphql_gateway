@@ -54,6 +54,9 @@ struct YamlConfig {
     disable_introspection: bool,
     #[serde(default)]
     circuit_breaker: Option<grpc_graphql_gateway::circuit_breaker::CircuitBreakerConfig>,
+    /// Global mTLS configuration applied to all subgraphs (can be overridden per-subgraph)
+    #[serde(default)]
+    mtls: Option<grpc_graphql_gateway::mtls::MtlsConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,6 +95,8 @@ struct InnerState {
     ddos: DdosProtection,
     gateway_secret: Option<String>,
     waf_config: grpc_graphql_gateway::waf::WafConfig,
+    #[allow(dead_code)]
+    mtls_enabled: bool,
 }
 
 struct AppState {
@@ -137,12 +142,29 @@ fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig
 
     let mut yaml_config: YamlConfig = serde_yaml::from_str(&config_content).map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
 
+    // Apply global mTLS config to subgraphs that don't have their own override
+    let mtls_enabled = yaml_config.mtls.as_ref().map(|m| m.enabled).unwrap_or(false);
+    if let Some(ref global_mtls) = yaml_config.mtls {
+        if global_mtls.enabled {
+            for subgraph in &mut yaml_config.subgraphs {
+                if subgraph.mtls.is_none() {
+                    subgraph.mtls = Some(global_mtls.clone());
+                }
+            }
+            println!("  🔒 mTLS: Zero-Trust mode enabled (trust_domain: {})", global_mtls.trust_domain);
+        }
+    }
+
     // Allow overriding Gateway Secret from environment variable for security
+    // Note: When mTLS is enabled, the GATEWAY_SECRET is optional (mTLS provides 
+    // cryptographic authentication). However, it can still be used as defense-in-depth.
     let gateway_secret = std::env::var("GATEWAY_SECRET").ok();
     if let Some(secret) = &gateway_secret {
         for subgraph in &mut yaml_config.subgraphs {
             subgraph.headers.insert("X-Gateway-Secret".to_string(), secret.clone());
         }
+    } else if mtls_enabled {
+        println!("  ℹ️  GATEWAY_SECRET not set (mTLS provides cryptographic authentication)");
     }
 
     // Parse port from listen address for RouterConfig
@@ -176,6 +198,7 @@ fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig
         ddos,
         gateway_secret,
         waf_config,
+        mtls_enabled,
     }, yaml_config))
 }
 
@@ -349,6 +372,13 @@ async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<App
      }
      println!("  ║  GBP Binary:    ✅ Bidirectional (99% compression)        ║");
      println!("  ║  DDoS Shield:   {} global RPS, {} per-IP            ║", ddos_config.global_rps, ddos_config.per_ip_rps);
+     if yaml_config.mtls.as_ref().map(|m| m.enabled).unwrap_or(false) {
+         let mtls_cfg = yaml_config.mtls.as_ref().unwrap();
+         println!("  ║  mTLS:          🔒 Zero-Trust ({})              ║", mtls_cfg.trust_domain);
+         println!("  ║  Cert TTL:      {} seconds                             ║", mtls_cfg.cert_ttl_secs);
+     } else {
+         println!("  ║  mTLS:          ❌ Disabled (using GATEWAY_SECRET)      ║");
+     }
      println!("  ╚═══════════════════════════════════════════════════════════╝");
      println!();
 
