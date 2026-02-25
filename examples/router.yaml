@@ -43,3 +43,23 @@ query_cost:
   adaptive_costs: true
 
 disable_introspection: false # Set to true in production
+
+# ────────────────────────────────────────────────────────────────────
+# Zero-Trust Mutual TLS (mTLS)
+# ────────────────────────────────────────────────────────────────────
+# When enabled, the gateway and subgraphs cryptographically authenticate
+# each other using short-lived SPIFFE SVIDs. This replaces the shared
+# GATEWAY_SECRET with a zero-trust model where identities are verified
+# via X.509 certificates.
+mtls:
+  enabled: true
+  trust_domain: "cluster.local"
+  service_name: "router"
+  namespace: "default"
+  cert_ttl_secs: 3600
+  verify_hostname: true
+  allow_fallback: false
+  # trust_bundle_path: "/etc/certs/ca.pem"
+  # ca_cert_path: "/etc/certs/ca.pem"
+  # ca_key_path: "/etc/certs/ca-key.pem"
+
