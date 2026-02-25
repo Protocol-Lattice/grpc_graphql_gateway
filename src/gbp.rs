@@ -21,7 +21,19 @@ impl GbpEncoder {
         Self::default()
     }
 
+    pub fn clear(&mut self) {
+        self.string_pool.clear();
+        self.string_map.clear();
+        self.shape_pool.clear();
+        self.shape_map.clear();
+        self.position_map.clear();
+        self.value_counter = 0;
+        self.value_positions.clear();
+        self.key_scratchpad.clear();
+    }
+
     pub fn encode(&mut self, value: &Value) -> Vec<u8> {
+        self.clear();
         let mut data = Vec::with_capacity(1024 * 1024); // 1MB initial
         self.encode_recursive(value, &mut data);
 
@@ -48,6 +60,7 @@ impl GbpEncoder {
     }
 
     pub fn encode_slice(&mut self, items: &[Value]) -> Vec<u8> {
+        self.clear();
         let mut data = Vec::with_capacity(1024 * 1024); // 1MB initial
 
         // Mimic Array encoding: Try columnar/RLE first, else fallback to standard list
@@ -441,11 +454,14 @@ impl GbpDecoder {
 
         if tag[0] == 0x08 {
             let idx = read_varint(cursor)?;
+            if idx as usize >= self.value_pool.len() {
+                eprintln!("🔥 GBP DECODER ERROR: Requested ref {} but value_pool length is {}", idx, self.value_pool.len());
+            }
             return self
                 .value_pool
                 .get(idx as usize)
                 .cloned()
-                .ok_or("Invalid value reference".to_string());
+                .ok_or_else(|| format!("Invalid value reference: requested {} but max is {}", idx, self.value_pool.len().saturating_sub(1)));
         }
 
         // Handle RLE Tag

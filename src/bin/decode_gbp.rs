@@ -2,7 +2,8 @@ use grpc_graphql_gateway::gbp::GbpDecoder;
 use std::fs;
 
 fn main() {
-    let bytes = fs::read("/tmp/gbp_response.bin").expect("Failed to read GBP file");
+    let file_path = std::env::args().nth(1).unwrap_or_else(|| "/tmp/gbp_response.bin".to_string());
+    let bytes = fs::read(&file_path).unwrap_or_else(|_| panic!("Failed to read GBP file: {}", file_path));
     println!("📦 GBP Binary: {} bytes", bytes.len());
     println!("🔍 Magic header: {:?}", std::str::from_utf8(&bytes[..3]).unwrap_or("?"));
     println!();
