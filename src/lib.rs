@@ -90,6 +90,8 @@ pub mod subscription;
 pub mod tracing_otel;
 pub mod types;
 pub mod waf;
+#[cfg(feature = "wasm")]
+pub mod wasm_plugin;
 
 pub use analytics::{
     create_analytics, AnalyticsConfig, AnalyticsGuard, AnalyticsSnapshot, ErrorStats, FieldStats,
@@ -193,5 +195,9 @@ pub use waf::{validate_request, WafMiddleware};
 pub use mtls::{
     CertificateAuthority, MtlsConfig, MtlsError, MtlsProvider, MtlsStatus, Svid,
     export_svid, issue_subgraph_svid,
+};
+#[cfg(feature = "wasm")]
+pub use wasm_plugin::{
+    WasmPluginConfig, WasmPluginEngine, WasmPlugin, WasmPluginManager, WasmResourceLimits,
 };
 

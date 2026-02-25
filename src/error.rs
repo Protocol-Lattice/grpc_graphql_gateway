@@ -78,6 +78,10 @@ pub enum Error {
     /// Plugin error
     #[error("Plugin error: {0}")]
     Plugin(String),
+
+    /// WASM plugin error
+    #[error("WASM plugin error: {0}")]
+    WasmPlugin(String),
 }
 
 impl Error {
@@ -113,6 +117,7 @@ impl Error {
                 Error::QueryTooComplex(msg) => msg.clone(),
                 Error::Validation(msg) => format!("Validation error: {}", msg),
                 Error::Plugin(msg) => format!("Plugin error: {}", msg),
+                Error::WasmPlugin(_) => "Plugin execution error".to_string(),
                 Error::Other(_) => "An unexpected error occurred".to_string(),
             }
         } else {
@@ -146,6 +151,7 @@ impl Error {
             Error::QueryTooComplex(_) => "QUERY_TOO_COMPLEX",
             Error::Validation(_) => "VALIDATION_ERROR",
             Error::Plugin(_) => "PLUGIN_ERROR",
+            Error::WasmPlugin(_) => "WASM_PLUGIN_ERROR",
             Error::Other(_) => "UNKNOWN_ERROR",
         };
         map.insert("code".to_string(), serde_json::json!(code));
