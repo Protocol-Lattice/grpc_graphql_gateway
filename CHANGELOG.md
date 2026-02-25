@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] - 2026-02-25
+
+### Added
+- **WASM Plugin Sandboxing**: Expand the plugin ecosystem to support WebAssembly (WASM) modules with strict sandboxing.
+  - **`WasmPluginEngine`**: Create and configure a wasmtime-based WASM runtime with fuel metering and Cranelift AOT compilation.
+  - **`WasmPlugin`**: Compiled WASM module that implements the native `Plugin` trait (`on_request`, `on_response`, `on_subgraph_request`).
+  - **`WasmPluginManager`**: Lifecycle manager for loading, registering, and health-checking multiple WASM plugins.
+  - **`WasmPluginConfig`**: Per-plugin configuration with `name`, `path`, `max_memory_bytes`, `max_fuel`, and arbitrary JSON `config`.
+  - **`WasmResourceLimits`**: Fine-grained resource limits (memory, fuel, tables, instances) per plugin.
+  - **Host ABI**: Six host functions exposed to guest modules:
+    - `host_log(level, ptr, len)` — structured logging at trace/debug/info/warn/error levels.
+    - `host_get_header(key_ptr, key_len) -> i64` — read request headers.
+    - `host_set_header(key_ptr, key_len, val_ptr, val_len)` — set response headers.
+    - `host_get_metadata(key_ptr, key_len) -> i64` — read metadata.
+    - `host_set_metadata(key_ptr, key_len, val_ptr, val_len)` — set metadata (propagated to gRPC MetadataMap).
+    - `host_get_config() -> i64` — retrieve plugin JSON configuration.
+  - **Fuel-Based CPU Metering**: Each plugin invocation has a configurable instruction budget (default: 1M fuel). Exceeding it produces a clear `WASM_PLUGIN_ERROR` without crashing the host.
+  - **Memory Isolation**: Every invocation creates a fresh `Store` with independent linear memory, bounded by `max_memory_bytes` (default: 16 MB).
+  - **Crash Isolation**: A trapping WASM module returns a structured error; the router process continues serving.
+  - **GatewayBuilder Integration**:
+    - `register_wasm_plugin(config)` — load a single `.wasm` file.
+    - `load_wasm_plugins_from_dir(dir, limits)` — auto-discover and load all `.wasm` files in a directory.
+  - **Feature-Gated**: Enabled with `--features wasm` to keep the default binary lean. Adds `wasmtime v29` as an optional dependency.
+  - **Error Handling**: New `Error::WasmPlugin` variant with distinct `WASM_PLUGIN_ERROR` code and production-safe sanitization.
+  - **Configuration Example**: Updated `examples/router.yaml` with full WASM plugin configuration section.
+
+### Fixed
+- **mTLS Certificate Generation**: Removed invalid `serialNumber` from OpenSSL X.509 v3 extension section — it is not a valid extension and newer OpenSSL versions reject it. Serial numbers are now set correctly via `-set_serial`.
+- **mTLS Test Race Conditions**: Replaced per-PID temp file naming with global atomic counters, eliminating file conflicts when tests run in parallel within the same process.
+- **SubgraphConfig Tests**: Added missing `mtls: None` field to all `SubgraphConfig` test instances in `router/mod.rs` and `router/security_tests.rs`.
+
+## [1.0.7] - 2026-02-24
+
+### Added
+- **Zero-Trust Mutual TLS (mTLS)**: Implemented full mTLS support for subgraph communication with SPIFFE-compatible identities.
+  - **`CertificateAuthority`**: In-process ephemeral CA that generates ECDSA P-256 root certificates via OpenSSL. Supports loading CA from existing PEM files for production.
+  - **`Svid`** (SPIFFE Verifiable Identity Document): Short-lived workload certificates with SPIFFE ID URIs (`spiffe://{trust_domain}/ns/{namespace}/sa/{service_name}`).
+  - **`MtlsProvider`**: Main provider that manages CA initialization, SVID issuance, automatic rotation at 50% lifetime, and building `reqwest::Client` instances with mTLS identity.
+  - **`MtlsConfig`**: Full configuration via `router.yaml` — trust domain, service name, namespace, TTL, CA paths, trust bundle export, hostname verification, fallback to plain HTTP.
+  - **Automatic SVID Rotation**: Background task checks every 30 seconds and rotates certificates approaching expiry.
+  - **Health Check Integration**: `MtlsStatus` struct for observability (certificate validity, remaining TTL, SPIFFE ID, serial).
+  - **Subgraph SVID Issuance**: `issue_subgraph_svid()` and `export_svid()` helpers for development/testing scenarios.
+  - **Trust Bundle Export**: CA trust bundle can be exported to a file path for subgraph consumption.
+  - **Per-Subgraph mTLS**: `SubgraphConfig` extended with optional `mtls` field for per-subgraph mTLS configuration.
+
 ## [1.0.6] - 2026-02-22
 
 ### Changed
