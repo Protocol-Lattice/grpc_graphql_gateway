@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-02-25
+
+### Fixed
+- **GBP Encoder Memory Management**: Fixed an issue where the `GbpEncoder` state (string pools, shape pools, and counters) was not cleared between sequential encodings.
+- **GBP Decoder Stability**: Improved error handling and logging when encountering out-of-bounds value references, preventing potential panics and providing clear error messages.
+
 ## [1.1.0] - 2026-02-25
 
 ### Security
