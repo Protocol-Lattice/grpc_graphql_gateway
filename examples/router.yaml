@@ -63,3 +63,40 @@ mtls:
   # ca_cert_path: "/etc/certs/ca.pem"
   # ca_key_path: "/etc/certs/ca-key.pem"
 
+# ────────────────────────────────────────────────────────────────────
+# WebAssembly (WASM) Plugin Sandboxing
+# ────────────────────────────────────────────────────────────────────
+# Extend the gateway with custom logic written in any language that
+# compiles to WASM (Rust, Go, AssemblyScript, C/C++, etc.).
+# Each plugin runs in a strictly sandboxed environment with its own
+# memory and CPU budget, so a faulty plugin cannot crash the router.
+#
+# Enable with: cargo build --features wasm
+wasm_plugins:
+  # Directory to auto-discover .wasm plugins from
+  # plugin_dir: "./plugins"
+
+  # Explicit plugin definitions with per-plugin configuration
+  plugins:
+    - name: "auth-handler"
+      path: "plugins/auth.wasm"
+      max_memory_bytes: 16777216   # 16 MB
+      max_fuel: 1000000            # CPU instruction budget per invocation
+      config:
+        api_key_header: "X-API-Key"
+        allowed_origins: ["https://app.example.com"]
+
+    - name: "rate-limiter"
+      path: "plugins/rate_limiter.wasm"
+      max_memory_bytes: 8388608    # 8 MB
+      max_fuel: 500000
+      config:
+        window_seconds: 60
+        max_requests: 100
+
+    # - name: "custom-routing"
+    #   path: "plugins/routing.wasm"
+    #   max_memory_bytes: 33554432 # 32 MB
+    #   max_fuel: 2000000
+    #   config:
+    #     routing_rules_url: "https://config.example.com/rules"

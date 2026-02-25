@@ -284,7 +284,10 @@ impl CertificateAuthority {
         let ca_key_pem = ca_key_output.stdout;
 
         // Create a temporary file for the key to pass to openssl req
-        let key_tmp = std::env::temp_dir().join(format!("gbp_ca_key_{}.pem", std::process::id()));
+        // Use a unique suffix to avoid race conditions in parallel tests
+        static CA_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique_id = CA_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let key_tmp = std::env::temp_dir().join(format!("gbp_ca_key_{}_{}.pem", std::process::id(), unique_id));
         std::fs::write(&key_tmp, &ca_key_pem)
             .map_err(|e| MtlsError::CertGeneration(format!("Failed to write temp key: {}", e)))?;
 
@@ -396,13 +399,16 @@ impl CertificateAuthority {
         let key_pem = key_output.stdout;
 
         // Create temp files for signing
+        // Use a global atomic counter to avoid race conditions when tests run in parallel
+        static SVID_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let tmp_dir = std::env::temp_dir();
         let pid = std::process::id();
-        let key_path = tmp_dir.join(format!("gbp_svid_key_{}.pem", pid));
-        let ca_cert_path = tmp_dir.join(format!("gbp_ca_cert_{}.pem", pid));
-        let ca_key_path = tmp_dir.join(format!("gbp_ca_key_{}.pem", pid));
-        let csr_path = tmp_dir.join(format!("gbp_svid_csr_{}.pem", pid));
-        let ext_path = tmp_dir.join(format!("gbp_svid_ext_{}.cnf", pid));
+        let unique_id = SVID_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let key_path = tmp_dir.join(format!("gbp_svid_key_{pid}_{unique_id}.pem"));
+        let ca_cert_path = tmp_dir.join(format!("gbp_ca_cert_{pid}_{unique_id}.pem"));
+        let ca_key_path = tmp_dir.join(format!("gbp_ca_key_{pid}_{unique_id}.pem"));
+        let csr_path = tmp_dir.join(format!("gbp_svid_csr_{pid}_{unique_id}.pem"));
+        let ext_path = tmp_dir.join(format!("gbp_svid_ext_{pid}_{unique_id}.cnf"));
 
         std::fs::write(&key_path, &key_pem)
             .map_err(|e| MtlsError::CertGeneration(format!("Write key: {}", e)))?;
@@ -435,14 +441,15 @@ impl CertificateAuthority {
         }
 
         // Create extensions file for SPIFFE SAN URI
+        // Note: serialNumber is NOT a valid X.509 v3 extension — it's a certificate
+        // field set via -set_serial. We track serial via our own counter instead.
         let ext_content = format!(
             "[v3_svid]\n\
              basicConstraints = CA:FALSE\n\
              keyUsage = digitalSignature, keyEncipherment\n\
              extendedKeyUsage = serverAuth, clientAuth\n\
-             subjectAltName = URI:{}\n\
-             serialNumber = {}\n",
-            spiffe_id, serial_hex
+             subjectAltName = URI:{}\n",
+            spiffe_id
         );
         std::fs::write(&ext_path, &ext_content)
             .map_err(|e| MtlsError::CertGeneration(format!("Write extensions: {}", e)))?;
@@ -450,7 +457,7 @@ impl CertificateAuthority {
         // Compute TTL in days (minimum 1 day for openssl, but we set actual usage check at runtime)
         let ttl_days = std::cmp::max(1, ttl_secs / 86400);
 
-        // Sign the certificate
+        // Sign the certificate with an explicit serial number
         let cert_output = Command::new("openssl")
             .args([
                 "x509",
@@ -461,7 +468,8 @@ impl CertificateAuthority {
                 ca_cert_path.to_str().unwrap(),
                 "-CAkey",
                 ca_key_path.to_str().unwrap(),
-                "-CAcreateserial",
+                "-set_serial",
+                &format!("0x{}", serial_hex),
                 "-days",
                 &ttl_days.to_string(),
                 "-sha256",
@@ -475,9 +483,6 @@ impl CertificateAuthority {
 
         // Clean up temp files
         Self::cleanup_temp_files(&[&key_path, &ca_cert_path, &ca_key_path, &csr_path, &ext_path]);
-        // Also clean up the serial file that openssl creates
-        let serial_file = tmp_dir.join(format!("gbp_ca_cert_{}.srl", pid));
-        let _ = std::fs::remove_file(&serial_file);
 
         if !cert_output.status.success() {
             return Err(MtlsError::CertGeneration(format!(

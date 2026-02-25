@@ -190,6 +190,130 @@ impl GatewayBuilder {
         self
     }
 
+    /// Register a WASM plugin from a `.wasm` file.
+    ///
+    /// The plugin runs in a sandboxed WebAssembly environment with configurable
+    /// memory limits and CPU fuel budgets. A faulty WASM module cannot crash
+    /// the host process.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::{Gateway, WasmPluginConfig};
+    /// use std::path::PathBuf;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .register_wasm_plugin(WasmPluginConfig {
+    ///         name: "auth-plugin".to_string(),
+    ///         path: PathBuf::from("plugins/auth.wasm"),
+    ///         max_memory_bytes: 16 * 1024 * 1024,
+    ///         max_fuel: 1_000_000,
+    ///         config: serde_json::json!({"api_key_header": "X-API-Key"}),
+    ///     })?
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "wasm")]
+    pub fn register_wasm_plugin(
+        mut self,
+        config: crate::wasm_plugin::WasmPluginConfig,
+    ) -> Result<Self> {
+        let engine = crate::wasm_plugin::WasmPluginEngine::new()?;
+        let plugin = engine.load_plugin(config)?;
+        self.plugins.register(plugin);
+        Ok(self)
+    }
+
+    /// Load all `.wasm` plugins from a directory.
+    ///
+    /// Each `.wasm` file is loaded with the given default resource limits.
+    /// The plugin name is derived from the filename (e.g., `auth.wasm` → `"auth"`).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use grpc_graphql_gateway::Gateway;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let gateway = Gateway::builder()
+    ///     .load_wasm_plugins_from_dir("./plugins", Default::default())?
+    ///     // ... other configuration
+    /// #   ;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "wasm")]
+    pub fn load_wasm_plugins_from_dir(
+        mut self,
+        dir: impl AsRef<std::path::Path>,
+        default_limits: crate::wasm_plugin::WasmResourceLimits,
+    ) -> Result<Self> {
+        let dir = dir.as_ref();
+        let entries = std::fs::read_dir(dir).map_err(|e| {
+            crate::error::Error::WasmPlugin(format!(
+                "Failed to read WASM plugin directory '{}': {}",
+                dir.display(),
+                e
+            ))
+        })?;
+
+        let engine = crate::wasm_plugin::WasmPluginEngine::new()?;
+        let mut count = 0;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| {
+                crate::error::Error::WasmPlugin(format!("Failed to read directory entry: {}", e))
+            })?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("wasm") {
+                let name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                let config = crate::wasm_plugin::WasmPluginConfig {
+                    name: name.clone(),
+                    path: path.clone(),
+                    max_memory_bytes: default_limits.max_memory_bytes,
+                    max_fuel: default_limits.max_fuel,
+                    config: serde_json::Value::Null,
+                };
+
+                match engine.load_plugin(config) {
+                    Ok(plugin) => {
+                        tracing::info!(
+                            plugin = %name,
+                            path = %path.display(),
+                            "🧩 Loaded WASM plugin from directory"
+                        );
+                        self.plugins.register(plugin);
+                        count += 1;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            plugin = %name,
+                            path = %path.display(),
+                            error = %e,
+                            "⚠️ Failed to load WASM plugin, skipping"
+                        );
+                    }
+                }
+            }
+        }
+
+        tracing::info!(
+            directory = %dir.display(),
+            loaded_count = count,
+            "🧩 WASM plugin directory scan complete"
+        );
+
+        Ok(self)
+    }
+
     /// Provide the primary protobuf descriptor set (bytes).
     ///
     /// This clears any existing descriptors and sets this as the primary.

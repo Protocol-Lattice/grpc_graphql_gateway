@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "1.0.7"
+version = "1.0.8"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -134,6 +134,9 @@ warp = { version = "0.4.2", features = ["server"] }
 flate2 = "1.1.5"
 rayon = "1.10"
 
+# WASM Plugin Sandboxing (optional)
+wasmtime = { version = "29", optional = true }
+
 # Live query example dependencies
 lazy_static = "1.4"
 chrono = { version = "0.4", features = ["serde"] }
@@ -146,6 +149,7 @@ windows-sys = { version = "0.52", features = ["Win32_System_Threading", "Win32_F
 default = []
 otlp = ["opentelemetry-otlp"]
 yaml = []
+wasm = ["wasmtime"]
 
 [build-dependencies]
 tonic-build = "0.12"
