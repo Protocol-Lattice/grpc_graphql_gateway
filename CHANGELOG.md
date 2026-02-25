@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-02-25
+
+### Security
+- **Wasmtime Security Update**: Upgraded `wasmtime` dependency to `41.0.4` to address multiple security vulnerabilities:
+  - **RUSTSEC-2026-0021**: Panic adding excessive fields to a `wasi:http/types.fields` instance.
+  - **RUSTSEC-2026-0020**: Guest-controlled resource exhaustion in WASI implementations.
+  - **RUSTSEC-2026-0006**: Wasmtime segfault or unused out-of-sandbox load with `f64.copysign` operator on x86-64.
+
+## [1.0.9] - 2026-02-25
+
+### Changed
+- **Dependencies**: Upgraded `wasmtime` dependency from version `29` to `38.0.4`.
+
 ## [1.0.8] - 2026-02-25
 
 ### Added
