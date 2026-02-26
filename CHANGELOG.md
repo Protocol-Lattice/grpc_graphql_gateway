@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-02-26
+
+### Fixed
+- **mTLS Windows CI: OpenSSL Path Handling** (`mtls.rs`): Fixed `test_svid_rotation` (and all certificate operations) failing on Windows CI runners.
+  - **Root Cause**: `std::env::temp_dir()` on Windows GitHub Actions runners returns an 8.3 short-name path (e.g., `C:\Users\RUNNER~1\AppData\Local\Temp\`). The code previously replaced backslashes with forward slashes for all OpenSSL arguments, producing paths like `C:/Users/RUNNER~1/...`. OpenSSL's store loader misinterpreted these forward-slash paths containing `~` as URI/store locators rather than file paths, triggering `inner_loader_fetch:unsupported`.
+  - **Fix — Native Paths for File Arguments**: Removed `.replace('\\', '/')` from all file path arguments (`-key`, `-in`, `-CA`, `-CAkey`, `-extfile`, `-out`). Windows OpenSSL handles native backslash paths correctly. The `MSYS_NO_PATHCONV=1` env var already prevents MSYS mangling of the `-subj` argument (the only argument that needed protection).
+  - **Fix — Canonicalize Temp Dir**: Added `std::fs::canonicalize()` on `std::env::temp_dir()` to resolve Windows 8.3 short names (e.g., `RUNNER~1` → `runneradmin`) before constructing temp file paths.
+  - Affects both `CertificateAuthority::new_ephemeral()` and `CertificateAuthority::issue_svid()`.
+
 ## [1.1.2] - 2026-02-26
 
 ### Added
