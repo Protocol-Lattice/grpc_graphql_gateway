@@ -275,9 +275,19 @@ impl GbpEncoder {
         let first_obj = first.as_object().unwrap();
         let shape_id = self.get_shape_id_from_map(first_obj);
         
-        // Fast shape check: verify length only (optimistic)
+        // Strict shape check: every item must have the *same keys in the same order*.
+        // Checking only length is insufficient — different key-sets share the same
+        // count but produce different shape_ids, corrupting the columnar layout and
+        // causing "Invalid value reference" panics in the decoder.
+        let first_keys: Vec<&str> = first_obj.keys().map(String::as_str).collect();
         for item in arr.iter().skip(1) {
-            if !item.is_object() || item.as_object().unwrap().len() != first_obj.len() {
+            let obj = match item.as_object() {
+                Some(o) => o,
+                None => return false,
+            };
+            if obj.len() != first_obj.len() { return false; }
+            // Compare keys positionally (serde_json::Map preserves insertion order)
+            if !obj.keys().map(String::as_str).zip(first_keys.iter().copied()).all(|(a, b)| a == b) {
                 return false;
             }
         }
@@ -554,10 +564,10 @@ impl GbpDecoder {
                     .ok_or("Invalid shape id")?
                     .clone();
                 let mut arr = vec![Map::new(); len as usize];
-                for key_idx in shape {
+                for key_idx in &shape {
                     let key = self
                         .string_pool
-                        .get(key_idx as usize)
+                        .get(*key_idx as usize)
                         .ok_or("Invalid key index")?
                         .clone();
                     for i in 0..len {
@@ -565,8 +575,15 @@ impl GbpDecoder {
                         arr[i as usize].insert(key.clone(), val);
                     }
                 }
-                // NOTE: Columnar arrays are NOT pooled in the encoder, so we return early here.
-                return Ok(Value::Array(arr.into_iter().map(Value::Object).collect()));
+                // IMPORTANT: Pool the resulting array so that the decoder's value_pool
+                // stays in sync with the encoder's value_counter.  Previously the
+                // early-return skipped the pooling statement at line ~584, causing
+                // subsequent 0x08 (BackRef) tags to resolve to the wrong index.
+                let result = Value::Array(arr.into_iter().map(Value::Object).collect());
+                if !result.as_array().unwrap().is_empty() {
+                    self.value_pool.push(result.clone());
+                }
+                return Ok(result);
             }
             0x0A => {
                 let len = read_varint(cursor)?;

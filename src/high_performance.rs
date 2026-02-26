@@ -33,9 +33,15 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-// Use mimalloc as global allocator for better performance
+// Use mimalloc as global allocator for better performance.
 // Replaces the system allocator with thread-local arenas for lower contention.
 // Provides 10–30% throughput improvement at high concurrency.
+//
+// ⚠️  Disabled when the `quic` feature is active because `ring`'s C/ASM
+// cryptographic primitives can segfault under mimalloc's malloc override on
+// macOS (x86_64).  The system allocator is fast enough; ring compatibility
+// takes priority when QUIC/TLS 1.3 is in use.
+#[cfg(not(feature = "quic"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

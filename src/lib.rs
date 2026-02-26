@@ -77,6 +77,7 @@ pub mod mtls;
 pub mod openapi;
 pub mod persisted_queries;
 pub mod plugin;
+pub mod quic;
 pub mod query_cost_analyzer;
 pub mod query_whitelist;
 pub mod request_collapsing;
@@ -196,6 +197,7 @@ pub use mtls::{
     CertificateAuthority, MtlsConfig, MtlsError, MtlsProvider, MtlsStatus, Svid,
     export_svid, issue_subgraph_svid,
 };
+pub use quic::{QuicConfig, QuicStatus, alt_svc_header_value};
 #[cfg(feature = "wasm")]
 pub use wasm_plugin::{
     WasmPluginConfig, WasmPluginEngine, WasmPlugin, WasmPluginManager, WasmResourceLimits,

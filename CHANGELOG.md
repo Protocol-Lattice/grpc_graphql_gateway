@@ -5,6 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-02-26
+
+### Added
+- **HTTP/3 QUIC Transport** (`--features quic`): Full HTTP/3 server over QUIC/UDP alongside the existing TCP/HTTP2 stack.
+  - **`quic` module** (`src/quic.rs`): Complete HTTP/3 implementation using `quinn` (IETF QUIC, RFC 9000) and `h3` (HTTP/3 framing, RFC 9114).
+  - **`QuicServer`**: Binds a UDP endpoint on the same port as the TCP listener; handles QUIC connection acceptance, TLS 1.3 handshake, and HTTP/3 stream dispatch.
+  - **`QuicConfig`**: Full configuration via `router.yaml` — max concurrent streams, idle timeout, initial MTU, keep-alive interval, connection/stream flow-control windows.
+  - **TLS 1.3 Auto-Configuration**: Self-signed ephemeral certificates generated via `rcgen` for development; PEM file loading for production.
+  - **`Alt-Svc` Header Injection**: TCP/HTTP responses automatically include `Alt-Svc: h3=":PORT"; ma=86400` so that browsers, gRPC clients, and HTTP libraries discover and upgrade to HTTP/3 on subsequent connections (RFC 7838).
+  - **`QuicStatus`**: Runtime status struct for health endpoints and observability dashboards.
+  - **Connection Migration**: Enabled by default — mobile clients that switch networks (WiFi → cellular) keep their QUIC connection alive via connection IDs.
+  - **Stub Module**: When compiled without `--features quic`, a zero-cost stub provides the same public types (`QuicConfig`, `QuicStatus`, `alt_svc_header_value`) so downstream code compiles unconditionally.
+  - **Feature-Gated Dependencies**: `quinn`, `h3`, `h3-quinn`, `rustls`, `rustls-pemfile`, `rcgen`, `http-body-util`, `webpki-roots` are all optional and only pulled in with `--features quic`.
+
+- **`h3_client` Test Binary** (`src/bin/h3_client.rs`): Native Rust HTTP/3 test client using the same `quinn` + `h3` stack as the server.
+  - macOS system `curl` (8.7.x) does **not** support HTTP/3 — this client fills that gap for end-to-end QUIC testing.
+  - Supports `GET`, `POST`, `--verbose` headers dump, `--repeat N` latency benchmarking, and `--secure` / `--insecure` TLS modes.
+  - Self-signed certificate bypass for development (custom `ServerCertVerifier`).
+  - Pretty-printed JSON response output and per-request timing.
+
+- **QUIC Test Infrastructure**:
+  - **`examples/router-quic-test.yaml`**: Minimal router config with QUIC enabled, WAF/mTLS disabled, zero subgraphs — purpose-built for transport-layer testing.
+  - **`scripts/test-quic.sh`**: Comprehensive end-to-end test harness (15 tests) that builds, starts the router, validates TCP (curl) and HTTP/3 (`h3_client`) connectivity, checks `Alt-Svc` headers, verifies security headers, runs latency benchmarks, and inspects router logs.
+
+- **CI/CD Improvements** (`.github/workflows/ci.yml`):
+  - **Windows CI**: Added `windows-latest` (MSVC) build-and-test job; compiles lib-only to avoid `mimalloc`/MSVC CRT conflicts.
+  - **Clippy**: Added `cargo clippy --all-targets -- -D warnings` to the Linux CI pipeline.
+  - **Action Versions**: Pinned `actions/checkout@v4` and `actions/cache@v4` for reproducibility.
+
+### Fixed
+- **mimalloc / ring Segfault** (`high_performance.rs`): Gated `#[global_allocator] mimalloc::MiMalloc` behind `#[cfg(not(feature = "quic"))]`. The `mimalloc` `override` feature replaces `malloc`/`free` at the C level, which causes `ring`'s C/ASM cryptographic primitives to segfault on macOS x86_64. When QUIC is compiled in, the system allocator is used instead.
+- **rustls CryptoProvider Panic** (`router.rs`, `h3_client.rs`): Added explicit `rustls::crypto::ring::default_provider().install_default()` calls before QUIC/TLS initialization. Without this, `rustls` panics at runtime because it cannot auto-detect the process-level `CryptoProvider` when multiple feature flags are present.
+- **mTLS SVID Rotation Race Condition** (`mtls.rs`): Fixed a race condition where concurrent calls to `get_svid()` could trigger multiple simultaneous certificate rotations against the CA.
+  - Added a `rotation_lock: Arc<Mutex<()>>` field to `MtlsProvider`.
+  - Implemented double-check locking pattern: fast-path read under `RwLock`, then acquire exclusive `Mutex`, re-check freshness (another task may have rotated), then rotate only if still needed.
+  - Extracted `rotate_locked()` internal method; public `rotate()` now acquires the lock automatically.
+- **GBP Decoder Value Pool Sync** (`gbp.rs`): Fixed a critical bug where columnar-encoded arrays were not pooled in the decoder's `value_pool`, causing subsequent `BackRef` (0x08) tags to resolve to wrong indices.
+  - Columnar array results are now pushed into `value_pool` after construction, keeping the decoder's pool in sync with the encoder's `value_counter`.
+- **GBP Encoder Shape Homogeneity Check** (`gbp.rs`): Strengthened the `is_homogeneous_array` function to compare object keys positionally (not just count), preventing shape ID mismatches in columnar mode when objects have the same number of keys but different key names.
+  - Added explicit `None` handling for non-object array items instead of `unwrap()`.
+
+### Changed
+- **Dependencies**: Added `webpki-roots v0.26` (optional, gated behind `quic` feature) for Mozilla CA bundle support in `h3_client --secure` mode.
+- **Public API** (`lib.rs`): Exported `quic` module and `QuicConfig`, `QuicStatus`, `alt_svc_header_value` from the crate root.
+
+### Performance
+
+| Feature | TCP/HTTP2 | QUIC/HTTP3 |
+|---|---|---|
+| Head-of-line blocking | Per-connection | **Eliminated** (per-stream) |
+| Connection setup | 1–3 RTT | **0–1 RTT** |
+| Multiplexed subscriptions | Yes | **Yes (no HOL blocking)** |
+| Mobile network handover | Reconnect | **Seamless (Connection ID)** |
+| Loss recovery | TCP SACK | **QUIC ACK ranges** |
+
+HTTP/3 latency benchmark (10 sequential requests, local, self-signed TLS):
+- **Average: 3 ms/request** over QUIC/UDP
+- **TLS**: 1.3 (RFC 8446)
+- **ALPN**: `h3`
+
+### How to Enable
+
+```bash
+# Build with QUIC support
+cargo build --bin router --features quic
+
+# Run with QUIC-enabled config
+cargo run --bin router --features quic -- examples/router-quic-test.yaml
+
+# Test HTTP/3 connectivity
+cargo run --bin h3_client --features quic
+
+# Run the full QUIC test suite
+./scripts/test-quic.sh
+```
+
+Add to `router.yaml`:
+```yaml
+quic:
+  enabled: true
+  # cert_path: "/path/to/cert.pem"   # omit for self-signed dev cert
+  # key_path:  "/path/to/key.pem"
+  max_concurrent_streams: 100
+  idle_timeout_secs: 30
+```
+
 ## [1.1.1] - 2026-02-25
 
 ### Fixed

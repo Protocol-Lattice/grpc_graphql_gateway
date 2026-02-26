@@ -1,0 +1,40 @@
+# router-quic-test.yaml
+# Minimal config for local QUIC/HTTP3 testing.
+# Start with:  cargo run --bin router --features quic -- examples/router-quic-test.yaml
+
+server:
+  listen: "0.0.0.0:4000"
+  workers: 4
+
+cors:
+  allow_origins: ["*"]
+
+subgraphs: []   # No real subgraphs needed for transport-layer tests
+
+rate_limit:
+  global_rps: 100000
+  per_ip_rps: 10000
+  per_ip_burst: 20000
+
+waf:
+  enabled: false   # Disable WAF so test queries aren't blocked
+
+disable_introspection: false
+
+mtls:
+  enabled: false   # Keep it simple for local QUIC tests
+
+# ── HTTP/3 + QUIC ─────────────────────────────────────────────────────────────
+# Omitting cert_path / key_path → rcgen generates an ephemeral self-signed cert.
+# The QUIC endpoint binds to the SAME port as the TCP listener (different socket).
+quic:
+  enabled: true
+  # listen: "0.0.0.0:4000"   # defaults to server.listen — same port, UDP socket
+  # cert_path: "/path/to/cert.pem"
+  # key_path:  "/path/to/key.pem"
+  max_concurrent_streams: 100
+  idle_timeout_secs: 30
+  initial_mtu: 1200
+  keep_alive_interval_ms: 5000
+  max_connection_data: 10485760   # 10 MB
+  max_stream_data: 1048576         # 1 MB

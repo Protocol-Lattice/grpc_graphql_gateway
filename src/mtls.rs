@@ -64,7 +64,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 // ─── SPIFFE Identity ────────────────────────────────────────────────────────
@@ -293,19 +293,18 @@ impl CertificateAuthority {
 
         // Generate self-signed CA certificate
         let ca_cert_output = Command::new("openssl")
+            .env("MSYS_NO_PATHCONV", "1") // Prevent Windows MSYS mangling of /O=... paths
             .args([
                 "req",
                 "-new",
                 "-x509",
                 "-key",
-                key_tmp.to_str().unwrap(),
+                &key_tmp.to_string_lossy().replace('\\', "/"),
                 "-sha256",
                 "-days",
                 "365",
                 "-subj",
                 &format!("/O=GBP Gateway/CN=GBP mTLS CA [{}]", trust_domain),
-                "-out",
-                "/dev/stdout",
             ])
             .output()
             .map_err(|e| MtlsError::CertGeneration(format!("Failed to run openssl req: {}", e)))?;
@@ -419,15 +418,16 @@ impl CertificateAuthority {
 
         // Generate CSR
         let csr_output = Command::new("openssl")
+            .env("MSYS_NO_PATHCONV", "1") // Prevent Windows MSYS mangling of /O=... paths
             .args([
                 "req",
                 "-new",
                 "-key",
-                key_path.to_str().unwrap(),
+                &key_path.to_string_lossy().replace('\\', "/"),
                 "-subj",
                 &format!("/O=GBP Workload/CN={}", service_name),
                 "-out",
-                csr_path.to_str().unwrap(),
+                &csr_path.to_string_lossy().replace('\\', "/"),
             ])
             .output()
             .map_err(|e| MtlsError::CertGeneration(format!("CSR generation failed: {}", e)))?;
@@ -463,18 +463,18 @@ impl CertificateAuthority {
                 "x509",
                 "-req",
                 "-in",
-                csr_path.to_str().unwrap(),
+                &csr_path.to_string_lossy().replace('\\', "/"),
                 "-CA",
-                ca_cert_path.to_str().unwrap(),
+                &ca_cert_path.to_string_lossy().replace('\\', "/"),
                 "-CAkey",
-                ca_key_path.to_str().unwrap(),
+                &ca_key_path.to_string_lossy().replace('\\', "/"),
                 "-set_serial",
                 &format!("0x{}", serial_hex),
                 "-days",
                 &ttl_days.to_string(),
                 "-sha256",
                 "-extfile",
-                ext_path.to_str().unwrap(),
+                &ext_path.to_string_lossy().replace('\\', "/"),
                 "-extensions",
                 "v3_svid",
             ])
@@ -546,6 +546,12 @@ pub struct MtlsProvider {
     config: MtlsConfig,
     ca: Arc<CertificateAuthority>,
     current_svid: Arc<RwLock<Svid>>,
+    /// Guards the rotation critical section so only one task issues a new
+    /// certificate at a time.  After acquiring this lock a caller must
+    /// re-read `current_svid` (double-check pattern) before making a CA
+    /// call, to avoid redundant SVID issuances when another holder already
+    /// completed rotation.
+    rotation_lock: Arc<Mutex<()>>,
 }
 
 impl MtlsProvider {
@@ -584,11 +590,22 @@ impl MtlsProvider {
             config,
             ca,
             current_svid,
+            rotation_lock: Arc::new(Mutex::new(())),
         })
     }
 
-    /// Get the current SVID, rotating if necessary
+    /// Get the current SVID, rotating if necessary.
+    ///
+    /// Uses a double-check pattern around a `rotation_lock` Mutex so that
+    /// concurrent callers never race into the CA simultaneously:
+    ///
+    /// 1. Fast path: read SVID under shared lock; return immediately if fresh.
+    /// 2. Acquire the exclusive rotation lock (serialises all rotation attempts).
+    /// 3. Re-read the SVID — another task may have already rotated it while we
+    ///    were waiting for the rotation lock.  Return early if now fresh.
+    /// 4. Issue a new SVID and write it under the RwLock.
     pub async fn get_svid(&self) -> Result<Svid, MtlsError> {
+        // 1. Fast path
         {
             let svid = self.current_svid.read().await;
             if svid.is_valid() && !svid.should_renew() {
@@ -596,12 +613,23 @@ impl MtlsProvider {
             }
         }
 
-        // Need to rotate
-        self.rotate().await
+        // 2. Acquire rotation serialisation lock
+        let _rotation_guard = self.rotation_lock.lock().await;
+
+        // 3. Double-check: another task may have rotated while we waited
+        {
+            let svid = self.current_svid.read().await;
+            if svid.is_valid() && !svid.should_renew() {
+                return Ok(svid.clone());
+            }
+        }
+
+        // 4. Actually rotate (still holding rotation_lock)
+        self.rotate_locked().await
     }
 
-    /// Force rotation and return the new SVID
-    pub async fn rotate(&self) -> Result<Svid, MtlsError> {
+    /// Internal rotation helper — must be called while `rotation_lock` is held.
+    async fn rotate_locked(&self) -> Result<Svid, MtlsError> {
         let ttl = Duration::from_secs(self.config.cert_ttl_secs);
         let new_svid = self
             .ca
@@ -623,6 +651,12 @@ impl MtlsProvider {
     pub async fn build_client(&self) -> Result<reqwest::Client, MtlsError> {
         let svid = self.get_svid().await?;
         self.build_client_with_svid(&svid)
+    }
+
+    /// Force SVID rotation (acquires rotation lock; safe to call concurrently).
+    pub async fn rotate(&self) -> Result<Svid, MtlsError> {
+        let _guard = self.rotation_lock.lock().await;
+        self.rotate_locked().await
     }
 
     /// Build a `reqwest::Client` with a specific SVID
@@ -675,7 +709,7 @@ impl MtlsProvider {
                 if svid.should_renew() {
                     let serial = svid.serial.clone();
                     let remaining = svid.remaining();
-                    drop(svid); // Release read lock before acquiring write lock
+                    drop(svid); // Release read lock before acquiring rotation lock
 
                     info!(
                         old_serial = %serial,

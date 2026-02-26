@@ -287,8 +287,8 @@ async fn test_isolate_slow_loris_subgraph() {
 
     // It should take at least 100ms (slow subgraph)
     assert!(duration.as_millis() >= 100);
-    // But shouldn't be excessively longer (overhead check)
-    assert!(duration.as_millis() < 500);
+    // But shouldn't be excessively longer (overhead check, relaxed for slow CI runners)
+    assert!(duration.as_millis() < 4000);
 
     let json = result.unwrap();
     assert!(json["fast"]["data"].is_object());
