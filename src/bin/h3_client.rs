@@ -331,6 +331,7 @@ async fn send_h3_request(
     Ok((status, headers, body_buf.freeze()))
 }
 
+#[cfg(feature = "quic")]
 fn print_help() {
     println!("GBP Router — HTTP/3 QUIC Test Client");
     println!();
