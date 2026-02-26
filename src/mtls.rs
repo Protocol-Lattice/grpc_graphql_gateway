@@ -293,6 +293,7 @@ impl CertificateAuthority {
 
         // Generate self-signed CA certificate
         let ca_cert_output = Command::new("openssl")
+            .env("MSYS_NO_PATHCONV", "1") // Prevent Windows MSYS mangling of /O=... paths
             .args([
                 "req",
                 "-new",
@@ -304,8 +305,6 @@ impl CertificateAuthority {
                 "365",
                 "-subj",
                 &format!("/O=GBP Gateway/CN=GBP mTLS CA [{}]", trust_domain),
-                "-out",
-                "/dev/stdout",
             ])
             .output()
             .map_err(|e| MtlsError::CertGeneration(format!("Failed to run openssl req: {}", e)))?;
@@ -419,6 +418,7 @@ impl CertificateAuthority {
 
         // Generate CSR
         let csr_output = Command::new("openssl")
+            .env("MSYS_NO_PATHCONV", "1") // Prevent Windows MSYS mangling of /O=... paths
             .args([
                 "req",
                 "-new",
