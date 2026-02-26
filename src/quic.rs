@@ -56,7 +56,6 @@
 //! - `quic.cert_path` / `quic.key_path` — PEM-encoded certificate and key
 //! - If omitted, a self-signed certificate is generated via `rcgen` (development only)
 
-
 #[cfg(feature = "quic")]
 
 mod quic_impl {
@@ -129,12 +128,24 @@ mod quic_impl {
         pub max_stream_data: u64,
     }
 
-    fn default_max_streams() -> u64 { 100 }
-    fn default_idle_timeout() -> u64 { 30 }
-    fn default_initial_mtu() -> u16 { 1200 }
-    fn default_keep_alive() -> u64 { 10_000 }
-    fn default_conn_window() -> u64 { 10 * 1024 * 1024 }
-    fn default_stream_window() -> u64 { 1024 * 1024 }
+    fn default_max_streams() -> u64 {
+        100
+    }
+    fn default_idle_timeout() -> u64 {
+        30
+    }
+    fn default_initial_mtu() -> u16 {
+        1200
+    }
+    fn default_keep_alive() -> u64 {
+        10_000
+    }
+    fn default_conn_window() -> u64 {
+        10 * 1024 * 1024
+    }
+    fn default_stream_window() -> u64 {
+        1024 * 1024
+    }
 
     impl Default for QuicConfig {
         fn default() -> Self {
@@ -162,7 +173,10 @@ mod quic_impl {
     pub fn load_or_generate_tls(
         cert_path: Option<&str>,
         key_path: Option<&str>,
-    ) -> anyhow::Result<(Vec<rustls::pki_types::CertificateDer<'static>>, rustls::pki_types::PrivateKeyDer<'static>)> {
+    ) -> anyhow::Result<(
+        Vec<rustls::pki_types::CertificateDer<'static>>,
+        rustls::pki_types::PrivateKeyDer<'static>,
+    )> {
         match (cert_path, key_path) {
             (Some(cert_p), Some(key_p)) => load_tls_from_files(cert_p, key_p),
             _ => {
@@ -179,7 +193,10 @@ mod quic_impl {
     fn load_tls_from_files(
         cert_path: &str,
         key_path: &str,
-    ) -> anyhow::Result<(Vec<rustls::pki_types::CertificateDer<'static>>, rustls::pki_types::PrivateKeyDer<'static>)> {
+    ) -> anyhow::Result<(
+        Vec<rustls::pki_types::CertificateDer<'static>>,
+        rustls::pki_types::PrivateKeyDer<'static>,
+    )> {
         use rustls_pemfile::{certs, private_key};
         use std::io::BufReader;
 
@@ -204,9 +221,10 @@ mod quic_impl {
     /// Generate an ephemeral, self-signed TLS 1.3 certificate using `rcgen`.
     ///
     /// **Not suitable for production** — use real certificates issued by a trusted CA.
-    fn generate_self_signed_cert()
-        -> anyhow::Result<(Vec<rustls::pki_types::CertificateDer<'static>>, rustls::pki_types::PrivateKeyDer<'static>)>
-    {
+    fn generate_self_signed_cert() -> anyhow::Result<(
+        Vec<rustls::pki_types::CertificateDer<'static>>,
+        rustls::pki_types::PrivateKeyDer<'static>,
+    )> {
         let key_pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
             .context("Failed to generate ECDSA key pair for QUIC")?;
 
@@ -216,21 +234,17 @@ mod quic_impl {
             rcgen::DnType::CommonName,
             "GBP Router — Self-Signed QUIC Dev Cert",
         );
-        params.subject_alt_names = vec![
-            SanType::DnsName("localhost".try_into().unwrap()),
-        ];
+        params.subject_alt_names = vec![SanType::DnsName("localhost".try_into().unwrap())];
         params.not_before = rcgen::date_time_ymd(2025, 1, 1);
-        params.not_after  = rcgen::date_time_ymd(2027, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2027, 1, 1);
 
         let cert = params
             .self_signed(&key_pair)
             .context("Failed to self-sign ephemeral QUIC certificate")?;
 
         let cert_der = rustls::pki_types::CertificateDer::from(cert.der().to_vec());
-        let key_der = rustls::pki_types::PrivateKeyDer::try_from(
-            key_pair.serialize_der(),
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to serialize QUIC private key: {}", e))?;
+        let key_der = rustls::pki_types::PrivateKeyDer::try_from(key_pair.serialize_der())
+            .map_err(|e| anyhow::anyhow!("Failed to serialize QUIC private key: {}", e))?;
 
         info!("🔑 Generated ephemeral self-signed TLS certificate for QUIC");
         Ok((vec![cert_der], key_der))
@@ -251,12 +265,11 @@ mod quic_impl {
         private_key: rustls::pki_types::PrivateKeyDer<'static>,
     ) -> anyhow::Result<QuinnServerConfig> {
         // ─── rustls TLS 1.3 configuration ────────────────────────────────────
-        let mut tls_cfg = RustlsServerConfig::builder_with_protocol_versions(
-            &[&rustls::version::TLS13],
-        )
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, private_key)
-        .context("Failed to configure QUIC TLS certificate")?;
+        let mut tls_cfg =
+            RustlsServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_no_client_auth()
+                .with_single_cert(cert_chain, private_key)
+                .context("Failed to configure QUIC TLS certificate")?;
 
         // HTTP/3 requires the `h3` ALPN token (RFC 9114 §3.1)
         tls_cfg.alpn_protocols = vec![b"h3".to_vec()];
@@ -284,8 +297,7 @@ mod quic_impl {
 
         // Stream-level flow control window
         transport.stream_receive_window(
-            quinn::VarInt::from_u64(quic_cfg.max_stream_data)
-                .expect("max_stream_data too large"),
+            quinn::VarInt::from_u64(quic_cfg.max_stream_data).expect("max_stream_data too large"),
         );
 
         // Idle timeout — close idle connections to free resources
@@ -296,9 +308,7 @@ mod quic_impl {
         ));
 
         // Keep-alives prevent NAT mappings from expiring on mobile networks
-        transport.keep_alive_interval(Some(Duration::from_millis(
-            quic_cfg.keep_alive_interval_ms,
-        )));
+        transport.keep_alive_interval(Some(Duration::from_millis(quic_cfg.keep_alive_interval_ms)));
 
         // Jumbo QUIC datagrams — larger initial MTU = fewer packets for big responses
         transport.initial_mtu(quic_cfg.initial_mtu);
@@ -321,7 +331,10 @@ mod quic_impl {
     /// `http::Request<Bytes>` and dispatches it here. The response is serialised
     /// back into H3 frames and sent on the same stream.
     pub type Http3Handler = Arc<
-        dyn Fn(Request<Bytes>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response<Bytes>> + Send>>
+        dyn Fn(
+                Request<Bytes>,
+            )
+                -> std::pin::Pin<Box<dyn std::future::Future<Output = Response<Bytes>> + Send>>
             + Send
             + Sync,
     >;
@@ -360,7 +373,9 @@ mod quic_impl {
             let endpoint = quinn::Endpoint::server(server_config, addr)
                 .context("Failed to bind QUIC endpoint")?;
 
-            let local_addr = endpoint.local_addr().context("Failed to get QUIC local address")?;
+            let local_addr = endpoint
+                .local_addr()
+                .context("Failed to get QUIC local address")?;
 
             info!(
                 addr = %local_addr,
@@ -424,10 +439,7 @@ mod quic_impl {
     ///
     /// Completes the TLS handshake, negotiates HTTP/3, and dispatches
     /// individual request streams.
-    async fn handle_quic_connection(
-        incoming: quinn::Incoming,
-        handler: Http3Handler,
-    ) {
+    async fn handle_quic_connection(incoming: quinn::Incoming, handler: Http3Handler) {
         let remote = incoming.remote_address();
 
         let quic_conn = match incoming.await {
@@ -440,7 +452,8 @@ mod quic_impl {
 
         debug!(remote = %remote, "✅ QUIC connection established (TLS 1.3)");
 
-        let h3_conn = match h3::server::Connection::new(h3_quinn::Connection::new(quic_conn)).await {
+        let h3_conn = match h3::server::Connection::new(h3_quinn::Connection::new(quic_conn)).await
+        {
             Ok(c) => c,
             Err(e) => {
                 warn!(remote = %remote, error = %e, "HTTP/3 connection upgrade failed");
@@ -525,8 +538,8 @@ mod quic_impl {
         }
 
         let full_request = Request::from_parts(parts, body_bytes.freeze());
-        let method  = full_request.method().clone();
-        let path    = full_request.uri().path().to_string();
+        let method = full_request.method().clone();
+        let path = full_request.uri().path().to_string();
 
         let response = handler(full_request).await;
 
@@ -675,12 +688,24 @@ pub mod stub {
         pub max_stream_data: u64,
     }
 
-    fn default_max_streams() -> u64 { 100 }
-    fn default_idle_timeout() -> u64 { 30 }
-    fn default_initial_mtu() -> u16 { 1200 }
-    fn default_keep_alive() -> u64 { 10_000 }
-    fn default_conn_window() -> u64 { 10 * 1024 * 1024 }
-    fn default_stream_window() -> u64 { 1024 * 1024 }
+    fn default_max_streams() -> u64 {
+        100
+    }
+    fn default_idle_timeout() -> u64 {
+        30
+    }
+    fn default_initial_mtu() -> u16 {
+        1200
+    }
+    fn default_keep_alive() -> u64 {
+        10_000
+    }
+    fn default_conn_window() -> u64 {
+        10 * 1024 * 1024
+    }
+    fn default_stream_window() -> u64 {
+        1024 * 1024
+    }
 
     /// Status returned when QUIC is compiled out.
     #[derive(Debug, Clone, serde::Serialize)]
@@ -707,9 +732,9 @@ pub mod stub {
 
 #[cfg(feature = "quic")]
 pub use quic_impl::{
-    QuicConfig, QuicServer, QuicStatus, Http3Handler,
-    alt_svc_header_value, build_quic_reqwest_client, load_or_generate_tls, build_server_config,
+    alt_svc_header_value, build_quic_reqwest_client, build_server_config, load_or_generate_tls,
+    Http3Handler, QuicConfig, QuicServer, QuicStatus,
 };
 
 #[cfg(not(feature = "quic"))]
-pub use stub::{QuicConfig, QuicStatus, alt_svc_header_value};
+pub use stub::{alt_svc_header_value, QuicConfig, QuicStatus};

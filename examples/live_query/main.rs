@@ -5,36 +5,48 @@
 //
 // This is a starter gateway. Update endpoint URLs and tweak as needed.
 
-use grpc_graphql_gateway::{
-    Gateway, GatewayBuilder, GrpcClient, Result as GatewayResult,
-    PersistedQueryConfig, CacheConfig, RequestCollapsingConfig
-};
-use std::time::Duration;
 use async_graphql::{Name, Value as GqlValue};
-use std::sync::Arc;
+use grpc_graphql_gateway::{
+    CacheConfig, Gateway, GatewayBuilder, GrpcClient, PersistedQueryConfig,
+    RequestCollapsingConfig, Result as GatewayResult,
+};
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
+use std::time::Duration;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing_subscriber::prelude::*;
 
 type ServiceResult<T> = std::result::Result<T, Status>;
 
-const DESCRIPTOR_SET: &[u8] = include_bytes!("../../src/generated/live_query_example_descriptor.bin");
+const DESCRIPTOR_SET: &[u8] =
+    include_bytes!("../../src/generated/live_query_example_descriptor.bin");
 
 #[allow(dead_code)]
 const DEFAULT_GRPC_ADDR: &str = "0.0.0.0:50051";
 
 fn describe(list: &[&str]) -> String {
-    if list.is_empty() { "none".to_string() } else { list.join(", ") }
+    if list.is_empty() {
+        "none".to_string()
+    } else {
+        list.join(", ")
+    }
 }
 
 fn describe_resolvers(list: &[&str]) -> String {
-    if list.is_empty() { "none".to_string() } else { list.join(", ") }
+    if list.is_empty() {
+        "none".to_string()
+    } else {
+        list.join(", ")
+    }
 }
 
 #[allow(dead_code)]
 fn listen_addr(endpoint: &str, fallback: &str) -> GatewayResult<SocketAddr> {
     let mut addr = endpoint.trim();
-    if let Some(stripped) = addr.strip_prefix("http://").or_else(|| addr.strip_prefix("https://")) {
+    if let Some(stripped) = addr
+        .strip_prefix("http://")
+        .or_else(|| addr.strip_prefix("https://"))
+    {
         addr = stripped;
     }
     if let Some((host, _rest)) = addr.split_once('/') {
@@ -57,8 +69,7 @@ fn describe_key_sets(keys: &[&[&str]]) -> String {
     if keys.is_empty() {
         "none".to_string()
     } else {
-        keys
-            .iter()
+        keys.iter()
             .map(|set| set.join(" "))
             .collect::<Vec<_>>()
             .join(" | ")
@@ -91,14 +102,12 @@ pub struct EntityConfigInfo {
     pub resolvable: bool,
 }
 
-pub const ENTITY_CONFIGS: &[EntityConfigInfo] = &[
-    EntityConfigInfo {
-        type_name: "live_example_User",
-        keys: &[&["id"]],
-        extend: false,
-        resolvable: true,
-    },
-];
+pub const ENTITY_CONFIGS: &[EntityConfigInfo] = &[EntityConfigInfo {
+    type_name: "live_example_User",
+    keys: &[&["id"]],
+    extend: false,
+    resolvable: true,
+}];
 
 /// Live Query configuration for reactive subscriptions.
 /// Use the @live directive on supported queries to receive automatic updates.
@@ -165,18 +174,20 @@ fn describe_live_queries() -> String {
     } else {
         LIVE_QUERY_CONFIGS
             .iter()
-            .map(|lq| format!("{}@live ({}ms, {})", lq.operation_name, lq.throttle_ms, lq.strategy))
+            .map(|lq| {
+                format!(
+                    "{}@live ({}ms, {})",
+                    lq.operation_name, lq.throttle_ms, lq.strategy
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ")
     }
 }
 
-
 pub mod live_example {
     include!("../../src/generated/live_example.rs");
 }
-
-
 
 pub struct ServiceConfig {
     pub name: &'static str,
@@ -201,9 +212,7 @@ pub mod services {
         resolvers: &["_entities"],
     };
 
-    pub const ALL: &[ServiceConfig] = &[
-        LIVE_EXAMPLE_USERSERVICE,
-    ];
+    pub const ALL: &[ServiceConfig] = &[LIVE_EXAMPLE_USERSERVICE];
 }
 
 /// Example entity resolver stub for federation. Replace with your own logic or DataLoader.
@@ -240,10 +249,10 @@ fn default_entity_resolver() -> Arc<dyn grpc_graphql_gateway::EntityResolver> {
 }
 
 // In-memory user store for the example
-use std::collections::HashMap;
-use parking_lot::RwLock;
-use std::time::{SystemTime, UNIX_EPOCH};
 use grpc_graphql_gateway::{InvalidationEvent, SharedLiveQueryStore};
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 lazy_static::lazy_static! {
     static ref USER_STORE: RwLock<HashMap<String, live_example::User>> = {
@@ -294,7 +303,7 @@ lazy_static::lazy_static! {
         });
         RwLock::new(store)
     };
-    
+
     static ref POST_STORE: RwLock<HashMap<String, live_example::Post>> = RwLock::new(HashMap::new());
     static ref NEXT_USER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(4);
 }
@@ -323,7 +332,7 @@ impl ServiceImpl {
     pub fn new(live_query_store: SharedLiveQueryStore) -> Self {
         Self { live_query_store }
     }
-    
+
     /// Trigger a live query invalidation event
     fn invalidate(&self, type_name: &str, action: &str) {
         let event = InvalidationEvent::new(type_name, action);
@@ -341,94 +350,117 @@ impl ServiceImpl {
 
 #[tonic::async_trait]
 impl live_example::user_service_server::UserService for ServiceImpl {
-    async fn get_user(&self, request: Request<live_example::GetUserRequest>) -> ServiceResult<Response<live_example::User>> {
+    async fn get_user(
+        &self,
+        request: Request<live_example::GetUserRequest>,
+    ) -> ServiceResult<Response<live_example::User>> {
         let req = request.into_inner();
         tracing::debug!(user_id = %req.id, "GetUser request");
-        
+
         let store = USER_STORE.read();
         match store.get(&req.id) {
             Some(user) => {
                 let mut user = user.clone();
                 // Enrich with posts
                 let post_store = POST_STORE.read();
-                user.posts = post_store.values()
+                user.posts = post_store
+                    .values()
                     .filter(|p| p.author_id == req.id)
                     .cloned()
                     .collect();
                 Ok(Response::new(user))
-            },
+            }
             None => Err(Status::not_found(format!("User {} not found", req.id))),
         }
     }
-    
-    async fn list_users(&self, request: Request<live_example::ListUsersRequest>) -> ServiceResult<Response<live_example::ListUsersResponse>> {
+
+    async fn list_users(
+        &self,
+        request: Request<live_example::ListUsersRequest>,
+    ) -> ServiceResult<Response<live_example::ListUsersResponse>> {
         let req = request.into_inner();
         tracing::debug!(limit = req.limit, offset = req.offset, "ListUsers request");
-        
+
         let store = USER_STORE.read();
         let post_store = POST_STORE.read();
-        let mut users: Vec<live_example::User> = store.values().map(|u| {
-            let mut user = u.clone();
-            user.posts = post_store.values()
-                .filter(|p| p.author_id == u.id)
-                .cloned()
-                .collect();
-            user
-        }).collect();
-        
+        let mut users: Vec<live_example::User> = store
+            .values()
+            .map(|u| {
+                let mut user = u.clone();
+                user.posts = post_store
+                    .values()
+                    .filter(|p| p.author_id == u.id)
+                    .cloned()
+                    .collect();
+                user
+            })
+            .collect();
+
         // Apply filter if provided
         if !req.filter.is_empty() {
             let filter_lower = req.filter.to_lowercase();
             users.retain(|u| {
-                u.name.to_lowercase().contains(&filter_lower) ||
-                u.email.to_lowercase().contains(&filter_lower)
+                u.name.to_lowercase().contains(&filter_lower)
+                    || u.email.to_lowercase().contains(&filter_lower)
             });
         }
-        
+
         // Sort by id for consistent ordering
         users.sort_by(|a, b| a.id.cmp(&b.id));
-        
+
         let total_count = users.len() as i32;
-        
+
         // Apply pagination
         let offset = req.offset.max(0) as usize;
-        let limit = if req.limit > 0 { req.limit as usize } else { users.len() };
-        
-        let users: Vec<live_example::User> = users
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .collect();
-        
+        let limit = if req.limit > 0 {
+            req.limit as usize
+        } else {
+            users.len()
+        };
+
+        let users: Vec<live_example::User> = users.into_iter().skip(offset).take(limit).collect();
+
         Ok(Response::new(live_example::ListUsersResponse {
             users,
             total_count,
         }))
     }
-    
-    async fn get_user_status(&self, request: Request<live_example::GetUserStatusRequest>) -> ServiceResult<Response<live_example::UserStatus>> {
+
+    async fn get_user_status(
+        &self,
+        request: Request<live_example::GetUserStatusRequest>,
+    ) -> ServiceResult<Response<live_example::UserStatus>> {
         let req = request.into_inner();
         tracing::debug!(user_id = %req.user_id, "GetUserStatus request");
-        
+
         let store = USER_STORE.read();
         match store.get(&req.user_id) {
-            Some(user) => {
-                match &user.status {
-                    Some(status) => Ok(Response::new(status.clone())),
-                    None => Err(Status::not_found(format!("Status for user {} not found", req.user_id))),
-                }
-            }
+            Some(user) => match &user.status {
+                Some(status) => Ok(Response::new(status.clone())),
+                None => Err(Status::not_found(format!(
+                    "Status for user {} not found",
+                    req.user_id
+                ))),
+            },
             None => Err(Status::not_found(format!("User {} not found", req.user_id))),
         }
     }
-    
-    async fn create_user(&self, request: Request<live_example::CreateUserRequest>) -> ServiceResult<Response<live_example::User>> {
+
+    async fn create_user(
+        &self,
+        request: Request<live_example::CreateUserRequest>,
+    ) -> ServiceResult<Response<live_example::User>> {
         let req = request.into_inner();
         tracing::info!(name = %req.name, email = %req.email, "CreateUser request");
-        
-        let id = NEXT_USER_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst).to_string();
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-        
+
+        let id = NEXT_USER_ID
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .to_string();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
         let user = live_example::User {
             id: id.clone(),
             name: req.name,
@@ -443,25 +475,31 @@ impl live_example::user_service_server::UserService for ServiceImpl {
             updated_at: now,
             posts: vec![],
         };
-        
+
         {
             let mut store = USER_STORE.write();
             store.insert(id.clone(), user.clone());
         }
-        
+
         // Trigger live query invalidation for User.create
         self.invalidate("User", "create");
-        
+
         tracing::info!(user_id = %id, "Created new user");
         Ok(Response::new(user))
     }
-    
-    async fn update_user(&self, request: Request<live_example::UpdateUserRequest>) -> ServiceResult<Response<live_example::User>> {
+
+    async fn update_user(
+        &self,
+        request: Request<live_example::UpdateUserRequest>,
+    ) -> ServiceResult<Response<live_example::User>> {
         let req = request.into_inner();
         tracing::info!(user_id = %req.id, "UpdateUser request");
-        
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-        
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
         let user = {
             let mut store = USER_STORE.write();
             match store.get_mut(&req.id) {
@@ -478,28 +516,31 @@ impl live_example::user_service_server::UserService for ServiceImpl {
                 None => return Err(Status::not_found(format!("User {} not found", req.id))),
             }
         };
-        
+
         // Trigger live query invalidation for User.update
         self.invalidate("User", "update");
-        
+
         tracing::info!(user_id = %req.id, "Updated user");
         Ok(Response::new(user))
     }
-    
-    async fn delete_user(&self, request: Request<live_example::DeleteUserRequest>) -> ServiceResult<Response<live_example::DeleteUserResponse>> {
+
+    async fn delete_user(
+        &self,
+        request: Request<live_example::DeleteUserRequest>,
+    ) -> ServiceResult<Response<live_example::DeleteUserResponse>> {
         let req = request.into_inner();
         tracing::info!(user_id = %req.id, "DeleteUser request");
-        
+
         let removed = {
             let mut store = USER_STORE.write();
             store.remove(&req.id)
         };
-        
+
         match removed {
             Some(_) => {
                 // Trigger live query invalidation for User.delete
                 self.invalidate("User", "delete");
-                
+
                 tracing::info!(user_id = %req.id, "Deleted user");
                 Ok(Response::new(live_example::DeleteUserResponse {
                     success: true,
@@ -510,10 +551,13 @@ impl live_example::user_service_server::UserService for ServiceImpl {
         }
     }
 
-    async fn get_post(&self, request: Request<live_example::GetPostRequest>) -> ServiceResult<Response<live_example::Post>> {
+    async fn get_post(
+        &self,
+        request: Request<live_example::GetPostRequest>,
+    ) -> ServiceResult<Response<live_example::Post>> {
         let req = request.into_inner();
         tracing::debug!(post_id = %req.id, "GetPost request");
-        
+
         let store = POST_STORE.read();
         match store.get(&req.id) {
             Some(post) => Ok(Response::new(post.clone())),
@@ -521,60 +565,71 @@ impl live_example::user_service_server::UserService for ServiceImpl {
         }
     }
 
-    async fn create_post(&self, request: Request<live_example::CreatePostRequest>) -> ServiceResult<Response<live_example::Post>> {
+    async fn create_post(
+        &self,
+        request: Request<live_example::CreatePostRequest>,
+    ) -> ServiceResult<Response<live_example::Post>> {
         let req = request.into_inner();
         tracing::info!(title = %req.title, author_id = %req.author_id, "CreatePost request");
-        
+
         let id = uuid::Uuid::new_v4().to_string();
-        
+
         let post = live_example::Post {
             id: id.clone(),
             title: req.title,
             content: req.content,
             author_id: req.author_id.clone(),
         };
-        
+
         {
             let mut store = POST_STORE.write();
             store.insert(id.clone(), post.clone());
         }
-        
+
         // Trigger live query invalidation for Post.create and User.update (since user.posts changed)
         self.invalidate("Post", "create");
         self.invalidate("User", "update"); // Invalidate user to refresh their post list
-        
+
         tracing::info!(post_id = %id, "Created new post");
         Ok(Response::new(post))
     }
 }
 
 pub async fn run_services() -> GatewayResult<()> {
-    let addr: SocketAddr = "127.0.0.1:50052".parse()
+    let addr: SocketAddr = "127.0.0.1:50052"
+        .parse()
         .map_err(|e| grpc_graphql_gateway::Error::Other(anyhow::Error::new(e)))?;
-    
+
     let service = ServiceImpl::default();
-    tracing::info!("gRPC service live_example.UserService listening on {}", addr);
-    
+    tracing::info!(
+        "gRPC service live_example.UserService listening on {}",
+        addr
+    );
+
     // Run the server directly (not in a spawned task)
     Server::builder()
-        .add_service(live_example::user_service_server::UserServiceServer::new(service))
+        .add_service(live_example::user_service_server::UserServiceServer::new(
+            service,
+        ))
         .serve(addr)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "gRPC server failed to start");
             grpc_graphql_gateway::Error::Other(anyhow::Error::new(e))
         })?;
-    
+
     Ok(())
 }
 
 pub fn gateway_builder() -> GatewayResult<GatewayBuilder> {
     // The descriptor set is produced by your build.rs using tonic-build.
-    let mut builder = Gateway::builder()
-        .with_descriptor_set_bytes(DESCRIPTOR_SET);
+    let mut builder = Gateway::builder().with_descriptor_set_bytes(DESCRIPTOR_SET);
 
     if FEDERATION_ENABLED {
-        tracing::info!("Federation enabled (entities: {entities})", entities = describe_entities());
+        tracing::info!(
+            "Federation enabled (entities: {entities})",
+            entities = describe_entities()
+        );
         builder = builder
             .enable_federation()
             .with_entity_resolver(default_entity_resolver());
@@ -675,7 +730,10 @@ async fn main() -> GatewayResult<()> {
     );
 
     if FEDERATION_ENABLED {
-        tracing::info!("Federation entities -> {entities}", entities = describe_entities());
+        tracing::info!(
+            "Federation entities -> {entities}",
+            entities = describe_entities()
+        );
     }
 
     // NOTE: Resolver entries are listed above; the runtime currently warns that they are not implemented.

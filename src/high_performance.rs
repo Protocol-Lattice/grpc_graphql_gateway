@@ -884,27 +884,35 @@ pub fn pin_to_core(core_id: usize) -> Result<(), String> {
             ));
         }
 
-        tracing::debug!("macOS thread affinity tag set to {} (core_id={})", affinity_tag, core_id);
+        tracing::debug!(
+            "macOS thread affinity tag set to {} (core_id={})",
+            affinity_tag,
+            core_id
+        );
     }
 
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadAffinityMask};
-        
+
         let mask = 1usize << core_id;
         let thread = unsafe { GetCurrentThread() };
-        
+
         // SetThreadAffinityMask returns the previous affinity mask on success, or 0 on failure
         let result = unsafe { SetThreadAffinityMask(thread, mask) };
-        
+
         if result == 0 {
             return Err(format!(
-                "Failed to set Windows thread affinity for core {}: SetThreadAffinityMask failed", 
+                "Failed to set Windows thread affinity for core {}: SetThreadAffinityMask failed",
                 core_id
             ));
         }
-        
-        tracing::debug!("Windows thread affinity set to mask {:b} (core_id={})", mask, core_id);
+
+        tracing::debug!(
+            "Windows thread affinity set to mask {:b} (core_id={})",
+            mask,
+            core_id
+        );
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -915,7 +923,6 @@ pub fn pin_to_core(core_id: usize) -> Result<(), String> {
 
     Ok(())
 }
-
 
 /// Get recommended number of worker threads
 pub fn recommended_workers() -> usize {
@@ -992,7 +999,7 @@ mod tests {
     // =========================================================================
     // FastJsonParser Tests
     // =========================================================================
-    
+
     #[test]
     fn test_fast_json_parser_roundtrip() {
         let parser = FastJsonParser::new(10);
@@ -1004,15 +1011,15 @@ mod tests {
 
         // Serialize
         let bytes = parser.serialize(&payload).unwrap();
-        
+
         // Parse back
         let json_val = parser.parse_bytes(&bytes).unwrap();
-        
+
         // Verify structure
         assert_eq!(json_val["id"], 12345);
         assert_eq!(json_val["name"], "test_parser");
         assert!(json_val["values"].is_array());
-        
+
         // Check array content
         let values: Vec<i32> = serde_json::from_value(json_val["values"].clone()).unwrap();
         assert_eq!(values, vec![1, 2, 3, 4, 5]);
@@ -1021,16 +1028,16 @@ mod tests {
     #[test]
     fn test_fast_json_parser_errors() {
         let parser = FastJsonParser::new(10);
-        
+
         // Empty input
         match parser.parse_bytes(&[]) {
-            Err(FastJsonError::EmptyInput) => {},
+            Err(FastJsonError::EmptyInput) => {}
             _ => panic!("Expected EmptyInput error"),
         }
 
         // Invalid JSON
         match parser.parse_str(r#"{"incomplete": "#) {
-            Err(FastJsonError::ParseError(_)) => {},
+            Err(FastJsonError::ParseError(_)) => {}
             _ => panic!("Expected ParseError"),
         }
     }
@@ -1051,12 +1058,12 @@ mod tests {
         assert_eq!(cache.get("key3"), None);
 
         assert!(cache.len() >= 2);
-        
+
         // Removal
         assert!(cache.remove("key1"));
         assert_eq!(cache.get("key1"), None);
         assert!(!cache.remove("key1")); // Already removed
-        
+
         // Clear
         cache.clear();
         assert!(cache.is_empty());
@@ -1065,13 +1072,13 @@ mod tests {
     #[test]
     fn test_sharded_cache_expiration() {
         let cache: ShardedCache<String> = ShardedCache::new(4, 100);
-        
+
         // Short expiration
         cache.insert("short", "lived".to_string(), Duration::from_millis(10));
-        
+
         // Verify immediately
         assert_eq!(cache.get("short"), Some("lived".to_string()));
-        
+
         // Sleep and verify expiry
         std::thread::sleep(Duration::from_millis(20));
         assert_eq!(cache.get("short"), None);
@@ -1084,17 +1091,17 @@ mod tests {
         for i in 0..10 {
             cache.insert(&format!("key{}", i), i, Duration::from_secs(60));
         }
-        
+
         // Boost key0..key4
         for i in 0..5 {
             let k = format!("key{}", i);
             cache.get(&k);
             cache.get(&k);
         }
-        
+
         // Insert 11th item -> triggers eviction
         cache.insert("key10", 10, Duration::from_secs(60));
-        
+
         // Key with low access (e.g. key9) should be gone
         assert_eq!(cache.stats().evictions(), 2); // 10/4 = 2 evictions
     }
@@ -1120,16 +1127,16 @@ mod tests {
     #[test]
     fn test_object_pool_exhaustion() {
         let pool: ObjectPool<i32> = ObjectPool::new(2, || 42);
-        
+
         let i1 = pool.get().unwrap(); // Created new
         let i2 = pool.get().unwrap(); // Created new
         let i3 = pool.get().unwrap(); // Created new
-        
+
         pool.put(i1);
         pool.put(i2);
         pool.put(i3); // Queue size 2. This one might drop.
-        
-        assert!(pool.size() <= 2); 
+
+        assert!(pool.size() <= 2);
     }
 
     // =========================================================================
@@ -1179,15 +1186,15 @@ mod tests {
         let processor = BatchProcessor::<i32, i32>::new(config);
 
         let _h = processor.submit(42).await;
-        
+
         // Wait briefly then allow flush because min_immediate=1 and time passed
         tokio::time::sleep(Duration::from_millis(1)).await;
-        
+
         assert!(processor.should_flush());
         let batch = processor.flush();
         assert_eq!(batch.len(), 1);
     }
-    
+
     // =========================================================================
     // Config & Metrics Tests
     // =========================================================================
@@ -1196,17 +1203,17 @@ mod tests {
     fn test_perf_metrics_recording() {
         let metrics = PerfMetrics::default();
 
-        metrics.record(1000, true);  // Hit
+        metrics.record(1000, true); // Hit
         metrics.record(2000, false); // Miss
-        metrics.record(3000, true);  // Hit
+        metrics.record(3000, true); // Hit
 
         assert_eq!(metrics.requests.load(Ordering::Relaxed), 3);
         assert_eq!(metrics.total_time_ns.load(Ordering::Relaxed), 6000);
         assert_eq!(metrics.max_latency_ns.load(Ordering::Relaxed), 3000);
         assert!(metrics.avg_latency_us() > 0.0);
-        
+
         assert!(metrics.cache_hit_rate() > 0.6);
-        
+
         metrics.reset();
         assert_eq!(metrics.requests.load(Ordering::Relaxed), 0);
     }
@@ -1224,13 +1231,13 @@ mod tests {
         let low_lat = HighPerfConfig::low_latency();
         assert_eq!(low_lat.batch_window_us, 0); // No batching
     }
-    
+
     #[test]
     fn test_response_templates() {
         let templates = ResponseTemplates::new();
         assert!(!templates.empty_data.is_empty());
         assert!(!templates.null_data.is_empty());
-        
+
         assert!(templates.errors.contains_key("UNAUTHORIZED"));
         assert!(templates.errors.contains_key("NOT_FOUND"));
     }

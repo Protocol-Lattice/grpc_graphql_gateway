@@ -13,7 +13,7 @@ fn main() {
     // Scenario 1: Small response (single user query)
     println!("📊 Scenario 1: Single User Query");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
+
     let single_user = json!({
         "data": {
             "user": {
@@ -25,13 +25,13 @@ fn main() {
             }
         }
     });
-    
+
     analyze_compression("Single User", &single_user);
 
     // Scenario 2: List of 10 users
     println!("\n📊 Scenario 2: List of 10 Users");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
+
     let users_10 = json!({
         "data": {
             "users": (0..10).map(|i| json!({
@@ -49,13 +49,13 @@ fn main() {
             })).collect::<Vec<_>>()
         }
     });
-    
+
     analyze_compression("10 Users", &users_10);
 
     // Scenario 3: List of 100 users
     println!("\n📊 Scenario 3: List of 100 Users");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
+
     let users_100 = json!({
         "data": {
             "users": (0..100).map(|i| json!({
@@ -80,13 +80,13 @@ fn main() {
             })).collect::<Vec<_>>()
         }
     });
-    
+
     analyze_compression("100 Users", &users_100);
 
     // Scenario 4: List of 1000 users (realistic production query)
     println!("\n📊 Scenario 4: List of 1000 Users (Production Scale)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
+
     let users_1000 = json!({
         "data": {
             "users": (0..1000).map(|i| json!({
@@ -116,13 +116,13 @@ fn main() {
             })).collect::<Vec<_>>()
         }
     });
-    
+
     analyze_compression("1000 Users", &users_1000);
 
     // Scenario 5: List of 5000 users (Large production query)
     println!("\n📊 Scenario 5: List of 5000 Users (Large Scale)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
+
     let users_5000 = json!({
         "data": {
             "users": (0..5000).map(|i| json!({
@@ -159,13 +159,13 @@ fn main() {
             })).collect::<Vec<_>>()
         }
     });
-    
+
     analyze_compression("5000 Users", &users_5000);
 
     // Scenario 6: List of 10000 users (Very large query)
     println!("\n📊 Scenario 6: List of 10000 Users (Very Large Scale)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
+
     let users_10000 = json!({
         "data": {
             "users": (0..10000).map(|i| json!({
@@ -203,20 +203,26 @@ fn main() {
             })).collect::<Vec<_>>()
         }
     });
-    
+
     analyze_compression("10000 Users", &users_10000);
 
     // Scenario 7: List of 50000 users with random enums (Extreme scale)
     println!("\n📊 Scenario 7: List of 50000 Users with Random Enums (EXTREME SCALE)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
+
     let roles = ["ADMIN", "MEMBER", "MODERATOR", "GUEST", "DEVELOPER"];
     let statuses = ["ACTIVE", "INACTIVE", "PENDING", "SUSPENDED", "VERIFIED"];
     let tiers = ["FREE", "BASIC", "PRO", "ENTERPRISE", "ULTIMATE"];
     let themes = ["light", "dark", "auto", "midnight", "ocean"];
     let languages = ["en", "es", "fr", "de", "ja", "zh", "pt", "ru"];
-    let locations = ["San Francisco, CA", "New York, NY", "London, UK", "Tokyo, Japan", "Berlin, Germany"];
-    
+    let locations = [
+        "San Francisco, CA",
+        "New York, NY",
+        "London, UK",
+        "Tokyo, Japan",
+        "Berlin, Germany",
+    ];
+
     let users_50000 = json!({
         "data": {
             "users": (0..50000).map(|i| {
@@ -226,7 +232,7 @@ fn main() {
                 let theme_idx = (i * 11) % themes.len();
                 let lang_idx = (i * 13) % languages.len();
                 let loc_idx = (i * 17) % locations.len();
-                
+
                 json!({
                     "id": format!("user-{}", i),
                     "name": format!("User {}", i),
@@ -265,13 +271,13 @@ fn main() {
             }).collect::<Vec<_>>()
         }
     });
-    
+
     analyze_compression("50000 Users", &users_50000);
 
     // Scenario 8: Medium Case - More repetition (shared organization data)
     println!("\n📊 Scenario 8: 50000 Users - Medium Repetition (Shared Orgs)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
+
     let users_50k_medium = json!({
         "data": {
             "users": (0..50000).map(|i| json!({
@@ -311,18 +317,18 @@ fn main() {
             })).collect::<Vec<_>>()
         }
     });
-    
+
     analyze_compression("50000 Users (Medium Repetition)", &users_50k_medium);
 
     // Scenario 8b: Realistic Mid-Case - Product Catalog (E-commerce scenario)
     println!("\n📊 Scenario 8b: 50000 Products - Realistic Mid-Case (85-90% Zone)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
+
     let categories = ["Electronics", "Clothing", "Books", "Home", "Sports"];
     let brands = ["BrandA", "BrandB", "BrandC", "BrandD", "BrandE"];
     let statuses = ["IN_STOCK", "LOW_STOCK", "OUT_OF_STOCK"];
     let conditions = ["NEW", "REFURBISHED", "USED"];
-    
+
     let products_50k = json!({
         "data": {
             "products": (0..50000).map(|i| {
@@ -330,7 +336,7 @@ fn main() {
                 let brand_idx = (i / 100) % brands.len();
                 let status_idx = (i / 10) % statuses.len();
                 let condition_idx = i % conditions.len();
-                
+
                 json!({
                     "id": i,  // Simple numeric ID
                     "sku": format!("SKU-{}", i),  // Short SKU
@@ -378,13 +384,13 @@ fn main() {
             }).collect::<Vec<_>>()
         }
     });
-    
+
     analyze_compression("50000 Products (Mid-Case)", &products_50k);
 
     // Scenario 9: Extreme Case - Maximum repetition (cache scenario)
     println!("\n📊 Scenario 9: 50000 Users - Extreme Repetition (97%+ Zone)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
+
     let users_50k_extreme = json!({
         "data": {
             "users": (0..50000).map(|i| json!({
@@ -424,7 +430,7 @@ fn main() {
             })).collect::<Vec<_>>()
         }
     });
-    
+
     analyze_compression("50000 Users (Extreme Repetition)", &users_50k_extreme);
 
     // Summary
@@ -446,39 +452,55 @@ fn main() {
 fn analyze_compression(label: &str, data: &serde_json::Value) {
     let json_bytes = serde_json::to_vec(data).unwrap();
     let json_size = json_bytes.len();
-    
+
     let mut encoder = GbpEncoder::new();
     let gbp_bytes = encoder.encode(data);
     let gbp_size = gbp_bytes.len();
-    
+
     let saved_bytes = json_size as i64 - gbp_size as i64;
     let saved_percent = (saved_bytes as f64 / json_size as f64) * 100.0;
     let ratio = json_size as f64 / gbp_size as f64;
-    
+
     println!("Query: {}", label);
     println!("  JSON:         {:>10}", format_bytes(json_size));
     println!("  Binary (GBP): {:>10}", format_bytes(gbp_size));
     println!("  ─────────────────────────────");
     if saved_bytes >= 0 {
-        println!("  Saved:        {:>10} ({:.1}%)", format_bytes(saved_bytes as usize), saved_percent);
+        println!(
+            "  Saved:        {:>10} ({:.1}%)",
+            format_bytes(saved_bytes as usize),
+            saved_percent
+        );
     } else {
-        println!("  Overhead:     {:>10} ({:.1}%)", format_bytes((-saved_bytes) as usize), -saved_percent);
+        println!(
+            "  Overhead:     {:>10} ({:.1}%)",
+            format_bytes((-saved_bytes) as usize),
+            -saved_percent
+        );
     }
     println!("  Ratio:        {:.2}x", ratio);
-    
+
     // Bandwidth savings for 1 million requests
     let monthly_requests = 1_000_000;
     let monthly_json = json_size * monthly_requests;
     let monthly_gbp = gbp_size * monthly_requests;
     let monthly_saved = monthly_json as i64 - monthly_gbp as i64;
-    
+
     println!("\n  📈 At 1M requests/month:");
     println!("     JSON:     {}", format_bytes(monthly_json));
     println!("     Binary:   {}", format_bytes(monthly_gbp));
     if monthly_saved >= 0 {
-        println!("     💰 Saved: {} ({:.1}%)", format_bytes(monthly_saved as usize), saved_percent);
+        println!(
+            "     💰 Saved: {} ({:.1}%)",
+            format_bytes(monthly_saved as usize),
+            saved_percent
+        );
     } else {
-        println!("     ⚠️  Cost:  {} extra ({:.1}%)", format_bytes((-monthly_saved) as usize), -saved_percent);
+        println!(
+            "     ⚠️  Cost:  {} extra ({:.1}%)",
+            format_bytes((-monthly_saved) as usize),
+            -saved_percent
+        );
     }
 }
 

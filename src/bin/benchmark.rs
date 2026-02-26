@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Barrier;
 
-
 const SERVER_URL: &str = "http://127.0.0.1:8888/graphql";
 
 /// Benchmark mode

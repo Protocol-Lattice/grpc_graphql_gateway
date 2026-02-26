@@ -2,7 +2,9 @@
 //! provided `.proto` files. The output is a single `graphql_gateway.rs` file
 //! that you can drop into your project and fill in service endpoints.
 
-use grpc_graphql_gateway::graphql::{GraphqlEntity, GraphqlLiveQuery, GraphqlSchema, GraphqlService, GraphqlType};
+use grpc_graphql_gateway::graphql::{
+    GraphqlEntity, GraphqlLiveQuery, GraphqlSchema, GraphqlService, GraphqlType,
+};
 use prost::Message;
 use prost_reflect::{DescriptorPool, DynamicMessage, ExtensionDescriptor, Value};
 use prost_types::compiler::{code_generator_response, CodeGeneratorResponse};
@@ -231,7 +233,9 @@ fn collect_services(
 
             // Get the GraphQL schema options first
             let graphql_name = if let Some(method_ext) = method_ext.as_ref() {
-                if let Some(schema_opts) = decode_extension::<GraphqlSchema>(&method.options(), method_ext)? {
+                if let Some(schema_opts) =
+                    decode_extension::<GraphqlSchema>(&method.options(), method_ext)?
+                {
                     let name = if schema_opts.name.is_empty() {
                         method.name().to_string()
                     } else {
@@ -254,22 +258,33 @@ fn collect_services(
 
             // Check for live_query extension
             if let Some(lq_ext) = live_query_ext.as_ref() {
-                if let Some(lq_opts) = decode_extension::<GraphqlLiveQuery>(&method.options(), lq_ext)? {
+                if let Some(lq_opts) =
+                    decode_extension::<GraphqlLiveQuery>(&method.options(), lq_ext)?
+                {
                     if lq_opts.enabled {
-                        let operation_name = graphql_name.unwrap_or_else(|| method.name().to_string());
+                        let operation_name =
+                            graphql_name.unwrap_or_else(|| method.name().to_string());
                         let strategy = match lq_opts.strategy {
                             0 => "INVALIDATION",
                             1 => "POLLING",
                             2 => "HASH_DIFF",
                             _ => "INVALIDATION",
                         };
-                        
+
                         info.ops.live_queries.push(LiveQueryInfo {
                             operation_name,
                             enabled: true,
-                            throttle_ms: if lq_opts.throttle_ms > 0 { lq_opts.throttle_ms } else { 100 },
+                            throttle_ms: if lq_opts.throttle_ms > 0 {
+                                lq_opts.throttle_ms
+                            } else {
+                                100
+                            },
                             triggers: lq_opts.triggers,
-                            max_connections: if lq_opts.max_connections > 0 { lq_opts.max_connections } else { 10 },
+                            max_connections: if lq_opts.max_connections > 0 {
+                                lq_opts.max_connections
+                            } else {
+                                10
+                            },
                             ttl_seconds: lq_opts.ttl_seconds,
                             strategy: strategy.to_string(),
                             poll_interval_ms: lq_opts.poll_interval_ms,
@@ -502,7 +517,9 @@ fn render_template(
 
     if has_live_queries {
         buf.push_str("/// Live Query configuration for reactive subscriptions.\n");
-        buf.push_str("/// Use the @live directive on supported queries to receive automatic updates.\n");
+        buf.push_str(
+            "/// Use the @live directive on supported queries to receive automatic updates.\n",
+        );
         buf.push_str("#[derive(Debug, Clone)]\n");
         buf.push_str("pub struct LiveQueryConfigInfo {\n");
         buf.push_str("    /// GraphQL operation name\n");
@@ -522,15 +539,15 @@ fn render_template(
         buf.push_str("    /// Entity dependencies\n");
         buf.push_str("    pub depends_on: &'static [&'static str],\n");
         buf.push_str("}\n\n");
-        
+
         buf.push_str(&format!(
             "pub const LIVE_QUERY_CONFIGS: &[LiveQueryConfigInfo] = {};\n\n",
             render_live_query_configs(&all_live_queries)
         ));
-        
+
         buf.push_str("#[allow(dead_code)]\n");
         buf.push_str("const LIVE_QUERIES_ENABLED: bool = true;\n\n");
-        
+
         buf.push_str("fn describe_live_queries() -> String {\n");
         buf.push_str("    if LIVE_QUERY_CONFIGS.is_empty() {\n");
         buf.push_str("        \"none\".to_string()\n");
@@ -1058,13 +1075,19 @@ fn render_live_query_configs(live_queries: &[&LiveQueryInfo]) -> String {
                 "        triggers: {},\n",
                 render_str_slice(&lq.triggers)
             ));
-            buf.push_str(&format!("        max_connections: {},\n", lq.max_connections));
+            buf.push_str(&format!(
+                "        max_connections: {},\n",
+                lq.max_connections
+            ));
             buf.push_str(&format!("        ttl_seconds: {},\n", lq.ttl_seconds));
             buf.push_str(&format!(
                 "        strategy: {},\n",
                 render_str_literal(&lq.strategy)
             ));
-            buf.push_str(&format!("        poll_interval_ms: {},\n", lq.poll_interval_ms));
+            buf.push_str(&format!(
+                "        poll_interval_ms: {},\n",
+                lq.poll_interval_ms
+            ));
             buf.push_str(&format!(
                 "        depends_on: {},\n",
                 render_str_slice(&lq.depends_on)
@@ -1123,7 +1146,11 @@ fn derive_entity_resolver_name(entities: &[EntityInfo], services: &[ServiceInfo]
             }
         }
 
-        let name = svc.full_name.split('.').next_back().unwrap_or(&svc.full_name);
+        let name = svc
+            .full_name
+            .split('.')
+            .next_back()
+            .unwrap_or(&svc.full_name);
         return format!("{}EntityResolver", to_pascal_case(name));
     }
 

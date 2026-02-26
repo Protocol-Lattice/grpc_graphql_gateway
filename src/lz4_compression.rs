@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn test_lz4_small_data() {
         let data = b"abc";
-       let compressed = compress_lz4(data).unwrap();
+        let compressed = compress_lz4(data).unwrap();
         let decompressed = decompress_lz4(&compressed).unwrap();
         assert_eq!(data.to_vec(), decompressed);
     }
@@ -148,11 +148,11 @@ mod tests {
     fn test_lz4_highly_compressible() {
         let data = vec![0u8; 10000]; // All zeros
         let compressed = compress_lz4(&data).unwrap();
-        
+
         // Should compress extremely well
         let ratio = compressed.len() as f64 / data.len() as f64;
         assert!(ratio < 0.1, "Compression ratio should be < 10%");
-        
+
         let decompressed = decompress_lz4(&compressed).unwrap();
         assert_eq!(data, decompressed);
     }
@@ -247,7 +247,7 @@ mod tests {
             "Ratio: {:.1}%",
             compressed.len() as f64 / data.len() as f64 * 100.0
         );
-        
+
         // LZ4 should be very fast
         assert!(compress_time.as_millis() < 100);
         assert!(decompress_time.as_millis() < 100);
@@ -307,7 +307,7 @@ mod tests {
             .unwrap();
 
         let response = app.clone().oneshot(request).await.unwrap();
-        
+
         // Should not compress without Accept-Encoding
         assert!(response.headers().get(header::CONTENT_ENCODING).is_none());
     }
@@ -315,7 +315,10 @@ mod tests {
     #[tokio::test]
     async fn test_lz4_middleware_accepts_lz4() {
         let app = axum::Router::new()
-            .route("/test", axum::routing::get(|| async { "Hello World ".repeat(100) }))
+            .route(
+                "/test",
+                axum::routing::get(|| async { "Hello World ".repeat(100) }),
+            )
             .layer(axum::middleware::from_fn(lz4_compression_middleware));
 
         let request = http::Request::builder()
@@ -325,10 +328,13 @@ mod tests {
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
-        
+
         // Should compress with lz4
         assert_eq!(
-            response.headers().get(header::CONTENT_ENCODING).map(|v| v.as_bytes()),
+            response
+                .headers()
+                .get(header::CONTENT_ENCODING)
+                .map(|v| v.as_bytes()),
             Some(b"lz4".as_ref())
         );
     }
@@ -336,11 +342,14 @@ mod tests {
     #[tokio::test]
     async fn test_lz4_middleware_accepts_gbp_lz4() {
         use axum::response::Json;
-        
+
         let app = axum::Router::new()
-            .route("/test", axum::routing::get(|| async {
-                Json(serde_json::json!({"data": {"test": "value"}}))
-            }))
+            .route(
+                "/test",
+                axum::routing::get(|| async {
+                    Json(serde_json::json!({"data": {"test": "value"}}))
+                }),
+            )
             .layer(axum::middleware::from_fn(lz4_compression_middleware));
 
         let request = http::Request::builder()
@@ -350,7 +359,7 @@ mod tests {
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
-        
+
         // Should compress with gbp-lz4 for JSON responses
         let content_encoding = response.headers().get(header::CONTENT_ENCODING);
         if content_encoding.is_some() {
@@ -375,7 +384,7 @@ mod tests {
         let compressed = compress_lz4(long_string.as_bytes()).unwrap();
         let decompressed = decompress_lz4(&compressed).unwrap();
         assert_eq!(long_string.as_bytes(), decompressed.as_slice());
-        
+
         // Should compress very well
         let ratio = compressed.len() as f64 / long_string.len() as f64;
         assert!(ratio < 0.05, "Expected > 95% compression");

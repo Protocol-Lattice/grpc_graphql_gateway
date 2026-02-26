@@ -3,6 +3,8 @@
 //! A high-performance GraphQL Federation Router with Live Query support.
 //! Reads configuration from `router.yaml`.
 
+use axum::extract::DefaultBodyLimit;
+use axum::http::{header, HeaderValue, Method};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -13,32 +15,31 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use tower_http::{
-    cors::{CorsLayer, Any},
-    set_header::SetResponseHeaderLayer,
-    timeout::TimeoutLayer,
-};
-use axum::extract::DefaultBodyLimit;
-use axum::http::{Method, HeaderValue, header};
-use std::time::Duration;
+use futures::stream::StreamExt;
+use futures::SinkExt;
+use grpc_graphql_gateway::quic::QuicConfig;
 use grpc_graphql_gateway::{
-    global_live_query_store, has_live_directive, strip_live_directive,
+    global_live_query_store, has_live_directive,
     live_query::{ActiveLiveQuery, LiveQueryStrategy, SharedLiveQueryStore},
     router::{DdosConfig, DdosProtection, GbpRouter, RouterConfig, SubgraphConfig},
+    strip_live_directive,
 };
+use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::{IpAddr, SocketAddr};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, RwLock};
-use futures::stream::StreamExt;
-use futures::SinkExt;
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
-use std::path::Path;
-use grpc_graphql_gateway::quic::QuicConfig;
+use tower_http::{
+    cors::{Any, CorsLayer},
+    set_header::SetResponseHeaderLayer,
+    timeout::TimeoutLayer,
+};
 
 #[derive(Debug, Deserialize)]
 struct YamlConfig {
@@ -64,7 +65,6 @@ struct YamlConfig {
     quic: Option<QuicConfig>,
 }
 
-
 #[derive(Debug, Deserialize)]
 struct ServerConfig {
     listen: String,
@@ -75,7 +75,6 @@ struct ServerConfig {
     #[serde(default)]
     quic_listen: Option<String>,
 }
-
 
 fn default_workers() -> usize {
     16
@@ -113,7 +112,7 @@ struct InnerState {
 struct AppState {
     // Dynamic configurations that can be reloaded
     inner: RwLock<Arc<InnerState>>,
-    
+
     // Shared resources that persist across reloads
     encoder_pool: Arc<RwLock<Vec<grpc_graphql_gateway::gbp::GbpEncoder>>>,
     live_query_store: SharedLiveQueryStore,
@@ -129,7 +128,7 @@ impl AppState {
         for _ in 0..pool_size {
             encoders.push(grpc_graphql_gateway::gbp::GbpEncoder::new());
         }
-        
+
         Self {
             inner: RwLock::new(Arc::new(inner)),
             encoder_pool: Arc::new(RwLock::new(encoders)),
@@ -141,24 +140,32 @@ impl AppState {
 
 /// Helper to load configuration and build InnerState
 fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig)> {
-    let mut config_content = std::fs::read_to_string(config_path).map_err(|e| anyhow::anyhow!("Failed to read config: {}", e))?;
+    let mut config_content = std::fs::read_to_string(config_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read config: {}", e))?;
 
     // Environment variable interpolation: replace ${ENV_VAR} or ${ENV_VAR:-default}
     let re = regex::Regex::new(r"\$\{([^}]+)\}").unwrap();
-    config_content = re.replace_all(&config_content, |caps: &regex::Captures| {
-        let env_var = &caps[1];
-        if env_var.contains(":-") {
-            let parts: Vec<&str> = env_var.splitn(2, ":-").collect();
-            std::env::var(parts[0]).unwrap_or_else(|_| parts[1].to_string())
-        } else {
-            std::env::var(env_var).unwrap_or_else(|_| "".to_string())
-        }
-    }).to_string();
+    config_content = re
+        .replace_all(&config_content, |caps: &regex::Captures| {
+            let env_var = &caps[1];
+            if env_var.contains(":-") {
+                let parts: Vec<&str> = env_var.splitn(2, ":-").collect();
+                std::env::var(parts[0]).unwrap_or_else(|_| parts[1].to_string())
+            } else {
+                std::env::var(env_var).unwrap_or_else(|_| "".to_string())
+            }
+        })
+        .to_string();
 
-    let mut yaml_config: YamlConfig = serde_yaml::from_str(&config_content).map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
+    let mut yaml_config: YamlConfig = serde_yaml::from_str(&config_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
 
     // Apply global mTLS config to subgraphs that don't have their own override
-    let mtls_enabled = yaml_config.mtls.as_ref().map(|m| m.enabled).unwrap_or(false);
+    let mtls_enabled = yaml_config
+        .mtls
+        .as_ref()
+        .map(|m| m.enabled)
+        .unwrap_or(false);
     if let Some(ref global_mtls) = yaml_config.mtls {
         if global_mtls.enabled {
             for subgraph in &mut yaml_config.subgraphs {
@@ -166,24 +173,31 @@ fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig
                     subgraph.mtls = Some(global_mtls.clone());
                 }
             }
-            println!("  🔒 mTLS: Zero-Trust mode enabled (trust_domain: {})", global_mtls.trust_domain);
+            println!(
+                "  🔒 mTLS: Zero-Trust mode enabled (trust_domain: {})",
+                global_mtls.trust_domain
+            );
         }
     }
 
     // Allow overriding Gateway Secret from environment variable for security
-    // Note: When mTLS is enabled, the GATEWAY_SECRET is optional (mTLS provides 
+    // Note: When mTLS is enabled, the GATEWAY_SECRET is optional (mTLS provides
     // cryptographic authentication). However, it can still be used as defense-in-depth.
     let gateway_secret = std::env::var("GATEWAY_SECRET").ok();
     if let Some(secret) = &gateway_secret {
         for subgraph in &mut yaml_config.subgraphs {
-            subgraph.headers.insert("X-Gateway-Secret".to_string(), secret.clone());
+            subgraph
+                .headers
+                .insert("X-Gateway-Secret".to_string(), secret.clone());
         }
     } else if mtls_enabled {
         println!("  ℹ️  GATEWAY_SECRET not set (mTLS provides cryptographic authentication)");
     }
 
     // Parse port from listen address for RouterConfig
-    let port = yaml_config.server.listen
+    let port = yaml_config
+        .server
+        .listen
         .split(':')
         .next_back()
         .and_then(|p| p.parse().ok())
@@ -194,33 +208,41 @@ fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig
         subgraphs: yaml_config.subgraphs.clone(),
         force_gbp: true,
         apq: Some(grpc_graphql_gateway::persisted_queries::PersistedQueryConfig::default()),
-        request_collapsing: Some(grpc_graphql_gateway::request_collapsing::RequestCollapsingConfig::default()),
+        request_collapsing: Some(
+            grpc_graphql_gateway::request_collapsing::RequestCollapsingConfig::default(),
+        ),
         waf: yaml_config.waf.clone(),
         query_cost: yaml_config.query_cost.clone(),
         disable_introspection: yaml_config.disable_introspection,
         circuit_breaker: yaml_config.circuit_breaker.clone(),
     };
 
-    let ddos_config = yaml_config.rate_limit.clone().unwrap_or(DdosConfig::relaxed());
+    let ddos_config = yaml_config
+        .rate_limit
+        .clone()
+        .unwrap_or(DdosConfig::relaxed());
     let ddos = DdosProtection::new(ddos_config);
 
     let waf_config = yaml_config.waf.clone().unwrap_or_default();
 
     let router = GbpRouter::new(router_config);
 
-    Ok((InnerState {
-        router,
-        ddos,
-        gateway_secret,
-        waf_config,
-        mtls_enabled,
-    }, yaml_config))
+    Ok((
+        InnerState {
+            router,
+            ddos,
+            gateway_secret,
+            waf_config,
+            mtls_enabled,
+        },
+        yaml_config,
+    ))
 }
 
 fn main() {
     // Determine config path from args or defaults
     let args: Vec<String> = std::env::args().collect();
-    
+
     // Check for validation mode
     if args.len() > 1 && (args[1] == "--check" || args[1] == "validate") {
         let config_path = if args.len() > 2 {
@@ -230,19 +252,19 @@ fn main() {
         } else if std::path::Path::new("examples/router.yaml").exists() {
             "examples/router.yaml".to_string()
         } else {
-             eprintln!("❌ Usage: router --check <config_path>");
-             std::process::exit(1);
+            eprintln!("❌ Usage: router --check <config_path>");
+            std::process::exit(1);
         };
-        
+
         println!("🔍 Validating configuration: {}", config_path);
         match load_inner_state(&config_path) {
             Ok((_, config)) => {
-                 println!("✅ Configuration is valid!");
-                 println!("   - Subgraphs: {}", config.subgraphs.len());
-                 println!("   - Listen:    {}", config.server.listen);
-                 println!("   - Workers:   {}", config.server.workers);
-                 std::process::exit(0);
-            },
+                println!("✅ Configuration is valid!");
+                println!("   - Subgraphs: {}", config.subgraphs.len());
+                println!("   - Listen:    {}", config.server.listen);
+                println!("   - Workers:   {}", config.server.workers);
+                std::process::exit(0);
+            }
             Err(e) => {
                 eprintln!("❌ Configuration is invalid: {}", e);
                 std::process::exit(1);
@@ -284,9 +306,9 @@ fn start_config_watcher(config_path: String, state: Arc<AppState>) {
     tokio::spawn(async move {
         // Channel to bridge blocking watcher to async world
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        
+
         let path = config_path.clone();
-        
+
         // A flag set while a reload is in-flight so that a burst of watcher
         // events does not queue multiple concurrent `load_inner_state` calls.
         // Using AtomicBool + try_lock gives a fast non-blocking check.
@@ -295,13 +317,13 @@ fn start_config_watcher(config_path: String, state: Arc<AppState>) {
         // Spawn blocking thread for file watching
         std::thread::spawn(move || {
             let (std_tx, std_rx) = std::sync::mpsc::channel();
-            
+
             let mut watcher = match RecommendedWatcher::new(std_tx, NotifyConfig::default()) {
-               Ok(w) => w,
-               Err(e) => {
-                   tracing::error!("Failed to create watcher: {}", e);
-                   return;
-               }
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::error!("Failed to create watcher: {}", e);
+                    return;
+                }
             };
 
             if let Err(e) = watcher.watch(Path::new(&path), RecursiveMode::NonRecursive) {
@@ -314,9 +336,9 @@ fn start_config_watcher(config_path: String, state: Arc<AppState>) {
                     Ok(event) => {
                         // Only care if something changed
                         if event.kind.is_modify() {
-                             let _ = tx.send(());
+                            let _ = tx.send(());
                         }
-                    },
+                    }
                     Err(e) => tracing::error!("Watch error: {:?}", e),
                 }
             }
@@ -347,27 +369,38 @@ fn start_config_watcher(config_path: String, state: Arc<AppState>) {
             // provides the first exclusion layer; this second lock guards the
             // write to `state.inner`.
             let _reload_guard = state.reload_lock.lock().await;
-            
+
             match load_inner_state(&config_path) {
                 Ok((new_inner, new_config)) => {
                     {
                         let mut inner = state.inner.write().await;
                         *inner = Arc::new(new_inner);
                     } // Release write lock immediately
-                    
+
                     tracing::info!("♻️  Configuration reloaded successfully!");
-                    
+
                     // Log new state summary
                     tracing::info!(
-                        "   Active Subgraphs: {}, DDoS: {}/{} RPS, WAF: {}", 
+                        "   Active Subgraphs: {}, DDoS: {}/{} RPS, WAF: {}",
                         new_config.subgraphs.len(),
-                        new_config.rate_limit.as_ref().map(|r| r.global_rps).unwrap_or(0),
-                        new_config.rate_limit.as_ref().map(|r| r.per_ip_rps).unwrap_or(0),
+                        new_config
+                            .rate_limit
+                            .as_ref()
+                            .map(|r| r.global_rps)
+                            .unwrap_or(0),
+                        new_config
+                            .rate_limit
+                            .as_ref()
+                            .map(|r| r.per_ip_rps)
+                            .unwrap_or(0),
                         new_config.waf.map(|w| w.enabled).unwrap_or(false)
                     );
-                },
+                }
                 Err(e) => {
-                    tracing::error!("❌ Failed to reload config (keeping previous version): {}", e);
+                    tracing::error!(
+                        "❌ Failed to reload config (keeping previous version): {}",
+                        e
+                    );
                 }
             }
 
@@ -399,41 +432,68 @@ async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<App
     start_config_watcher(config_path, state.clone());
 
     // Print Banner based on initial config
-     let ddos_config = yaml_config.rate_limit.unwrap_or(DdosConfig::relaxed());
-     let quic_cfg = yaml_config.quic.clone().unwrap_or_default();
-     let quic_enabled = quic_cfg.enabled;
-     println!();
-     println!("  ╔═══════════════════════════════════════════════════════════╗");
-     println!("  ║      GBP Router + Hot Reloading + Live Queries           ║");
-     println!("  ╠═══════════════════════════════════════════════════════════╣");
-     println!("  ║  Listening:     {}                       ║", yaml_config.server.listen);
-     println!("  ║  Workers:       {}                                       ║", yaml_config.server.workers);
-     println!("  ║  Subgraphs:     {}                                       ║", yaml_config.subgraphs.len());
-     for sg in &yaml_config.subgraphs {
-         println!("  ║   - {:<12} {} ║", sg.name, sg.url);
-     }
-     println!("  ║  GBP Binary:    ✅ Bidirectional (99% compression)        ║");
-     println!("  ║  DDoS Shield:   {} global RPS, {} per-IP            ║", ddos_config.global_rps, ddos_config.per_ip_rps);
-     if quic_enabled {
-         let quic_listen = yaml_config.server.quic_listen.as_deref()
-             .unwrap_or(&yaml_config.server.listen);
-         println!("  ║  HTTP/3 (QUIC): 🚀 Enabled  udp://{}          ║", quic_listen);
-         println!("  ║  Alt-Svc:       ✅ Advertised to HTTP/1.1+2 clients    ║");
-         println!("  ║  Protocol:      RFC 9114 (HTTP/3) + RFC 9000 (QUIC)   ║");
-     } else {
-         println!("  ║  HTTP/3 (QUIC): ⚡ Disabled (set quic.enabled: true)   ║");
-     }
-     if yaml_config.mtls.as_ref().map(|m| m.enabled).unwrap_or(false) {
-         let mtls_cfg = yaml_config.mtls.as_ref().unwrap();
-         println!("  ║  mTLS:          🔒 Zero-Trust ({})              ║", mtls_cfg.trust_domain);
-         println!("  ║  Cert TTL:      {} seconds                             ║", mtls_cfg.cert_ttl_secs);
-     } else {
-         println!("  ║  mTLS:          ❌ Disabled (using GATEWAY_SECRET)      ║");
-     }
-     println!("  ╚═══════════════════════════════════════════════════════════╝");
-     println!();
-
-
+    let ddos_config = yaml_config.rate_limit.unwrap_or(DdosConfig::relaxed());
+    let quic_cfg = yaml_config.quic.clone().unwrap_or_default();
+    let quic_enabled = quic_cfg.enabled;
+    println!();
+    println!("  ╔═══════════════════════════════════════════════════════════╗");
+    println!("  ║      GBP Router + Hot Reloading + Live Queries           ║");
+    println!("  ╠═══════════════════════════════════════════════════════════╣");
+    println!(
+        "  ║  Listening:     {}                       ║",
+        yaml_config.server.listen
+    );
+    println!(
+        "  ║  Workers:       {}                                       ║",
+        yaml_config.server.workers
+    );
+    println!(
+        "  ║  Subgraphs:     {}                                       ║",
+        yaml_config.subgraphs.len()
+    );
+    for sg in &yaml_config.subgraphs {
+        println!("  ║   - {:<12} {} ║", sg.name, sg.url);
+    }
+    println!("  ║  GBP Binary:    ✅ Bidirectional (99% compression)        ║");
+    println!(
+        "  ║  DDoS Shield:   {} global RPS, {} per-IP            ║",
+        ddos_config.global_rps, ddos_config.per_ip_rps
+    );
+    if quic_enabled {
+        let quic_listen = yaml_config
+            .server
+            .quic_listen
+            .as_deref()
+            .unwrap_or(&yaml_config.server.listen);
+        println!(
+            "  ║  HTTP/3 (QUIC): 🚀 Enabled  udp://{}          ║",
+            quic_listen
+        );
+        println!("  ║  Alt-Svc:       ✅ Advertised to HTTP/1.1+2 clients    ║");
+        println!("  ║  Protocol:      RFC 9114 (HTTP/3) + RFC 9000 (QUIC)   ║");
+    } else {
+        println!("  ║  HTTP/3 (QUIC): ⚡ Disabled (set quic.enabled: true)   ║");
+    }
+    if yaml_config
+        .mtls
+        .as_ref()
+        .map(|m| m.enabled)
+        .unwrap_or(false)
+    {
+        let mtls_cfg = yaml_config.mtls.as_ref().unwrap();
+        println!(
+            "  ║  mTLS:          🔒 Zero-Trust ({})              ║",
+            mtls_cfg.trust_domain
+        );
+        println!(
+            "  ║  Cert TTL:      {} seconds                             ║",
+            mtls_cfg.cert_ttl_secs
+        );
+    } else {
+        println!("  ║  mTLS:          ❌ Disabled (using GATEWAY_SECRET)      ║");
+    }
+    println!("  ╚═══════════════════════════════════════════════════════════╝");
+    println!();
 
     // Optimized Axum Router
     let mut app = Router::new()
@@ -509,26 +569,32 @@ async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<App
             CorsLayer::new()
                 .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
                 .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
-                .allow_origin(Any)
+                .allow_origin(Any),
         );
     } else {
-        let origins: Vec<HeaderValue> = cors_config.allow_origins
+        let origins: Vec<HeaderValue> = cors_config
+            .allow_origins
             .iter()
-            .map(|s| s.parse::<HeaderValue>().unwrap_or(HeaderValue::from_static("")))
+            .map(|s| {
+                s.parse::<HeaderValue>()
+                    .unwrap_or(HeaderValue::from_static(""))
+            })
             .filter(|h| !h.is_empty())
             .collect();
-            
+
         app = app.layer(
             CorsLayer::new()
                 .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
                 .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
-                .allow_origin(origins)
+                .allow_origin(origins),
         );
     }
 
     // Determine the TCP port so we can advertise it in Alt-Svc for HTTP/3 upgrade.
     // The port is extracted from the listen address (e.g. "0.0.0.0:4000" → 4000).
-    let tcp_port: u16 = yaml_config.server.listen
+    let tcp_port: u16 = yaml_config
+        .server
+        .listen
         .split(':')
         .next_back()
         .and_then(|p| p.parse().ok())
@@ -540,18 +606,17 @@ async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<App
     if quic_enabled {
         let alt_svc = grpc_graphql_gateway::alt_svc_header_value(tcp_port, 86400);
         if let Ok(hv) = HeaderValue::from_str(&alt_svc) {
-            app = app.layer(
-                tower::ServiceBuilder::new()
-                    .layer(SetResponseHeaderLayer::overriding(
-                        header::HeaderName::from_static("alt-svc"),
-                        hv,
-                    ))
-            );
+            app = app.layer(tower::ServiceBuilder::new().layer(
+                SetResponseHeaderLayer::overriding(header::HeaderName::from_static("alt-svc"), hv),
+            ));
         }
     }
 
     // Apply Timeout
-    let app = app.layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(30)));
+    let app = app.layer(TimeoutLayer::with_status_code(
+        StatusCode::REQUEST_TIMEOUT,
+        Duration::from_secs(30),
+    ));
 
     // ─── Bind QUIC / HTTP3 endpoint ─────────────────────────────────────────
     // The QUIC endpoint runs on UDP and handles HTTP/3 connections independently
@@ -568,14 +633,17 @@ async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<App
         // `install_default` is idempotent — safe to call more than once.
         let _ = rustls::crypto::ring::default_provider().install_default();
 
-        let quic_listen_str = yaml_config.server.quic_listen.as_deref()
+        let quic_listen_str = yaml_config
+            .server
+            .quic_listen
+            .as_deref()
             .unwrap_or(&yaml_config.server.listen);
 
         let quic_addr = SocketAddr::from_str(quic_listen_str)
             .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], tcp_port)));
 
-        let cert_path  = quic_cfg.cert_path.clone();
-        let key_path   = quic_cfg.key_path.clone();
+        let cert_path = quic_cfg.cert_path.clone();
+        let key_path = quic_cfg.key_path.clone();
         let quic_cfg_c = quic_cfg.clone();
 
         match QuicServer::bind(
@@ -646,7 +714,6 @@ async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<App
     .unwrap();
 }
 
-
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -711,7 +778,7 @@ async fn graphql_handler(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("application/json");
 
-    let is_binary_request = content_type.contains("application/x-gbp") 
+    let is_binary_request = content_type.contains("application/x-gbp")
         || content_type.contains("application/graphql-request+gbp");
 
     // Parse request payload based on Content-Type
@@ -726,7 +793,8 @@ async fn graphql_handler(
                             "message": format!("Invalid GBP request structure: {}", e),
                             "extensions": {"code": "BAD_REQUEST"}
                         }]
-                    })).into_response();
+                    }))
+                    .into_response();
                 }
             },
             Err(e) => {
@@ -735,7 +803,8 @@ async fn graphql_handler(
                         "message": format!("Failed to decode GBP request: {}", e),
                         "extensions": {"code": "BAD_REQUEST"}
                     }]
-                })).into_response();
+                }))
+                .into_response();
             }
         }
     } else {
@@ -748,7 +817,8 @@ async fn graphql_handler(
                         "message": format!("Invalid JSON request: {}", e),
                         "extensions": {"code": "BAD_REQUEST"}
                     }]
-                })).into_response();
+                }))
+                .into_response();
             }
         }
     };
@@ -760,29 +830,34 @@ async fn graphql_handler(
                 "message": e.to_string(),
                 "extensions": {"code": "VALIDATION_ERROR"}
             }]
-        })).into_response();
+        }))
+        .into_response();
     }
 
     if let Some(vars) = &payload.variables {
-        if let Err(e) = grpc_graphql_gateway::waf::validate_json_with_config(vars, &inner.waf_config) {
+        if let Err(e) =
+            grpc_graphql_gateway::waf::validate_json_with_config(vars, &inner.waf_config)
+        {
             return Json(json!({
                 "errors": [{
                     "message": e.to_string(),
                     "extensions": {"code": "VALIDATION_ERROR"}
                 }]
-            })).into_response();
+            }))
+            .into_response();
         }
     }
 
     if let Some(query) = &payload.query {
         // Quick regex check on raw query
         if let Err(e) = grpc_graphql_gateway::waf::validate_query_string(query, &inner.waf_config) {
-             return Json(json!({
+            return Json(json!({
                 "errors": [{
                     "message": e.to_string(),
                     "extensions": {"code": "VALIDATION_ERROR"}
                 }]
-            })).into_response();
+            }))
+            .into_response();
         }
     }
 
@@ -794,11 +869,15 @@ async fn graphql_handler(
         .unwrap_or(is_binary_request); // If request was binary, default to binary response
 
     // Execute federated query
-    match inner.router.execute_scatter_gather(
-            payload.query.as_deref(), 
-            payload.variables.as_ref(), 
-            payload.extensions.as_ref()
-    ).await {
+    match inner
+        .router
+        .execute_scatter_gather(
+            payload.query.as_deref(),
+            payload.variables.as_ref(),
+            payload.extensions.as_ref(),
+        )
+        .await
+    {
         Ok(data) => {
             let duration = start.elapsed();
 
@@ -821,11 +900,13 @@ async fn graphql_handler(
             if accept_gbp {
                 // Use pooled encoder for binary response
                 let mut encoders = state.encoder_pool.write().await;
-                let mut encoder = encoders.pop().unwrap_or_else(grpc_graphql_gateway::gbp::GbpEncoder::new);
+                let mut encoder = encoders
+                    .pop()
+                    .unwrap_or_else(grpc_graphql_gateway::gbp::GbpEncoder::new);
                 drop(encoders); // release lock ASAP
 
                 let bytes = encoder.encode(&response_data);
-                
+
                 // Return encoder to pool
                 let mut encoders = state.encoder_pool.write().await;
                 if encoders.len() < 64 {
@@ -843,44 +924,47 @@ async fn graphql_handler(
             Json(response_data).into_response()
         }
         Err(e) => {
-             // Handle APQ errors or standard errors
-             let mut error_payload = json!({
-                 "errors": [{"message": e.to_string()}]
-             });
-             
-             // Check if it's an APQ error to add proper extensions
-             if e.to_string() == "PersistedQueryNotFound" {
-                 error_payload = json!({
-                     "errors": [{
-                         "message": "PersistedQueryNotFound",
-                         "extensions": { "code": "PERSISTED_QUERY_NOT_FOUND" }
-                     }]
-                 });
-             }
-             
-             // Return error in requested format
-             if accept_gbp {
-                 let mut encoders = state.encoder_pool.write().await;
-                 let mut encoder = encoders.pop().unwrap_or_else(grpc_graphql_gateway::gbp::GbpEncoder::new);
-                 drop(encoders);
+            // Handle APQ errors or standard errors
+            let mut error_payload = json!({
+                "errors": [{"message": e.to_string()}]
+            });
 
-                 let bytes = encoder.encode(&error_payload);
-                 
-                 let mut encoders = state.encoder_pool.write().await;
-                 if encoders.len() < 64 {
-                     encoders.push(encoder);
-                 }
-                 drop(encoders);
+            // Check if it's an APQ error to add proper extensions
+            if e.to_string() == "PersistedQueryNotFound" {
+                error_payload = json!({
+                    "errors": [{
+                        "message": "PersistedQueryNotFound",
+                        "extensions": { "code": "PERSISTED_QUERY_NOT_FOUND" }
+                    }]
+                });
+            }
 
-                 return (
-                     StatusCode::BAD_REQUEST,
-                     [(axum::http::header::CONTENT_TYPE, "application/x-gbp")],
-                     bytes,
-                 ).into_response();
-             }
-             
-             (StatusCode::BAD_REQUEST, Json(error_payload)).into_response()
-        },
+            // Return error in requested format
+            if accept_gbp {
+                let mut encoders = state.encoder_pool.write().await;
+                let mut encoder = encoders
+                    .pop()
+                    .unwrap_or_else(grpc_graphql_gateway::gbp::GbpEncoder::new);
+                drop(encoders);
+
+                let bytes = encoder.encode(&error_payload);
+
+                let mut encoders = state.encoder_pool.write().await;
+                if encoders.len() < 64 {
+                    encoders.push(encoder);
+                }
+                drop(encoders);
+
+                return (
+                    StatusCode::BAD_REQUEST,
+                    [(axum::http::header::CONTENT_TYPE, "application/x-gbp")],
+                    bytes,
+                )
+                    .into_response();
+            }
+
+            (StatusCode::BAD_REQUEST, Json(error_payload)).into_response()
+        }
     }
 }
 
@@ -891,7 +975,7 @@ async fn health_handler() -> impl IntoResponse {
         "engine": "GBP Router + Live Queries + Subscriptions",
         "endpoints": {
             "graphql": "/graphql",
-            "subscriptions": "/graphql/ws", 
+            "subscriptions": "/graphql/ws",
             "live_queries": "/graphql/live",
             "health": "/health"
         }
@@ -899,7 +983,7 @@ async fn health_handler() -> impl IntoResponse {
 }
 
 /// WebSocket handler for GraphQL subscriptions
-/// 
+///
 /// Implements the graphql-transport-ws protocol for standard GraphQL subscriptions
 /// This is different from live queries - subscriptions are streaming GraphQL operations
 async fn subscription_ws_handler(
@@ -914,7 +998,7 @@ async fn subscription_ws_handler(
 async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
     let (sender, mut receiver) = socket.split();
     let connection_id = uuid::Uuid::new_v4().to_string();
-    
+
     tracing::info!(connection_id = %connection_id, "New subscription WebSocket connection");
 
     // Create channels for this connection
@@ -933,7 +1017,8 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
     });
 
     // Track active subscriptions for this connection
-    let mut active_subscriptions: std::collections::HashMap<String, tokio::task::JoinHandle<()>> = std::collections::HashMap::new();
+    let mut active_subscriptions: std::collections::HashMap<String, tokio::task::JoinHandle<()>> =
+        std::collections::HashMap::new();
 
     // Handle messages from client
     while let Some(msg) = receiver.next().await {
@@ -941,7 +1026,7 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
             Ok(Message::Text(text)) => {
                 if let Ok(msg_value) = serde_json::from_str::<Value>(&text) {
                     let msg_type = msg_value["type"].as_str().unwrap_or("");
-                    
+
                     match msg_type {
                         "connection_init" => {
                             // Acknowledge connection
@@ -952,19 +1037,19 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "compression": "gbp"
                                 }
                             });
-                            
+
                             if let Ok(text) = serde_json::to_string(&ack) {
                                 let _ = outgoing_tx.send(Message::Text(text.into())).await;
                                 tracing::debug!("Subscription connection acknowledged");
                             }
                         }
-                        
+
                         "subscribe" => {
                             let id = msg_value["id"].as_str().unwrap_or("unknown").to_string();
                             let payload = &msg_value["payload"];
                             let query = payload["query"].as_str();
                             let variables = payload.get("variables");
-                            
+
                             if let Some(query_str) = query {
                                 // Check if this is actually a subscription operation
                                 if query_str.trim_start().starts_with("subscription") {
@@ -973,7 +1058,7 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
                                     let subscription_id = id.clone();
                                     let query_owned = query_str.to_string();
                                     let vars_owned = variables.cloned();
-                                    
+
                                     // Spawn subscription handler
                                     let handle = tokio::spawn(async move {
                                         handle_subscription(
@@ -982,9 +1067,10 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
                                             query_owned,
                                             vars_owned,
                                             outgoing_tx_clone,
-                                        ).await;
+                                        )
+                                        .await;
                                     });
-                                    
+
                                     active_subscriptions.insert(id, handle);
                                 } else {
                                     // Not a subscription, treat as regular query
@@ -993,17 +1079,21 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
                                     let query_owned = query_str.to_string();
                                     let vars_owned = variables.cloned();
                                     let subscription_id = id.clone();
-                                    
+
                                     tokio::spawn(async move {
                                         // Execute as regular query
                                         // Acquire lock
                                         let inner = state_clone.inner.read().await;
-                                        
-                                        match inner.router.execute_scatter_gather(
-                                            Some(&query_owned),
-                                            vars_owned.as_ref(),
-                                            None,
-                                        ).await {
+
+                                        match inner
+                                            .router
+                                            .execute_scatter_gather(
+                                                Some(&query_owned),
+                                                vars_owned.as_ref(),
+                                                None,
+                                            )
+                                            .await
+                                        {
                                             Ok(data) => {
                                                 let response = json!({
                                                     "type": "next",
@@ -1012,19 +1102,23 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
                                                         "data": data
                                                     }
                                                 });
-                                                
+
                                                 if let Ok(text) = serde_json::to_string(&response) {
-                                                    let _ = outgoing_tx_clone.send(Message::Text(text.into())).await;
+                                                    let _ = outgoing_tx_clone
+                                                        .send(Message::Text(text.into()))
+                                                        .await;
                                                 }
-                                                
+
                                                 // Send complete for queries
                                                 let complete = json!({
                                                     "type": "complete",
                                                     "id": subscription_id
                                                 });
-                                                
+
                                                 if let Ok(text) = serde_json::to_string(&complete) {
-                                                    let _ = outgoing_tx_clone.send(Message::Text(text.into())).await;
+                                                    let _ = outgoing_tx_clone
+                                                        .send(Message::Text(text.into()))
+                                                        .await;
                                                 }
                                             }
                                             Err(e) => {
@@ -1035,9 +1129,11 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
                                                         "message": e.to_string()
                                                     }]
                                                 });
-                                                
+
                                                 if let Ok(text) = serde_json::to_string(&error) {
-                                                    let _ = outgoing_tx_clone.send(Message::Text(text.into())).await;
+                                                    let _ = outgoing_tx_clone
+                                                        .send(Message::Text(text.into()))
+                                                        .await;
                                                 }
                                             }
                                         }
@@ -1045,7 +1141,7 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
                                 }
                             }
                         }
-                        
+
                         "complete" => {
                             let id = msg_value["id"].as_str().unwrap_or("unknown");
                             if let Some(handle) = active_subscriptions.remove(id) {
@@ -1053,31 +1149,31 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
                                 tracing::debug!(subscription_id = %id, "Subscription cancelled by client");
                             }
                         }
-                        
+
                         "ping" => {
                             let pong = json!({"type": "pong"});
                             if let Ok(text) = serde_json::to_string(&pong) {
                                 let _ = outgoing_tx.send(Message::Text(text.into())).await;
                             }
                         }
-                        
+
                         _ => {
                             tracing::debug!(msg_type = %msg_type, "Unhandled subscription message type");
                         }
                     }
                 }
             }
-            
+
             Ok(Message::Close(_)) => {
                 tracing::info!(connection_id = %connection_id, "Client closed subscription connection");
                 break;
             }
-            
+
             Err(e) => {
                 tracing::error!(error = %e, "WebSocket error");
                 break;
             }
-            
+
             _ => {}
         }
     }
@@ -1093,20 +1189,25 @@ fn recursive_decrypt(value: &mut serde_json::Value, secret: Option<&str>) {
     match value {
         serde_json::Value::Object(map) => {
             // Check if this object is an encrypted container
-            if let (Some(serde_json::Value::Bool(true)), Some(serde_json::Value::String(encrypted_val))) = 
-                (map.get("encrypted"), map.get("value")) 
+            if let (
+                Some(serde_json::Value::Bool(true)),
+                Some(serde_json::Value::String(encrypted_val)),
+            ) = (map.get("encrypted"), map.get("value"))
             {
                 if let Some(key_str) = secret {
                     // It's an encrypted field - try to decrypt
                     // We need to clone encrypted_val to use it while mutating map
                     let enc_val = encrypted_val.clone();
-                    
+
                     // Decrypt logic: Base64 decode -> XOR with key
                     let decrypted_res = (|| -> Option<String> {
                         use base64::Engine;
-                        let bytes = base64::engine::general_purpose::STANDARD.decode(&enc_val).ok()?;
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(&enc_val)
+                            .ok()?;
                         let key = key_str.as_bytes();
-                        let decrypted_bytes: Vec<u8> = bytes.iter()
+                        let decrypted_bytes: Vec<u8> = bytes
+                            .iter()
                             .enumerate()
                             .map(|(i, b)| b ^ key[i % key.len()])
                             .collect();
@@ -1120,7 +1221,7 @@ fn recursive_decrypt(value: &mut serde_json::Value, secret: Option<&str>) {
                     }
                 }
             }
-            
+
             // Otherwise recurse into children
             for (_, v) in map.iter_mut() {
                 recursive_decrypt(v, secret);
@@ -1148,13 +1249,13 @@ async fn handle_subscription(
     outgoing_tx: mpsc::Sender<Message>,
 ) {
     tracing::info!(subscription_id = %subscription_id, "Subscription started");
-    
+
     // For now, send a message indicating subscriptions need subgraph support
     // In a full implementation, you would:
     // 1. Determine which subgraph handles this subscription
     // 2. Forward the subscription to that subgraph
     // 3. Stream results back as they arrive
-    
+
     let error = json!({
         "type": "error",
         "id": subscription_id,
@@ -1166,14 +1267,14 @@ async fn handle_subscription(
             }
         }]
     });
-    
+
     if let Ok(text) = serde_json::to_string(&error) {
         let _ = outgoing_tx.send(Message::Text(text.into())).await;
     }
 }
 
 /// WebSocket handler for live queries
-/// 
+///
 /// Implements the graphql-transport-ws protocol with live query support
 /// Supports the @live directive for real-time GraphQL subscriptions
 async fn live_query_ws_handler(
@@ -1188,11 +1289,12 @@ async fn live_query_ws_handler(
 async fn handle_live_socket(socket: WebSocket, state: Arc<AppState>) {
     let (sender, mut receiver) = socket.split();
     let connection_id = uuid::Uuid::new_v4().to_string();
-    
+
     tracing::info!(connection_id = %connection_id, "New live query WebSocket connection");
 
     // Create channels for this connection
-    let (update_tx, mut update_rx) = mpsc::channel::<grpc_graphql_gateway::live_query::LiveQueryUpdate>(100);
+    let (update_tx, mut update_rx) =
+        mpsc::channel::<grpc_graphql_gateway::live_query::LiveQueryUpdate>(100);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<Message>(100);
 
     // Spawn task to forward all messages to client
@@ -1206,7 +1308,7 @@ async fn handle_live_socket(socket: WebSocket, state: Arc<AppState>) {
             }
         }
     });
-    
+
     // Spawn task to forward live query updates to client with backpressure.
     //
     // Problem: if the client is slow the `outgoing_tx` bounded channel fills up
@@ -1229,7 +1331,7 @@ async fn handle_live_socket(socket: WebSocket, state: Arc<AppState>) {
                     "timestamp": update.timestamp,
                 }
             });
-            
+
             if let Ok(text) = serde_json::to_string(&msg) {
                 match outgoing_tx_clone.try_send(Message::Text(text.into())) {
                     Ok(()) => {}
@@ -1256,7 +1358,7 @@ async fn handle_live_socket(socket: WebSocket, state: Arc<AppState>) {
             Ok(Message::Text(text)) => {
                 if let Ok(msg_value) = serde_json::from_str::<Value>(&text) {
                     let msg_type = msg_value["type"].as_str().unwrap_or("");
-                    
+
                     match msg_type {
                         "connection_init" => {
                             // Acknowledge connection
@@ -1267,19 +1369,19 @@ async fn handle_live_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "compression": "gbp"
                                 }
                             });
-                            
+
                             if let Ok(text) = serde_json::to_string(&ack) {
                                 let _ = outgoing_tx.send(Message::Text(text.into())).await;
                                 tracing::debug!("Connection acknowledged");
                             }
                         }
-                        
+
                         "subscribe" => {
                             let id = msg_value["id"].as_str().unwrap_or("unknown").to_string();
                             let payload = &msg_value["payload"];
                             let query = payload["query"].as_str();
                             let variables = payload.get("variables");
-                            
+
                             if let Some(query_str) = query {
                                 tokio::spawn(handle_live_query_subscription(
                                     state.clone(),
@@ -1291,37 +1393,37 @@ async fn handle_live_socket(socket: WebSocket, state: Arc<AppState>) {
                                 ));
                             }
                         }
-                        
+
                         "complete" => {
                             let id = msg_value["id"].as_str().unwrap_or("unknown");
                             state.live_query_store.unregister(id);
                             tracing::debug!(subscription_id = %id, "Live query completed by client");
                         }
-                        
+
                         "ping" => {
                             let pong = json!({"type": "pong"});
                             if let Ok(text) = serde_json::to_string(&pong) {
                                 let _ = outgoing_tx.send(Message::Text(text.into())).await;
                             }
                         }
-                        
+
                         _ => {
                             tracing::debug!(msg_type = %msg_type, "Unhandled WebSocket message type");
                         }
                     }
                 }
             }
-            
+
             Ok(Message::Close(_)) => {
                 tracing::info!(connection_id = %connection_id, "Client closed WebSocket connection");
                 break;
             }
-            
+
             Err(e) => {
                 tracing::error!(error = %e, "WebSocket error");
                 break;
             }
-            
+
             _ => {}
         }
     }
@@ -1348,17 +1450,16 @@ async fn handle_live_query_subscription(
 
     // Strip @live directive for execution
     let clean_query = strip_live_directive(&query);
-    
+
     // Execute the initial query through the router
     // Execute the initial query through the router
     let initial_result = {
         // Acquire read lock for router (scoped to drop immediately after use)
         let inner = state.inner.read().await;
-        inner.router.execute_scatter_gather(
-            Some(&clean_query),
-            variables.as_ref(),
-            None,
-        ).await
+        inner
+            .router
+            .execute_scatter_gather(Some(&clean_query), variables.as_ref(), None)
+            .await
     };
 
     match initial_result {
@@ -1380,7 +1481,10 @@ async fn handle_live_query_subscription(
                 connection_id: connection_id.clone(),
             };
 
-            if let Err(e) = state.live_query_store.register(live_query, update_tx.clone()) {
+            if let Err(e) = state
+                .live_query_store
+                .register(live_query, update_tx.clone())
+            {
                 tracing::error!(error = %e, "Failed to register live query");
                 return;
             }
@@ -1416,43 +1520,46 @@ async fn handle_live_query_subscription(
 
             // Listen for invalidation events
             let mut invalidation_rx = state.live_query_store.subscribe_invalidations();
-            
-            while let Ok(event) = invalidation_rx.recv().await {
-                        // Check if this subscription is affected
-                        if let Some(query_info) = state.live_query_store.get(&subscription_id) {
-                            if query_info.should_update(&event) && query_info.throttle_elapsed() {
-                                // Re-execute the query
-                                // Re-acquire lock only for execution
-                                let execution_result = {
-                                    let inner = state.inner.read().await;
-                                    inner.router.execute_scatter_gather(
-                                        Some(&clean_query),
-                                        variables.as_ref(),
-                                        None,
-                                    ).await
-                                };
 
-                                match execution_result {
-                                    Ok(updated_data) => {
-                                        if let Err(e) = state.live_query_store.send_update(
-                                            &subscription_id,
-                                            updated_data,
-                                            false,
-                                        ).await {
-                                            tracing::error!(error = %e, "Failed to send update");
-                                            break;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::error!(error = %e, "Failed to re-execute query");
-                                    }
+            while let Ok(event) = invalidation_rx.recv().await {
+                // Check if this subscription is affected
+                if let Some(query_info) = state.live_query_store.get(&subscription_id) {
+                    if query_info.should_update(&event) && query_info.throttle_elapsed() {
+                        // Re-execute the query
+                        // Re-acquire lock only for execution
+                        let execution_result = {
+                            let inner = state.inner.read().await;
+                            inner
+                                .router
+                                .execute_scatter_gather(
+                                    Some(&clean_query),
+                                    variables.as_ref(),
+                                    None,
+                                )
+                                .await
+                        };
+
+                        match execution_result {
+                            Ok(updated_data) => {
+                                if let Err(e) = state
+                                    .live_query_store
+                                    .send_update(&subscription_id, updated_data, false)
+                                    .await
+                                {
+                                    tracing::error!(error = %e, "Failed to send update");
+                                    break;
                                 }
                             }
-                        } else {
-                            // Query was unregistered
-                            break;
+                            Err(e) => {
+                                tracing::error!(error = %e, "Failed to re-execute query");
+                            }
                         }
                     }
+                } else {
+                    // Query was unregistered
+                    break;
+                }
+            }
         }
         Err(e) => {
             tracing::error!(error = %e, "Initial query execution failed");

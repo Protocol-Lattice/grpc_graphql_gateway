@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.6] - 2026-02-26
+
+### Fixed
+- **macOS CI/CD Flakiness** (`cache.rs`): Fixed intermittent test failures in macOS runners for `cache::tests::test_stale_while_revalidate`. Increased TTL and stale-while-revalidate timeouts locally for this test to account for slower CI execution environments and replaced blocking `std::thread::sleep` with `tokio::time::sleep`.
+
+### Changed
+- **Code Formatting**: Applied `cargo fmt` --all across the workspace to ensure consistent styling.
+
 ## [1.1.5] - 2026-02-26
 
 ### Fixed

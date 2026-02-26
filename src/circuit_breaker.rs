@@ -92,7 +92,7 @@ pub struct CircuitBreakerConfig {
 }
 
 mod duration_ms {
-    use serde::{Deserialize, Serializer, Deserializer};
+    use serde::{Deserialize, Deserializer, Serializer};
     use std::time::Duration;
 
     pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
@@ -677,7 +677,7 @@ mod tests {
     fn test_circuit_breaker_clone() {
         let cb1 = CircuitBreaker::new("test", CircuitBreakerConfig::default());
         cb1.record_failure();
-        
+
         let cb2 = cb1.clone();
         assert_eq!(cb2.failure_count(), cb1.failure_count());
         assert_eq!(cb2.state(), cb1.state());
@@ -688,7 +688,7 @@ mod tests {
     fn test_circuit_breaker_debug() {
         let cb = CircuitBreaker::new("test-service", CircuitBreakerConfig::default());
         let debug_str = format!("{:?}", cb);
-        
+
         assert!(debug_str.contains("CircuitBreaker"));
         assert!(debug_str.contains("test-service"));
         assert!(debug_str.contains("Closed"));
@@ -716,14 +716,14 @@ mod tests {
         // First 2 requests should be allowed
         assert!(cb.allow_request().is_ok());
         assert!(cb.allow_request().is_ok());
-        
+
         // Third request should be rejected
         assert!(cb.allow_request().is_err());
     }
 
     #[test]
     fn test_registry_clone() {
-        let registry1 = CircuitBreakerRegistry::new(CircuitBreakerConfig ::default());
+        let registry1 = CircuitBreakerRegistry::new(CircuitBreakerConfig::default());
         registry1.get_or_create("service1");
 
         let registry2 = registry1.clone();
@@ -734,7 +734,7 @@ mod tests {
     fn test_registry_debug() {
         let registry = CircuitBreakerRegistry::new(CircuitBreakerConfig::default());
         registry.get_or_create("service1");
-        
+
         let debug_str = format!("{:?}", registry);
         assert!(debug_str.contains("CircuitBreakerRegistry"));
         assert!(debug_str.contains("service1"));
@@ -814,6 +814,9 @@ mod tests {
 
         assert_eq!(config1.failure_threshold, config2.failure_threshold);
         assert_eq!(config1.recovery_timeout, config2.recovery_timeout);
-        assert_eq!(config1.half_open_max_requests, config2.half_open_max_requests);
+        assert_eq!(
+            config1.half_open_max_requests,
+            config2.half_open_max_requests
+        );
     }
 }

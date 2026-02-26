@@ -2,19 +2,32 @@ use grpc_graphql_gateway::gbp::GbpDecoder;
 use std::fs;
 
 fn main() {
-    let file_path = std::env::args().nth(1).unwrap_or_else(|| "/tmp/gbp_response.bin".to_string());
-    let bytes = fs::read(&file_path).unwrap_or_else(|_| panic!("Failed to read GBP file: {}", file_path));
+    let file_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "/tmp/gbp_response.bin".to_string());
+    let bytes =
+        fs::read(&file_path).unwrap_or_else(|_| panic!("Failed to read GBP file: {}", file_path));
     println!("📦 GBP Binary: {} bytes", bytes.len());
-    println!("🔍 Magic header: {:?}", std::str::from_utf8(&bytes[..3]).unwrap_or("?"));
+    println!(
+        "🔍 Magic header: {:?}",
+        std::str::from_utf8(&bytes[..3]).unwrap_or("?")
+    );
     println!();
-    
+
     let mut decoder = GbpDecoder::new();
     match decoder.decode(&bytes) {
         Ok(value) => {
             let json = serde_json::to_string_pretty(&value).unwrap();
             let json_size = serde_json::to_string(&value).unwrap().len();
-            println!("✅ Decoded GBP ({} bytes) → JSON ({} bytes)", bytes.len(), json_size);
-            println!("📊 Compression ratio: {:.1}%", (1.0 - bytes.len() as f64 / json_size as f64) * 100.0);
+            println!(
+                "✅ Decoded GBP ({} bytes) → JSON ({} bytes)",
+                bytes.len(),
+                json_size
+            );
+            println!(
+                "📊 Compression ratio: {:.1}%",
+                (1.0 - bytes.len() as f64 / json_size as f64) * 100.0
+            );
             println!();
             // Print first 2000 chars to keep output manageable
             if json.len() > 2000 {

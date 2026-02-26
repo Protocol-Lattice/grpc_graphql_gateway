@@ -463,9 +463,9 @@ pub fn parse_cache_hint(schema_metadata: &str) -> Option<Duration> {
     // Example: @cacheControl(maxAge: 300)
     if let Some(start) = schema_metadata.find("maxAge:") {
         let remaining = &schema_metadata[start + 7..];
-        
+
         // Find end of the number (could be followed by ')' or space or comma)
-        let trimmed_start = remaining.trim_start(); 
+        let trimmed_start = remaining.trim_start();
         if let Some(end) = trimmed_start.find(|c: char| !c.is_numeric()) {
             if let Ok(seconds) = trimmed_start[..end].parse::<u64>() {
                 return Some(Duration::from_secs(seconds));
@@ -485,31 +485,49 @@ mod tests {
         let manager = SmartTtlManager::new(config.clone());
 
         // Static
-        let res = manager.calculate_ttl("query { settings { theme } }", "settings", None).await;
+        let res = manager
+            .calculate_ttl("query { settings { theme } }", "settings", None)
+            .await;
         assert_eq!(res.ttl, config.static_content_ttl);
 
         // Real-time
-        let res = manager.calculate_ttl("query { stock(symbol: \"AAPL\") { realtime_price } }", "stock", None).await;
+        let res = manager
+            .calculate_ttl(
+                "query { stock(symbol: \"AAPL\") { realtime_price } }",
+                "stock",
+                None,
+            )
+            .await;
         assert_eq!(res.ttl, config.real_time_data_ttl);
 
         // User Profile
-        let res = manager.calculate_ttl("query { me { name } }", "me", None).await;
+        let res = manager
+            .calculate_ttl("query { me { name } }", "me", None)
+            .await;
         assert_eq!(res.ttl, config.user_profile_ttl);
 
         // Aggregated
-        let res = manager.calculate_ttl("query { analytics { daily_count } }", "analytics", None).await;
+        let res = manager
+            .calculate_ttl("query { analytics { daily_count } }", "analytics", None)
+            .await;
         assert_eq!(res.ttl, config.aggregated_data_ttl);
 
         // List
-        let res = manager.calculate_ttl("query { users(limit: 10) { name } }", "users", None).await;
+        let res = manager
+            .calculate_ttl("query { users(limit: 10) { name } }", "users", None)
+            .await;
         assert_eq!(res.ttl, config.list_query_ttl);
-        
+
         // Item
-        let res = manager.calculate_ttl("query { product_by_id(id: 1) { name } }", "product", None).await;
+        let res = manager
+            .calculate_ttl("query { product_by_id(id: 1) { name } }", "product", None)
+            .await;
         assert_eq!(res.ttl, config.item_query_ttl);
 
         // Default
-        let res = manager.calculate_ttl("query { generic_data { field } }", "generic", None).await;
+        let res = manager
+            .calculate_ttl("query { generic_data { field } }", "generic", None)
+            .await;
         assert_eq!(res.ttl, config.default_ttl);
     }
 
@@ -525,14 +543,21 @@ mod tests {
 
         // Should detect stability and increase TTL
         let result = manager.calculate_ttl(query, "product", None).await;
-        if let TtlStrategy::VolatilityBased { base_ttl: _, volatility_score } = result.strategy {
+        if let TtlStrategy::VolatilityBased {
+            base_ttl: _,
+            volatility_score,
+        } = result.strategy
+        {
             assert!(volatility_score < 0.1);
             // Stable = 1.5x or 2.0x boost depending on score
-            // Item query base is 300s. 
+            // Item query base is 300s.
             // Score 0.0 -> < 0.1 -> Max adjustment (2.0) -> 600s
             assert!(result.ttl >= Duration::from_secs(600));
         } else {
-            panic!("Expected VolatilityBased strategy, got {:?}", result.strategy);
+            panic!(
+                "Expected VolatilityBased strategy, got {:?}",
+                result.strategy
+            );
         }
     }
 
@@ -548,14 +573,21 @@ mod tests {
 
         // Should detect volatility and decrease TTL
         let result = manager.calculate_ttl(query, "random_quote", None).await;
-        if let TtlStrategy::VolatilityBased { base_ttl: _, volatility_score } = result.strategy {
+        if let TtlStrategy::VolatilityBased {
+            base_ttl: _,
+            volatility_score,
+        } = result.strategy
+        {
             assert!(volatility_score > 0.9);
             // Volatile (> 0.7) -> 0.5x multiplier.
             // Base for "random_quote" (unknown) is default 300s.
             // 300 * 0.5 = 150s.
             assert_eq!(result.ttl, Duration::from_secs(150));
         } else {
-            panic!("Expected VolatilityBased strategy, got {:?}", result.strategy);
+            panic!(
+                "Expected VolatilityBased strategy, got {:?}",
+                result.strategy
+            );
         }
     }
 
@@ -582,7 +614,7 @@ mod tests {
 
         let manager = SmartTtlManager::new(config);
         let query = "query { get_expensive_report { data } }"; // contains "expensive_report"
-        
+
         let result = manager.calculate_ttl(query, "report", None).await;
 
         assert_eq!(result.ttl, Duration::from_secs(3600));
@@ -606,24 +638,24 @@ mod tests {
         assert_eq!(parse_cache_hint("no hint here"), None);
         assert_eq!(parse_cache_hint("@cacheControl(invalid)"), None);
     }
-    
+
     #[tokio::test]
     async fn test_cleanup_old_stats() {
         let manager = SmartTtlManager::new(SmartTtlConfig::default());
         let query = "query { old }";
         manager.record_query_result(query, 1).await;
-        
+
         {
             let stats = manager.query_stats.read().await;
             assert_eq!(stats.len(), 1);
         }
-        
+
         // Sleep to ensure a small delta
         tokio::time::sleep(Duration::from_millis(10)).await;
-        
+
         // Clean up with 0 duration (should remove everything older than now)
         manager.cleanup_old_stats(Duration::from_millis(0)).await;
-        
+
         {
             let stats = manager.query_stats.read().await;
             assert_eq!(stats.len(), 0);
@@ -633,17 +665,17 @@ mod tests {
     #[tokio::test]
     async fn test_analytics_aggregation() {
         let manager = SmartTtlManager::new(SmartTtlConfig::default());
-        
+
         // 1. Stable query
         for _ in 0..15 {
-             manager.record_query_result("query { stable }", 1).await;
+            manager.record_query_result("query { stable }", 1).await;
         }
-        
+
         // 2. Volatile query
         for i in 0..15 {
-             manager.record_query_result("query { volatile }", i).await;
+            manager.record_query_result("query { volatile }", i).await;
         }
-        
+
         let analytics = manager.get_analytics().await;
         assert_eq!(analytics.total_queries, 2);
         assert_eq!(analytics.stable_queries, 1);

@@ -171,16 +171,18 @@ impl Context {
     pub fn decrypt_value(&self, value: &str) -> crate::error::Result<String> {
         if let Some(key) = &self.encryption_key {
             use base64::Engine;
-            let bytes = base64::engine::general_purpose::STANDARD.decode(value).map_err(|e| {
-                crate::error::Error::Validation(format!("Failed to decode base64: {}", e))
-            })?;
-            
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(value)
+                .map_err(|e| {
+                    crate::error::Error::Validation(format!("Failed to decode base64: {}", e))
+                })?;
+
             let decrypted: Vec<u8> = bytes
                 .iter()
                 .enumerate()
                 .map(|(i, b)| b ^ key[i % key.len()])
                 .collect();
-                
+
             String::from_utf8(decrypted).map_err(|e| {
                 crate::error::Error::Validation(format!("Failed to decode UTF-8: {}", e))
             })
@@ -303,8 +305,7 @@ impl AuthScheme {
 }
 
 /// Authentication result containing validated claims
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct AuthClaims {
     /// Subject (user ID)
     pub sub: Option<String>,
@@ -322,7 +323,6 @@ pub struct AuthClaims {
     #[serde(flatten)]
     pub custom: HashMap<String, serde_json::Value>,
 }
-
 
 impl AuthClaims {
     /// Check if claims have expired
@@ -662,8 +662,7 @@ impl Middleware for AuthMiddleware {
 // ============================================================================
 
 /// Log level for the logging middleware
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LogLevel {
     /// Trace level (most verbose)
     Trace,
@@ -677,7 +676,6 @@ pub enum LogLevel {
     /// Error level (errors only)
     Error,
 }
-
 
 /// Headers that should be masked in logs
 const DEFAULT_SENSITIVE_HEADERS: &[&str] = &[
@@ -1167,7 +1165,7 @@ mod tests {
         let config = AuthConfig::default()
             .with_scheme(AuthScheme::Bearer)
             .with_scheme(AuthScheme::Bearer);
-        
+
         assert_eq!(config.allowed_schemes.len(), 1);
     }
 
@@ -1216,10 +1214,13 @@ mod tests {
             .with_level(LogLevel::Warn)
             .with_headers(false)
             .with_slow_threshold(std::time::Duration::from_secs(5));
-        
+
         assert_eq!(config.level, LogLevel::Warn);
         assert!(!config.log_headers);
-        assert_eq!(config.slow_request_threshold, std::time::Duration::from_secs(5));
+        assert_eq!(
+            config.slow_request_threshold,
+            std::time::Duration::from_secs(5)
+        );
     }
 
     #[test]
@@ -1260,7 +1261,7 @@ mod tests {
     #[tokio::test]
     async fn test_auth_middleware_allow_all() {
         use axum::http::Request;
-        
+
         let middleware = AuthMiddleware::allow_all();
         let req = Request::builder()
             .header("authorization", "Bearer any-token")
@@ -1268,16 +1269,16 @@ mod tests {
             .body(())
             .unwrap();
         let mut ctx = Context::from_request(&req);
-        
+
         assert!(middleware.call(&mut ctx).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_auth_middleware_require_token() {
         use axum::http::Request;
-        
+
         let middleware = AuthMiddleware::require_token("secret123".to_string());
-        
+
         // Valid token
         let req = Request::builder()
             .header("authorization", "Bearer secret123")
@@ -1286,7 +1287,7 @@ mod tests {
             .unwrap();
         let mut ctx = Context::from_request(&req);
         assert!(middleware.call(&mut ctx).await.is_ok());
-        
+
         // Invalid token
         let req = Request::builder()
             .header("authorization", "Bearer wrong")
@@ -1300,25 +1301,22 @@ mod tests {
     #[tokio::test]
     async fn test_auth_middleware_missing_header() {
         use axum::http::Request;
-        
+
         let middleware = AuthMiddleware::allow_all();
-        let req = Request::builder()
-            .uri("/graphql")
-            .body(())
-            .unwrap();
+        let req = Request::builder().uri("/graphql").body(()).unwrap();
         let mut ctx = Context::from_request(&req);
-        
+
         assert!(middleware.call(&mut ctx).await.is_err());
     }
 
     #[tokio::test]
     async fn test_rate_limit_middleware() {
         use axum::http::Request;
-        
+
         let middleware = RateLimitMiddleware::new(10, 10);
         let req = Request::builder().uri("/graphql").body(()).unwrap();
         let mut ctx = Context::from_request(&req);
-        
+
         // First request should succeed
         assert!(middleware.call(&mut ctx).await.is_ok());
         assert_eq!(middleware.name(), "RateLimitMiddleware");
@@ -1348,7 +1346,7 @@ mod tests {
         let chain = MiddlewareChain::new()
             .add(LoggingMiddleware::new())
             .add(LoggingMiddleware::new());
-        
+
         assert_eq!(chain.len(), 2);
         assert!(!chain.is_empty());
     }
@@ -1356,11 +1354,9 @@ mod tests {
     #[tokio::test]
     async fn test_middleware_chain_add_arc() {
         use std::sync::Arc;
-        
-        let chain = MiddlewareChain::new()
-            .add_arc(Arc::new(LoggingMiddleware::new()));
-        
+
+        let chain = MiddlewareChain::new().add_arc(Arc::new(LoggingMiddleware::new()));
+
         assert_eq!(chain.len(), 1);
     }
-
 }

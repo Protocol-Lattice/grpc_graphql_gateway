@@ -301,7 +301,12 @@ impl CertificateAuthority {
         let ca_key_output = Command::new("openssl")
             .args(["ecparam", "-genkey", "-name", "prime256v1", "-noout"])
             .output()
-            .map_err(|e| MtlsError::CertGeneration(format!("Failed to run openssl ecparam: {}. Is openssl installed?", e)))?;
+            .map_err(|e| {
+                MtlsError::CertGeneration(format!(
+                    "Failed to run openssl ecparam: {}. Is openssl installed?",
+                    e
+                ))
+            })?;
 
         if !ca_key_output.status.success() {
             return Err(MtlsError::CertGeneration(format!(
@@ -317,7 +322,11 @@ impl CertificateAuthority {
         static CA_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let unique_id = CA_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tmp_base = resolve_temp_dir();
-        let key_tmp = tmp_base.join(format!("gbp_ca_key_{}_{}.pem", std::process::id(), unique_id));
+        let key_tmp = tmp_base.join(format!(
+            "gbp_ca_key_{}_{}.pem",
+            std::process::id(),
+            unique_id
+        ));
         std::fs::write(&key_tmp, &ca_key_pem)
             .map_err(|e| MtlsError::CertGeneration(format!("Failed to write temp key: {}", e)))?;
 
@@ -373,8 +382,9 @@ impl CertificateAuthority {
         key_path: &str,
         trust_domain: &str,
     ) -> Result<Self, MtlsError> {
-        let ca_cert_pem = std::fs::read(cert_path)
-            .map_err(|e| MtlsError::CaLoad(format!("Failed to read CA cert {}: {}", cert_path, e)))?;
+        let ca_cert_pem = std::fs::read(cert_path).map_err(|e| {
+            MtlsError::CaLoad(format!("Failed to read CA cert {}: {}", cert_path, e))
+        })?;
         let ca_key_pem = std::fs::read(key_path)
             .map_err(|e| MtlsError::CaLoad(format!("Failed to read CA key {}: {}", key_path, e)))?;
 
@@ -432,7 +442,8 @@ impl CertificateAuthority {
 
         // Create temp files for signing
         // Use a global atomic counter to avoid race conditions when tests run in parallel
-        static SVID_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static SVID_TEMP_COUNTER: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
         let tmp_dir = resolve_temp_dir();
         let pid = std::process::id();
         let unique_id = SVID_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -470,7 +481,13 @@ impl CertificateAuthority {
             .map_err(|e| MtlsError::CertGeneration(format!("CSR generation failed: {}", e)))?;
 
         if !csr_output.status.success() {
-            Self::cleanup_temp_files(&[&key_path, &ca_cert_path, &ca_key_path, &csr_path, &ext_path]);
+            Self::cleanup_temp_files(&[
+                &key_path,
+                &ca_cert_path,
+                &ca_key_path,
+                &csr_path,
+                &ext_path,
+            ]);
             return Err(MtlsError::CertGeneration(format!(
                 "CSR generation failed: {}",
                 String::from_utf8_lossy(&csr_output.stderr)
@@ -668,9 +685,9 @@ impl MtlsProvider {
     /// Internal rotation helper — must be called while `rotation_lock` is held.
     async fn rotate_locked(&self) -> Result<Svid, MtlsError> {
         let ttl = Duration::from_secs(self.config.cert_ttl_secs);
-        let new_svid = self
-            .ca
-            .issue_svid(&self.config.namespace, &self.config.service_name, ttl)?;
+        let new_svid =
+            self.ca
+                .issue_svid(&self.config.namespace, &self.config.service_name, ttl)?;
 
         info!(
             serial = %new_svid.serial,
@@ -835,11 +852,7 @@ pub fn issue_subgraph_svid(
 }
 
 /// Write SVID to files for subgraph consumption
-pub fn export_svid(
-    svid: &Svid,
-    cert_path: &str,
-    key_path: &str,
-) -> Result<(), MtlsError> {
+pub fn export_svid(svid: &Svid, cert_path: &str, key_path: &str) -> Result<(), MtlsError> {
     std::fs::write(cert_path, &svid.cert_pem)?;
     std::fs::write(key_path, &svid.key_pem)?;
     info!(
@@ -979,6 +992,9 @@ mod tests {
         let svid1 = provider.get_svid().await.unwrap();
         let svid2 = provider.rotate().await.unwrap();
 
-        assert_ne!(svid1.serial, svid2.serial, "Rotated SVID should have new serial");
+        assert_ne!(
+            svid1.serial, svid2.serial,
+            "Rotated SVID should have new serial"
+        );
     }
 }

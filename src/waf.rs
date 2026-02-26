@@ -9,10 +9,10 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 /// Common SQL injection patterns
-/// 
+///
 /// Ref: OWASP SQL Injection Prevention Cheat Sheet
 /// Common SQL injection patterns
-/// 
+///
 /// Ref: OWASP SQL Injection Prevention Cheat Sheet & payload lists
 const SQLI_PATTERNS: &[&str] = &[
     // Union-based
@@ -95,7 +95,7 @@ const XSS_PATTERNS: &[&str] = &[
     r#"(?i)xlink:href"#,
     r#"(?i)fscommand"#,
     r#"(?i)seeksegmenttime"#,
-    r#"(?i)br"#, // often used to break out of attributes
+    r#"(?i)br"#,                             // often used to break out of attributes
     r#"(?i)style\s*=\s*['"].*expression\("#, // IE expression
     r#"(?i)style\s*=\s*['"].*url\("#,
 ];
@@ -194,8 +194,8 @@ const LDAP_PATTERNS: &[&str] = &[
 const SSTI_PATTERNS: &[&str] = &[
     r"\{\{.*\}\}", // Moustache/Handlebars/Jinja/etc
     r"\$\{.*\}",   // EL
-    r"<%=",       // ERB/JSP
-    r"#\{.*\}",   // Ruby
+    r"<%=",        // ERB/JSP
+    r"#\{.*\}",    // Ruby
     r"\*\{.*\}",
     r"\[\[.*\]\]", // Flask/Jinja2 alternative
     r"\{\%.*\%\}",
@@ -268,11 +268,12 @@ fn ssti_regex() -> &'static Regex {
 fn batched_query_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
-        // Look for occurrences of word: word( or word: word{ 
+        // Look for occurrences of word: word( or word: word{
         // that are repeated more than 30 times in the whole query string.
-        // We do this by capturing the alias signature and we'll check counts manually, 
+        // We do this by capturing the alias signature and we'll check counts manually,
         // but for Regex level, we just block if we see too many alias signatures overall.
-        Regex::new(r"(?is)([a-zA-Z0-9_]+\s*:\s*[a-zA-Z0-9_]+\s*[(\{].*?){30,}").expect("Invalid BatchedQuery regex pattern")
+        Regex::new(r"(?is)([a-zA-Z0-9_]+\s*:\s*[a-zA-Z0-9_]+\s*[(\{].*?){30,}")
+            .expect("Invalid BatchedQuery regex pattern")
     })
 }
 
@@ -325,7 +326,7 @@ impl Default for WafConfig {
 }
 
 /// WAF Middleware
-/// 
+///
 /// Intercepts requests and validates input variables against malicious patterns.
 pub struct WafMiddleware {
     pub config: WafConfig,
@@ -357,56 +358,80 @@ pub fn validate_json_with_config(value: &serde_json::Value, config: &WafConfig) 
     if config.block_sqli {
         if let Some(matched) = check_pattern(value, sqli_regex()) {
             tracing::warn!(match_val = %matched, "SQL Injection attempt detected");
-            return Err(Error::Validation(format!("Potential SQL Injection detected: {}", matched)));
+            return Err(Error::Validation(format!(
+                "Potential SQL Injection detected: {}",
+                matched
+            )));
         }
     }
 
     if config.block_xss {
         if let Some(matched) = check_pattern(value, xss_regex()) {
             tracing::warn!(match_val = %matched, "XSS attempt detected");
-            return Err(Error::Validation(format!("Potential XSS detected: {}", matched)));
+            return Err(Error::Validation(format!(
+                "Potential XSS detected: {}",
+                matched
+            )));
         }
     }
 
     if config.block_nosqli {
-         // NoSQLi often uses special keys in JSON objects (e.g. {"$ne": ...})
-         // We need a specific check for keys as well for strict NoSQLi protection
-         if let Some(matched) = check_keys(value, nosqli_regex()) {
-             tracing::warn!(match_val = %matched, "NoSQL Injection attempt detected in keys");
-             return Err(Error::Validation(format!("Potential NoSQL Injection detected: {}", matched)));
-         }
-         // Also check values
-         if let Some(matched) = check_pattern(value, nosqli_regex()) {
+        // NoSQLi often uses special keys in JSON objects (e.g. {"$ne": ...})
+        // We need a specific check for keys as well for strict NoSQLi protection
+        if let Some(matched) = check_keys(value, nosqli_regex()) {
+            tracing::warn!(match_val = %matched, "NoSQL Injection attempt detected in keys");
+            return Err(Error::Validation(format!(
+                "Potential NoSQL Injection detected: {}",
+                matched
+            )));
+        }
+        // Also check values
+        if let Some(matched) = check_pattern(value, nosqli_regex()) {
             tracing::warn!(match_val = %matched, "NoSQL Injection attempt detected");
-            return Err(Error::Validation(format!("Potential NoSQL Injection detected: {}", matched)));
-         }
+            return Err(Error::Validation(format!(
+                "Potential NoSQL Injection detected: {}",
+                matched
+            )));
+        }
     }
 
     if config.block_cmdi {
         if let Some(matched) = check_pattern(value, cmdi_regex()) {
             tracing::warn!(match_val = %matched, "Command Injection attempt detected");
-            return Err(Error::Validation(format!("Potential Command Injection detected: {}", matched)));
+            return Err(Error::Validation(format!(
+                "Potential Command Injection detected: {}",
+                matched
+            )));
         }
     }
 
     if config.block_traversal {
         if let Some(matched) = check_pattern(value, traversal_regex()) {
             tracing::warn!(match_val = %matched, "Path Traversal attempt detected");
-            return Err(Error::Validation(format!("Potential Path Traversal detected: {}", matched)));
+            return Err(Error::Validation(format!(
+                "Potential Path Traversal detected: {}",
+                matched
+            )));
         }
     }
 
     if config.block_ldap {
         if let Some(matched) = check_pattern(value, ldap_regex()) {
             tracing::warn!(match_val = %matched, "LDAP Injection attempt detected");
-            return Err(Error::Validation(format!("Potential LDAP Injection detected: {}", matched)));
+            return Err(Error::Validation(format!(
+                "Potential LDAP Injection detected: {}",
+                matched
+            )));
         }
     }
 
     if config.block_ssti {
         if let Some(matched) = check_pattern(value, ssti_regex()) {
             tracing::warn!(match_val = %matched, "SSTI attempt detected");
-            return Err(Error::Validation(format!("Potential SSTI detected: {}", matched)));
+            return Err(Error::Validation(format!(
+                "Potential SSTI detected: {}",
+                matched
+            )));
         }
     }
 
@@ -416,7 +441,10 @@ pub fn validate_json_with_config(value: &serde_json::Value, config: &WafConfig) 
         if let serde_json::Value::String(s) = value {
             if let Some(pat) = check_custom(s, &config.custom_patterns) {
                 tracing::warn!(match_val = %pat, "Custom WAF pattern matched");
-                return Err(Error::Validation(format!("Custom WAF rule triggered: {}", pat)));
+                return Err(Error::Validation(format!(
+                    "Custom WAF rule triggered: {}",
+                    pat
+                )));
             }
         }
     }
@@ -466,7 +494,7 @@ fn check_keys(value: &serde_json::Value, regex: &Regex) -> Option<String> {
         }
         serde_json::Value::Array(arr) => {
             for v in arr {
-                 if let Some(s) = check_keys(v, regex) {
+                if let Some(s) = check_keys(v, regex) {
                     return Some(s);
                 }
             }
@@ -500,41 +528,65 @@ impl Middleware for WafMiddleware {
             if let Ok(value_str) = value.to_str() {
                 if self.config.block_sqli && sqli_regex().is_match(value_str) {
                     tracing::warn!(header = ?name, match_val = value_str, "SQL Injection attempt detected in headers");
-                    return Err(Error::Validation(format!("Potential SQL Injection detected in header: {}", name)));
+                    return Err(Error::Validation(format!(
+                        "Potential SQL Injection detected in header: {}",
+                        name
+                    )));
                 }
                 if self.config.block_xss && xss_regex().is_match(value_str) {
                     tracing::warn!(header = ?name, match_val = value_str, "XSS attempt detected in headers");
-                    return Err(Error::Validation(format!("Potential XSS detected in header: {}", name)));
+                    return Err(Error::Validation(format!(
+                        "Potential XSS detected in header: {}",
+                        name
+                    )));
                 }
                 if self.config.block_nosqli && nosqli_regex().is_match(value_str) {
                     tracing::warn!(header = ?name, match_val = value_str, "NoSQL Injection attempt detected in headers");
-                     return Err(Error::Validation(format!("Potential NoSQL Injection detected in header: {}", name)));
+                    return Err(Error::Validation(format!(
+                        "Potential NoSQL Injection detected in header: {}",
+                        name
+                    )));
                 }
                 if self.config.block_cmdi && cmdi_regex().is_match(value_str) {
                     tracing::warn!(header = ?name, match_val = value_str, "Command Injection attempt detected in headers");
-                     return Err(Error::Validation(format!("Potential Command Injection detected in header: {}", name)));
+                    return Err(Error::Validation(format!(
+                        "Potential Command Injection detected in header: {}",
+                        name
+                    )));
                 }
                 if self.config.block_traversal && traversal_regex().is_match(value_str) {
                     tracing::warn!(header = ?name, match_val = value_str, "Path Traversal attempt detected in headers");
-                     return Err(Error::Validation(format!("Potential Path Traversal detected in header: {}", name)));
+                    return Err(Error::Validation(format!(
+                        "Potential Path Traversal detected in header: {}",
+                        name
+                    )));
                 }
                 if self.config.block_ldap && ldap_regex().is_match(value_str) {
                     tracing::warn!(header = ?name, match_val = value_str, "LDAP Injection attempt detected in headers");
-                     return Err(Error::Validation(format!("Potential LDAP Injection detected in header: {}", name)));
+                    return Err(Error::Validation(format!(
+                        "Potential LDAP Injection detected in header: {}",
+                        name
+                    )));
                 }
                 if self.config.block_ssti && ssti_regex().is_match(value_str) {
                     tracing::warn!(header = ?name, match_val = value_str, "SSTI attempt detected in headers");
-                     return Err(Error::Validation(format!("Potential SSTI detected in header: {}", name)));
+                    return Err(Error::Validation(format!(
+                        "Potential SSTI detected in header: {}",
+                        name
+                    )));
                 }
                 // Custom patterns on header values
                 if !self.config.custom_patterns.is_empty() {
                     if let Some(pat) = check_custom(value_str, &self.config.custom_patterns) {
                         tracing::warn!(header = ?name, match_val = pat, "Custom WAF pattern matched in header");
-                        return Err(Error::Validation(format!("Custom WAF rule triggered in header {}: {}", name, pat)));
+                        return Err(Error::Validation(format!(
+                            "Custom WAF rule triggered in header {}: {}",
+                            name, pat
+                        )));
                     }
                 }
             }
-        }        
+        }
         Ok(())
     }
 
@@ -551,8 +603,10 @@ pub fn validate_request(req: &async_graphql::Request) -> Result<()> {
 
     // Check query string for basic signatures
     if sqli_regex().is_match(&req.query) {
-         tracing::warn!("SQL Injection attempt detected in query string");
-         return Err(Error::Validation("Potential SQL Injection detected".to_string()));
+        tracing::warn!("SQL Injection attempt detected in query string");
+        return Err(Error::Validation(
+            "Potential SQL Injection detected".to_string(),
+        ));
     }
     // XSS in query string?
     if xss_regex().is_match(&req.query) {
@@ -562,22 +616,30 @@ pub fn validate_request(req: &async_graphql::Request) -> Result<()> {
     // NoSQLi in query string? less likely in standard GQL syntax but possible in directives
     if nosqli_regex().is_match(&req.query) {
         tracing::warn!("NoSQL Injection attempt detected in query string");
-        return Err(Error::Validation("Potential NoSQL Injection detected".to_string()));
+        return Err(Error::Validation(
+            "Potential NoSQL Injection detected".to_string(),
+        ));
     }
     // Command Injection in query string?
     if cmdi_regex().is_match(&req.query) {
         tracing::warn!("Command Injection attempt detected in query string");
-        return Err(Error::Validation("Potential Command Injection detected".to_string()));
+        return Err(Error::Validation(
+            "Potential Command Injection detected".to_string(),
+        ));
     }
     // Path Traversal in query string?
     if traversal_regex().is_match(&req.query) {
         tracing::warn!("Path Traversal attempt detected in query string");
-        return Err(Error::Validation("Potential Path Traversal detected".to_string()));
+        return Err(Error::Validation(
+            "Potential Path Traversal detected".to_string(),
+        ));
     }
     // LDAP Injection in query string?
     if ldap_regex().is_match(&req.query) {
         tracing::warn!("LDAP Injection attempt detected in query string");
-        return Err(Error::Validation("Potential LDAP Injection detected".to_string()));
+        return Err(Error::Validation(
+            "Potential LDAP Injection detected".to_string(),
+        ));
     }
     // SSTI in query string?
     if ssti_regex().is_match(&req.query) {
@@ -587,14 +649,20 @@ pub fn validate_request(req: &async_graphql::Request) -> Result<()> {
     // Deep recursive alias injection / Batched Query in query string?
     if batched_query_regex().is_match(&req.query) {
         tracing::warn!("Batched Query (deep alias) attempt detected in query string");
-        return Err(Error::Validation("Potential Batched Query Server DOS detected".to_string()));
+        return Err(Error::Validation(
+            "Potential Batched Query Server DOS detected".to_string(),
+        ));
     }
 
     Ok(())
 }
 
 /// Validate raw query and variables against WAF rules
-pub fn validate_raw(query: &str, variables: Option<&serde_json::Value>, config: &WafConfig) -> Result<()> {
+pub fn validate_raw(
+    query: &str,
+    variables: Option<&serde_json::Value>,
+    config: &WafConfig,
+) -> Result<()> {
     if !config.enabled {
         return Ok(());
     }
@@ -602,7 +670,9 @@ pub fn validate_raw(query: &str, variables: Option<&serde_json::Value>, config: 
     // Check query string
     if config.block_sqli && sqli_regex().is_match(query) {
         tracing::warn!("SQL Injection attempt detected in query string");
-        return Err(Error::Validation("Potential SQL Injection detected".to_string()));
+        return Err(Error::Validation(
+            "Potential SQL Injection detected".to_string(),
+        ));
     }
     if config.block_xss && xss_regex().is_match(query) {
         tracing::warn!("XSS attempt detected in query string");
@@ -610,27 +680,37 @@ pub fn validate_raw(query: &str, variables: Option<&serde_json::Value>, config: 
     }
     if config.block_nosqli && nosqli_regex().is_match(query) {
         tracing::warn!("NoSQL Injection attempt detected in query string");
-         return Err(Error::Validation("Potential NoSQL Injection detected".to_string()));
+        return Err(Error::Validation(
+            "Potential NoSQL Injection detected".to_string(),
+        ));
     }
     if config.block_cmdi && cmdi_regex().is_match(query) {
         tracing::warn!("Command Injection attempt detected in query string");
-         return Err(Error::Validation("Potential Command Injection detected".to_string()));
+        return Err(Error::Validation(
+            "Potential Command Injection detected".to_string(),
+        ));
     }
     if config.block_traversal && traversal_regex().is_match(query) {
         tracing::warn!("Path Traversal attempt detected in query string");
-         return Err(Error::Validation("Potential Path Traversal detected".to_string()));
+        return Err(Error::Validation(
+            "Potential Path Traversal detected".to_string(),
+        ));
     }
     if config.block_ldap && ldap_regex().is_match(query) {
         tracing::warn!("LDAP Injection attempt detected in query string");
-         return Err(Error::Validation("Potential LDAP Injection detected".to_string()));
+        return Err(Error::Validation(
+            "Potential LDAP Injection detected".to_string(),
+        ));
     }
     if config.block_ssti && ssti_regex().is_match(query) {
         tracing::warn!("SSTI attempt detected in query string");
-         return Err(Error::Validation("Potential SSTI detected".to_string()));
+        return Err(Error::Validation("Potential SSTI detected".to_string()));
     }
     if config.block_batched_query && batched_query_regex().is_match(query) {
         tracing::warn!("Batched Query (deep alias) attempt detected in query string");
-         return Err(Error::Validation("Potential Batched Query Server DOS detected".to_string()));
+        return Err(Error::Validation(
+            "Potential Batched Query Server DOS detected".to_string(),
+        ));
     }
 
     // Check variables
@@ -656,31 +736,52 @@ pub fn validate_headers(headers: &http::HeaderMap, config: &WafConfig) -> Result
         if let Ok(value_str) = value.to_str() {
             if config.block_sqli && sqli_regex().is_match(value_str) {
                 tracing::warn!(header = ?name, match_val = value_str, "SQL Injection attempt detected in headers");
-                return Err(Error::Validation(format!("Potential SQL Injection detected in header: {:?}", name)));
+                return Err(Error::Validation(format!(
+                    "Potential SQL Injection detected in header: {:?}",
+                    name
+                )));
             }
             if config.block_xss && xss_regex().is_match(value_str) {
                 tracing::warn!(header = ?name, match_val = value_str, "XSS attempt detected in headers");
-                return Err(Error::Validation(format!("Potential XSS detected in header: {:?}", name)));
+                return Err(Error::Validation(format!(
+                    "Potential XSS detected in header: {:?}",
+                    name
+                )));
             }
             if config.block_nosqli && nosqli_regex().is_match(value_str) {
                 tracing::warn!(header = ?name, match_val = value_str, "NoSQL Injection attempt detected in headers");
-                return Err(Error::Validation(format!("Potential NoSQL Injection detected in header: {:?}", name)));
+                return Err(Error::Validation(format!(
+                    "Potential NoSQL Injection detected in header: {:?}",
+                    name
+                )));
             }
             if config.block_cmdi && cmdi_regex().is_match(value_str) {
                 tracing::warn!(header = ?name, match_val = value_str, "Command Injection attempt detected in headers");
-                return Err(Error::Validation(format!("Potential Command Injection detected in header: {:?}", name)));
+                return Err(Error::Validation(format!(
+                    "Potential Command Injection detected in header: {:?}",
+                    name
+                )));
             }
             if config.block_traversal && traversal_regex().is_match(value_str) {
                 tracing::warn!(header = ?name, match_val = value_str, "Path Traversal attempt detected in headers");
-                return Err(Error::Validation(format!("Potential Path Traversal detected in header: {:?}", name)));
+                return Err(Error::Validation(format!(
+                    "Potential Path Traversal detected in header: {:?}",
+                    name
+                )));
             }
             if config.block_ldap && ldap_regex().is_match(value_str) {
                 tracing::warn!(header = ?name, match_val = value_str, "LDAP Injection attempt detected in headers");
-                return Err(Error::Validation(format!("Potential LDAP Injection detected in header: {:?}", name)));
+                return Err(Error::Validation(format!(
+                    "Potential LDAP Injection detected in header: {:?}",
+                    name
+                )));
             }
             if config.block_ssti && ssti_regex().is_match(value_str) {
                 tracing::warn!(header = ?name, match_val = value_str, "SSTI attempt detected in headers");
-                return Err(Error::Validation(format!("Potential SSTI detected in header: {:?}", name)));
+                return Err(Error::Validation(format!(
+                    "Potential SSTI detected in header: {:?}",
+                    name
+                )));
             }
         }
     }
@@ -692,10 +793,12 @@ pub fn validate_query_string(query: &str, config: &WafConfig) -> Result<()> {
     if !config.enabled {
         return Ok(());
     }
-    
+
     if config.block_sqli && sqli_regex().is_match(query) {
         tracing::warn!("SQL Injection attempt detected in query string");
-        return Err(Error::Validation("Potential SQL Injection detected".to_string()));
+        return Err(Error::Validation(
+            "Potential SQL Injection detected".to_string(),
+        ));
     }
     if config.block_xss && xss_regex().is_match(query) {
         tracing::warn!("XSS attempt detected in query string");
@@ -703,19 +806,27 @@ pub fn validate_query_string(query: &str, config: &WafConfig) -> Result<()> {
     }
     if config.block_nosqli && nosqli_regex().is_match(query) {
         tracing::warn!("NoSQL Injection attempt detected in query string");
-        return Err(Error::Validation("Potential NoSQL Injection detected".to_string()));
+        return Err(Error::Validation(
+            "Potential NoSQL Injection detected".to_string(),
+        ));
     }
     if config.block_cmdi && cmdi_regex().is_match(query) {
         tracing::warn!("Command Injection attempt detected in query string");
-        return Err(Error::Validation("Potential Command Injection detected".to_string()));
+        return Err(Error::Validation(
+            "Potential Command Injection detected".to_string(),
+        ));
     }
     if config.block_traversal && traversal_regex().is_match(query) {
         tracing::warn!("Path Traversal attempt detected in query string");
-        return Err(Error::Validation("Potential Path Traversal detected".to_string()));
+        return Err(Error::Validation(
+            "Potential Path Traversal detected".to_string(),
+        ));
     }
     if config.block_ldap && ldap_regex().is_match(query) {
         tracing::warn!("LDAP Injection attempt detected in query string");
-        return Err(Error::Validation("Potential LDAP Injection detected".to_string()));
+        return Err(Error::Validation(
+            "Potential LDAP Injection detected".to_string(),
+        ));
     }
     if config.block_ssti && ssti_regex().is_match(query) {
         tracing::warn!("SSTI attempt detected in query string");
@@ -723,7 +834,9 @@ pub fn validate_query_string(query: &str, config: &WafConfig) -> Result<()> {
     }
     if config.block_batched_query && batched_query_regex().is_match(query) {
         tracing::warn!("Batched Query (deep alias) attempt detected in query string");
-        return Err(Error::Validation("Potential Batched Query Server DOS detected".to_string()));
+        return Err(Error::Validation(
+            "Potential Batched Query Server DOS detected".to_string(),
+        ));
     }
     Ok(())
 }
@@ -783,11 +896,7 @@ mod tests {
         let config = WafConfig::default();
         for attack in &attacks {
             let result = validate_raw(attack, None, &config);
-            assert!(
-                result.is_err(),
-                "Missed real CMDI attack: {}",
-                attack
-            );
+            assert!(result.is_err(), "Missed real CMDI attack: {}", attack);
         }
     }
 
@@ -825,7 +934,7 @@ mod tests {
 
         let config = WafConfig::default();
         let result = validate_raw(&malicious_query, None, &config);
-        
+
         // Should catch the malicious alias pattern
         assert!(
             result.is_err(),
@@ -840,7 +949,7 @@ mod tests {
         }
         normal_query.push('}');
         let result_normal = validate_raw(&normal_query, None, &config);
-        
+
         assert!(
             result_normal.is_ok(),
             "False positive on normal alias query: {}",

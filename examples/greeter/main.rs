@@ -7,8 +7,7 @@ use std::time::Duration;
 use anyhow::Result;
 use futures::StreamExt;
 use grpc_graphql_gateway::{
-    Gateway, GrpcClient, HeaderPropagationConfig,
-    HighPerfConfig, RateLimitMiddleware, DeferConfig,
+    DeferConfig, Gateway, GrpcClient, HeaderPropagationConfig, HighPerfConfig, RateLimitMiddleware,
 };
 use tokio::fs;
 use tokio::sync::RwLock;

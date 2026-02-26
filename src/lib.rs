@@ -57,10 +57,10 @@ pub mod graphql {
 
 pub mod analytics;
 pub mod cache;
-pub mod defer;
 pub mod circuit_breaker;
 pub mod compression;
 pub mod dataloader;
+pub mod defer;
 pub mod error;
 pub mod federation;
 pub mod gateway;
@@ -77,9 +77,9 @@ pub mod mtls;
 pub mod openapi;
 pub mod persisted_queries;
 pub mod plugin;
-pub mod quic;
 pub mod query_cost_analyzer;
 pub mod query_whitelist;
+pub mod quic;
 pub mod request_collapsing;
 pub mod rest_connector;
 pub mod router;
@@ -102,12 +102,6 @@ pub use cache::{
     create_response_cache, is_mutation, CacheConfig, CacheLookupResult, CacheStats, CachedResponse,
     ResponseCache, SharedResponseCache,
 };
-pub use defer::{
-    has_defer_directive, strip_defer_directives, extract_deferred_fragments,
-    DeferConfig, DeferError, DeferStats, DeferredExecution, DeferredFragment, DeferredPart,
-    InitialPayload, IncrementalPatch, SubsequentPayload, MULTIPART_CONTENT_TYPE,
-    format_initial_part, format_subsequent_part,
-};
 pub use circuit_breaker::{
     create_circuit_breaker_registry, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError,
     CircuitBreakerRegistry, CircuitState, SharedCircuitBreakerRegistry,
@@ -116,6 +110,12 @@ pub use compression::{
     create_compression_layer, CompressionConfig, CompressionLevel, CompressionStats,
 };
 pub use dataloader::EntityDataLoader;
+pub use defer::{
+    extract_deferred_fragments, format_initial_part, format_subsequent_part, has_defer_directive,
+    strip_defer_directives, DeferConfig, DeferError, DeferStats, DeferredExecution,
+    DeferredFragment, DeferredPart, IncrementalPatch, InitialPayload, SubsequentPayload,
+    MULTIPART_CONTENT_TYPE,
+};
 pub use error::{Error, Result};
 pub use federation::{
     EntityConfig, EntityResolver, EntityResolverMapping, FederationConfig, GrpcEntityResolver,
@@ -132,13 +132,31 @@ pub use high_performance::{
     PerfMetrics, ResponseTemplates, ShardedCache,
 };
 pub use live_query::{
-    create_live_query_store, create_live_query_store_with_config, generate_subscription_id,
-    global_live_query_store, has_live_directive, strip_live_directive, ActiveLiveQuery, 
-    InvalidationEvent, LiveQueryConfig, LiveQueryConfigInfo, LiveQueryError, LiveQueryStats, 
-    LiveQueryStore, LiveQueryStrategy, LiveQueryUpdate, SharedLiveQueryStore,
+    create_live_query_store,
+    create_live_query_store_with_config,
+    detect_field_changes,
+    generate_cache_control,
+    generate_subscription_id,
+    global_live_query_store,
+    has_live_directive,
+    matches_filter,
+    parse_query_arguments,
+    strip_live_directive,
+    ActiveLiveQuery,
     // Advanced features
-    BatchInvalidationConfig, CacheControl, DataVolatility, FieldChange,
-    detect_field_changes, generate_cache_control, matches_filter, parse_query_arguments,
+    BatchInvalidationConfig,
+    CacheControl,
+    DataVolatility,
+    FieldChange,
+    InvalidationEvent,
+    LiveQueryConfig,
+    LiveQueryConfigInfo,
+    LiveQueryError,
+    LiveQueryStats,
+    LiveQueryStore,
+    LiveQueryStrategy,
+    LiveQueryUpdate,
+    SharedLiveQueryStore,
 };
 pub use lz4_compression::{
     compress_lz4, decompress_lz4, lz4_compression_middleware, Lz4CacheCompressor,
@@ -148,6 +166,10 @@ pub use middleware::{
     AuthClaims, AuthConfig, AuthMiddleware, AuthScheme, Context, CorsMiddleware,
     EnhancedAuthMiddleware, EnhancedLoggingMiddleware, LogLevel, LoggingConfig, LoggingMiddleware,
     Middleware, MiddlewareChain, RateLimitMiddleware, TokenValidator,
+};
+pub use mtls::{
+    export_svid, issue_subgraph_svid, CertificateAuthority, MtlsConfig, MtlsError, MtlsProvider,
+    MtlsStatus, Svid,
 };
 pub use openapi::{
     Components, MediaType, OpenApiInfo, OpenApiParser, OpenApiServer, OpenApiSpec, Operation,
@@ -165,6 +187,7 @@ pub use query_whitelist::{
     QueryWhitelist, QueryWhitelistConfig, QueryWhitelistError, SharedQueryWhitelist, WhitelistMode,
     WhitelistStats,
 };
+pub use quic::{alt_svc_header_value, QuicConfig, QuicStatus};
 pub use request_collapsing::{
     create_collapsing_metrics, create_request_collapsing_registry, CollapseResult,
     CollapsingMetrics, CollapsingMetricsSnapshot, CollapsingStats, RequestBroadcaster,
@@ -177,7 +200,7 @@ pub use rest_connector::{
     RestConnectorRegistry, RestEndpoint, RestFieldType, RestGraphQLField, RestRequest,
     RestResponse, RestResponseField, RestResponseSchema, RetryConfig,
 };
-pub use runtime::{ServeMux, serve_reuseport, build_tcp_listener_tuned};
+pub use runtime::{build_tcp_listener_tuned, serve_reuseport, ServeMux};
 pub use schema::SchemaBuilder;
 pub use shutdown::{
     os_signal_shutdown, run_with_graceful_shutdown, RequestGuard, ShutdownConfig,
@@ -193,13 +216,7 @@ pub use subscription::{
 };
 pub use tracing_otel::{init_tracer, shutdown_tracer, GraphQLSpan, GrpcSpan, TracingConfig};
 pub use waf::{validate_request, WafMiddleware};
-pub use mtls::{
-    CertificateAuthority, MtlsConfig, MtlsError, MtlsProvider, MtlsStatus, Svid,
-    export_svid, issue_subgraph_svid,
-};
-pub use quic::{QuicConfig, QuicStatus, alt_svc_header_value};
 #[cfg(feature = "wasm")]
 pub use wasm_plugin::{
-    WasmPluginConfig, WasmPluginEngine, WasmPlugin, WasmPluginManager, WasmResourceLimits,
+    WasmPlugin, WasmPluginConfig, WasmPluginEngine, WasmPluginManager, WasmResourceLimits,
 };
-

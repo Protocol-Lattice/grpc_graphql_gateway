@@ -854,11 +854,12 @@ impl ResponseCache {
 
     fn remove_entries_internal(&self, cache_keys: &[String]) {
         if let CacheBackend::Memory {
-                cache,
-                type_index,
-                entity_index,
-                ..
-            } = &self.backend {
+            cache,
+            type_index,
+            entity_index,
+            ..
+        } = &self.backend
+        {
             let mut c = cache.write();
             for key in cache_keys {
                 if let Some(entry) = c.remove(key) {
@@ -1210,8 +1211,8 @@ mod tests {
     async fn test_stale_while_revalidate() {
         let config = CacheConfig {
             max_size: 100,
-            default_ttl: Duration::from_millis(10),
-            stale_while_revalidate: Some(Duration::from_millis(100)),
+            default_ttl: Duration::from_millis(50),
+            stale_while_revalidate: Some(Duration::from_millis(500)),
             invalidate_on_mutation: true,
             redis_url: None,
             vary_headers: vec![],
@@ -1230,7 +1231,7 @@ mod tests {
             .await;
 
         // Wait past TTL but within stale window
-        std::thread::sleep(Duration::from_millis(20));
+        tokio::time::sleep(Duration::from_millis(150)).await;
 
         // Should be a stale hit
         assert!(matches!(
@@ -1239,7 +1240,7 @@ mod tests {
         ));
 
         // Wait past stale window
-        std::thread::sleep(Duration::from_millis(200));
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Should be a miss now
         assert!(matches!(
@@ -1469,7 +1470,7 @@ mod tests {
     fn test_cache_config_clone() {
         let config1 = CacheConfig::default();
         let config2 = config1.clone();
-        
+
         assert_eq!(config1.max_size, config2.max_size);
         assert_eq!(config1.default_ttl, config2.default_ttl);
     }
@@ -1478,7 +1479,7 @@ mod tests {
     fn test_cache_config_with_stale_while_revalidate() {
         let mut config = CacheConfig::default();
         config.stale_while_revalidate = Some(std::time::Duration::from_secs(30));
-        
+
         assert!(config.stale_while_revalidate.is_some());
     }
 
@@ -1486,7 +1487,7 @@ mod tests {
     fn test_cache_config_vary_headers() {
         let mut config = CacheConfig::default();
         config.vary_headers.push("X-Tenant-ID".to_string());
-        
+
         assert!(config.vary_headers.contains(&"Authorization".to_string()));
         assert!(config.vary_headers.contains(&"X-Tenant-ID".to_string()));
     }
@@ -1495,7 +1496,7 @@ mod tests {
     async fn test_cache_len() {
         let config = CacheConfig::default();
         let cache = ResponseCache::new(config);
-        
+
         assert_eq!(cache.len(), 0);
     }
 
@@ -1503,7 +1504,7 @@ mod tests {
     async fn test_cache_is_empty() {
         let config = CacheConfig::default();
         let cache = ResponseCache::new(config);
-        
+
         assert!(cache.is_empty());
     }
 
@@ -1511,7 +1512,7 @@ mod tests {
     async fn test_invalidate_all_types() {
         let config = CacheConfig::default();
         let cache = ResponseCache::new(config);
-        
+
         // No types to invalidate initially
         let count = cache.invalidate_by_type("User").await;
         assert_eq!(count, 0);
@@ -1521,7 +1522,7 @@ mod tests {
     async fn test_invalidate_all_entities() {
         let config = CacheConfig::default();
         let cache = ResponseCache::new(config);
-        
+
         // No entities to invalidate initially
         let count = cache.invalidate_by_entity("User#123").await;
         assert_eq!(count, 0);
@@ -1536,7 +1537,7 @@ mod tests {
             referenced_types: HashSet::new(),
             referenced_entities: HashSet::new(),
         };
-        
+
         assert!(entry.is_expired());
     }
 
@@ -1549,7 +1550,7 @@ mod tests {
             referenced_types: HashSet::new(),
             referenced_entities: HashSet::new(),
         };
-        
+
         assert!(!entry.is_expired());
     }
 
@@ -1562,7 +1563,7 @@ mod tests {
             referenced_types: HashSet::new(),
             referenced_entities: HashSet::new(),
         };
-        
+
         assert!(entry.is_stale_but_usable(std::time::Duration::from_secs(30)));
     }
 
@@ -1575,62 +1576,38 @@ mod tests {
             referenced_types: HashSet::new(),
             referenced_entities: HashSet::new(),
         };
-        
+
         assert!(!entry.is_stale_but_usable(std::time::Duration::from_secs(30)));
     }
 
     #[test]
     fn test_generate_cache_key_basic() {
-        let key = ResponseCache::generate_cache_key(
-            "{ hello }",
-            None,
-            None,
-            &[]
-        );
-        
+        let key = ResponseCache::generate_cache_key("{ hello }", None, None, &[]);
+
         assert_eq!(key.len(), 64); // SHA-256 hex length
     }
 
     #[test]
     fn test_generate_cache_key_with_variables() {
         let vars = serde_json::json!({"id": "123"});
-        let key = ResponseCache::generate_cache_key(
-            "{ user(id: $id) { name } }",
-            Some(&vars),
-            None,
-            &[]
-        );
-        
+        let key =
+            ResponseCache::generate_cache_key("{ user(id: $id) { name } }", Some(&vars), None, &[]);
+
         assert_eq!(key.len(), 64);
     }
 
     #[test]
     fn test_generate_cache_key_with_operation_name() {
-        let key = ResponseCache::generate_cache_key(
-            "{ hello }",
-            None,
-            Some("GetHello"),
-            &[]
-        );
-        
+        let key = ResponseCache::generate_cache_key("{ hello }", None, Some("GetHello"), &[]);
+
         assert_eq!(key.len(), 64);
     }
 
     #[test]
     fn test_generate_cache_key_deterministic() {
-        let key1 = ResponseCache::generate_cache_key(
-            "{ hello }",
-            None,
-            None,
-            &[]
-        );
-        let key2 = ResponseCache::generate_cache_key(
-            "{ hello }",
-            None,
-            None,
-            &[]
-        );
-        
+        let key1 = ResponseCache::generate_cache_key("{ hello }", None, None, &[]);
+        let key2 = ResponseCache::generate_cache_key("{ hello }", None, None, &[]);
+
         assert_eq!(key1, key2);
     }
 
@@ -1638,7 +1615,7 @@ mod tests {
     fn test_cache_config_invalidation_disabled() {
         let mut config = CacheConfig::default();
         config.invalidate_on_mutation = false;
-        
+
         assert!(!config.invalidate_on_mutation);
     }
 
@@ -1646,7 +1623,7 @@ mod tests {
     async fn test_cache_stats() {
         let config = CacheConfig::default();
         let cache = ResponseCache::new(config);
-        
+
         let stats = cache.stats();
         assert_eq!(stats.size, 0);
         assert_eq!(stats.max_size, 10_000);
@@ -1656,7 +1633,7 @@ mod tests {
     async fn test_cache_with_smart_ttl() {
         let mut config = CacheConfig::default();
         config.smart_ttl_manager = None; // No Smart TTL by default
-        
+
         assert!(config.smart_ttl_manager.is_none());
     }
 
@@ -1665,7 +1642,7 @@ mod tests {
         let mut config = CacheConfig::default();
         config.invalidate_on_mutation = false;
         let cache = ResponseCache::new(config);
-        
+
         let mutation_response = serde_json::json!({
             "data": {
                 "updateUser": {
@@ -1674,7 +1651,7 @@ mod tests {
                 }
             }
         });
-        
+
         let count = cache.invalidate_for_mutation(&mutation_response).await;
         assert_eq!(count, 0);
     }
@@ -1688,7 +1665,7 @@ mod tests {
             referenced_types: HashSet::new(),
             referenced_entities: HashSet::new(),
         };
-        
+
         let result = CacheLookupResult::Hit(entry);
         let debug_str = format!("{:?}", result);
         assert!(debug_str.contains("Hit"));
@@ -1703,7 +1680,7 @@ mod tests {
             referenced_types: HashSet::new(),
             referenced_entities: HashSet::new(),
         };
-        
+
         let entry2 = entry1.clone();
         assert_eq!(entry1.ttl_secs, entry2.ttl_secs);
     }
@@ -1717,7 +1694,7 @@ mod tests {
             referenced_types: HashSet::new(),
             referenced_entities: HashSet::new(),
         };
-        
+
         let debug_str = format!("{:?}", entry);
         assert!(debug_str.contains("CachedResponse"));
     }
@@ -1734,38 +1711,23 @@ mod tests {
         let config = CacheConfig::default();
         let cache1 = ResponseCache::new(config);
         let cache2 = cache1.clone();
-        
+
         assert_eq!(cache1.len(), cache2.len());
     }
 
     #[test]
     fn test_generate_cache_key_with_vary_headers() {
         let extra = vec!["Bearer token123".to_string()];
-        let key = ResponseCache::generate_cache_key(
-            "{ hello }",
-            None,
-            None,
-            &extra
-        );
-        
+        let key = ResponseCache::generate_cache_key("{ hello }", None, None, &extra);
+
         assert_eq!(key.len(), 64);
     }
 
     #[test]
     fn test_generate_cache_key_whitespace_normalization() {
-        let key1 = ResponseCache::generate_cache_key(
-            "{   hello   }",
-            None,
-            None,
-            &[]
-        );
-        let key2 = ResponseCache::generate_cache_key(
-            "{ hello }",
-            None,
-            None,
-            &[]
-        );
-        
+        let key1 = ResponseCache::generate_cache_key("{   hello   }", None, None, &[]);
+        let key2 = ResponseCache::generate_cache_key("{ hello }", None, None, &[]);
+
         assert_eq!(key1, key2); // Normalized to same key
     }
 
@@ -1773,18 +1735,20 @@ mod tests {
     async fn test_put_with_ttl() {
         let config = CacheConfig::default();
         let cache = ResponseCache::new(config);
-        
+
         let cache_key = "test_key".to_string();
         let response = serde_json::json!({"data": {"hello": "world"}});
-        
-        cache.put_with_ttl(
-            cache_key.clone(),
-            response,
-            HashSet::new(),
-            HashSet::new(),
-            120
-        ).await;
-        
+
+        cache
+            .put_with_ttl(
+                cache_key.clone(),
+                response,
+                HashSet::new(),
+                HashSet::new(),
+                120,
+            )
+            .await;
+
         let result = cache.get(&cache_key).await;
         assert!(matches!(result, CacheLookupResult::Hit(_)));
     }
@@ -1793,17 +1757,14 @@ mod tests {
     async fn test_put_basic() {
         let config = CacheConfig::default();
         let cache = ResponseCache::new(config);
-        
+
         let cache_key = "test_basic".to_string();
         let response = serde_json::json!({"data": "test"});
-        
-        cache.put(
-            cache_key.clone(),
-            response,
-            HashSet::new(),
-            HashSet::new()
-        ).await;
-        
+
+        cache
+            .put(cache_key.clone(), response, HashSet::new(), HashSet::new())
+            .await;
+
         assert_eq!(cache.len(), 1);
     }
 
@@ -1811,7 +1772,7 @@ mod tests {
     fn test_cache_config_redis_url() {
         let mut config = CacheConfig::default();
         config.redis_url = Some("redis://localhost:6379".to_string());
-        
+
         assert!(config.redis_url.is_some());
     }
 
@@ -1828,17 +1789,25 @@ mod tests {
         for i in 1..=3 {
             let key = format!("key_{}", i);
             let response = serde_json::json!({"data": i});
-            cache.put(key, response, HashSet::new(), HashSet::new()).await;
+            cache
+                .put(key, response, HashSet::new(), HashSet::new())
+                .await;
         }
 
         // Stats should show max size 2
         assert_eq!(cache.len(), 2);
-        
+
         // Key 1 should be evicted (as it was the first inserted)
         // Key 2 and 3 should remain
         assert!(matches!(cache.get("key_1").await, CacheLookupResult::Miss));
-        assert!(matches!(cache.get("key_2").await, CacheLookupResult::Hit(_)));
-        assert!(matches!(cache.get("key_3").await, CacheLookupResult::Hit(_)));
+        assert!(matches!(
+            cache.get("key_2").await,
+            CacheLookupResult::Hit(_)
+        ));
+        assert!(matches!(
+            cache.get("key_3").await,
+            CacheLookupResult::Hit(_)
+        ));
     }
 
     #[tokio::test]
@@ -1851,22 +1820,56 @@ mod tests {
         let cache = ResponseCache::new(config);
 
         // Add key 1 and 2
-        cache.put("key_1".to_string(), serde_json::json!({"data": 1}), HashSet::new(), HashSet::new()).await;
-        cache.put("key_2".to_string(), serde_json::json!({"data": 2}), HashSet::new(), HashSet::new()).await;
+        cache
+            .put(
+                "key_1".to_string(),
+                serde_json::json!({"data": 1}),
+                HashSet::new(),
+                HashSet::new(),
+            )
+            .await;
+        cache
+            .put(
+                "key_2".to_string(),
+                serde_json::json!({"data": 2}),
+                HashSet::new(),
+                HashSet::new(),
+            )
+            .await;
 
         // Re-add "key_1" (effectively updating/accessing it)
-        // Note: In this implementation, put updates insertion order. 
-        // A simple 'get' might not update insertion order depending on implementation, 
+        // Note: In this implementation, put updates insertion order.
+        // A simple 'get' might not update insertion order depending on implementation,
         // but 'put' definitely should for LRU behavior on writes.
-        cache.put("key_1".to_string(), serde_json::json!({"data": 1}), HashSet::new(), HashSet::new()).await;
+        cache
+            .put(
+                "key_1".to_string(),
+                serde_json::json!({"data": 1}),
+                HashSet::new(),
+                HashSet::new(),
+            )
+            .await;
 
         // Add key 3
-        cache.put("key_3".to_string(), serde_json::json!({"data": 3}), HashSet::new(), HashSet::new()).await;
+        cache
+            .put(
+                "key_3".to_string(),
+                serde_json::json!({"data": 3}),
+                HashSet::new(),
+                HashSet::new(),
+            )
+            .await;
 
         // Since key_1 was refreshed, key_2 should be the LRU and evict when key_3 comes in
-        assert!(matches!(cache.get("key_1").await, CacheLookupResult::Hit(_))); // Should exist
-        assert!(matches!(cache.get("key_2").await, CacheLookupResult::Miss));   // Should be evicted
-        assert!(matches!(cache.get("key_3").await, CacheLookupResult::Hit(_))); // Should exist
+        assert!(matches!(
+            cache.get("key_1").await,
+            CacheLookupResult::Hit(_)
+        )); // Should exist
+        assert!(matches!(cache.get("key_2").await, CacheLookupResult::Miss)); // Should be evicted
+        assert!(matches!(
+            cache.get("key_3").await,
+            CacheLookupResult::Hit(_)
+        )); // Should exist
     }
 
     #[tokio::test]
@@ -1874,7 +1877,14 @@ mod tests {
         let config = CacheConfig::default();
         let cache = ResponseCache::new(config);
 
-        cache.put("key_1".to_string(), serde_json::json!({"data": 1}), HashSet::new(), HashSet::new()).await;
+        cache
+            .put(
+                "key_1".to_string(),
+                serde_json::json!({"data": 1}),
+                HashSet::new(),
+                HashSet::new(),
+            )
+            .await;
         assert!(!cache.is_empty());
 
         cache.clear().await;
@@ -1889,9 +1899,16 @@ mod tests {
 
         let mut types = HashSet::new();
         types.insert("User".to_string());
-        
-        cache.put("key_1".to_string(), serde_json::json!({"data": 1}), types.clone(), HashSet::new()).await;
-        
+
+        cache
+            .put(
+                "key_1".to_string(),
+                serde_json::json!({"data": 1}),
+                types.clone(),
+                HashSet::new(),
+            )
+            .await;
+
         // Verify stats show type index usage
         let stats = cache.stats();
         assert_eq!(stats.size, 1);
@@ -1916,14 +1933,28 @@ mod tests {
         entities.insert("User#123".to_string());
 
         // Put two entries referencing the same entity
-        cache.put("query_1".to_string(), serde_json::json!({"data": 1}), types.clone(), entities.clone()).await;
-        cache.put("query_2".to_string(), serde_json::json!({"data": 2}), types.clone(), entities.clone()).await;
+        cache
+            .put(
+                "query_1".to_string(),
+                serde_json::json!({"data": 1}),
+                types.clone(),
+                entities.clone(),
+            )
+            .await;
+        cache
+            .put(
+                "query_2".to_string(),
+                serde_json::json!({"data": 2}),
+                types.clone(),
+                entities.clone(),
+            )
+            .await;
 
         assert_eq!(cache.len(), 2);
-        
+
         // Invalidate entity
         let count = cache.invalidate_by_entity("User#123").await;
-        
+
         assert_eq!(count, 2);
         assert_eq!(cache.len(), 0);
     }
@@ -1935,21 +1966,29 @@ mod tests {
         let cache = ResponseCache::new(config);
 
         // Put with 1 second TTL
-        cache.put_with_ttl(
-            "short_ttl".to_string(), 
-            serde_json::json!({"data": "expire"}), 
-            HashSet::new(), 
-            HashSet::new(), 
-            1
-        ).await;
+        cache
+            .put_with_ttl(
+                "short_ttl".to_string(),
+                serde_json::json!({"data": "expire"}),
+                HashSet::new(),
+                HashSet::new(),
+                1,
+            )
+            .await;
 
         // Immediately should hit
-        assert!(matches!(cache.get("short_ttl").await, CacheLookupResult::Hit(_)));
+        assert!(matches!(
+            cache.get("short_ttl").await,
+            CacheLookupResult::Hit(_)
+        ));
 
         // Wait 1.1s
         tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
 
         // Should miss
-        assert!(matches!(cache.get("short_ttl").await, CacheLookupResult::Miss));
+        assert!(matches!(
+            cache.get("short_ttl").await,
+            CacheLookupResult::Miss
+        ));
     }
 }

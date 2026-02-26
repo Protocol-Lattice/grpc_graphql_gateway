@@ -178,7 +178,7 @@ mod tests {
     use super::*;
     use std::io;
     use std::sync::Mutex;
-    
+
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
@@ -211,7 +211,10 @@ mod tests {
         assert_eq!(err.to_string(), "Query depth limit exceeded: max depth 10");
 
         let err = Error::QueryTooComplex("max complexity 1000".to_string());
-        assert_eq!(err.to_string(), "Query complexity limit exceeded: max complexity 1000");
+        assert_eq!(
+            err.to_string(),
+            "Query complexity limit exceeded: max complexity 1000"
+        );
     }
 
     #[test]
@@ -253,9 +256,12 @@ mod tests {
 
         let err = Error::Internal("database connection failed".to_string());
         let gql_err = err.to_graphql_error();
-        assert_eq!(gql_err.message, "Internal error: database connection failed");
+        assert_eq!(
+            gql_err.message,
+            "Internal error: database connection failed"
+        );
         assert_eq!(gql_err.extensions.get("code").unwrap(), "INTERNAL_ERROR");
-        
+
         std::env::remove_var("ENV");
     }
 
@@ -315,9 +321,15 @@ mod tests {
             (Error::Connection("err".to_string()), "CONNECTION_ERROR"),
             (Error::WebSocket("err".to_string()), "WEBSOCKET_ERROR"),
             (Error::Internal("err".to_string()), "INTERNAL_ERROR"),
-            (Error::TooManyRequests("err".to_string()), "TOO_MANY_REQUESTS"),
+            (
+                Error::TooManyRequests("err".to_string()),
+                "TOO_MANY_REQUESTS",
+            ),
             (Error::QueryTooDeep("err".to_string()), "QUERY_TOO_DEEP"),
-            (Error::QueryTooComplex("err".to_string()), "QUERY_TOO_COMPLEX"),
+            (
+                Error::QueryTooComplex("err".to_string()),
+                "QUERY_TOO_COMPLEX",
+            ),
         ];
 
         for (err, expected_code) in test_cases {
@@ -384,7 +396,7 @@ mod tests {
         let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "access denied");
         let err = Error::from(io_err);
         let gql_err = err.to_graphql_error();
-        
+
         // Check that error message is preserved
         assert!(gql_err.message.contains("access denied"));
         assert_eq!(gql_err.extensions.get("code").unwrap(), "IO_ERROR");
@@ -410,8 +422,14 @@ mod tests {
 
         for err in errors {
             let gql_err = err.to_graphql_error();
-            assert!(!gql_err.extensions.is_empty(), "Error should have extensions");
-            assert!(gql_err.extensions.contains_key("code"), "Extensions should contain 'code'");
+            assert!(
+                !gql_err.extensions.is_empty(),
+                "Error should have extensions"
+            );
+            assert!(
+                gql_err.extensions.contains_key("code"),
+                "Extensions should contain 'code'"
+            );
         }
     }
 

@@ -16,8 +16,7 @@ use tracing_subscriber::prelude::*;
 
 type ServiceResult<T> = std::result::Result<T, Status>;
 
-const DESCRIPTOR_SET: &[u8] =
-    include_bytes!("../src/generated/federation_example_descriptor.bin");
+const DESCRIPTOR_SET: &[u8] = include_bytes!("../src/generated/federation_example_descriptor.bin");
 
 const DEFAULT_GRPC_ADDR: &str = "0.0.0.0:50051";
 
@@ -443,7 +442,10 @@ impl grpc_graphql_gateway::plugin::Plugin for ExamplePlugin {
         req: &async_graphql::Request,
     ) -> Result<(), Self::Error> {
         println!("Plugin: Received GraphQL request via on_request hook");
-        println!("  - Query: {}", req.query.chars().take(50).collect::<String>());
+        println!(
+            "  - Query: {}",
+            req.query.chars().take(50).collect::<String>()
+        );
         Ok(())
     }
 
@@ -454,7 +456,7 @@ impl grpc_graphql_gateway::plugin::Plugin for ExamplePlugin {
     ) -> Result<(), Self::Error> {
         println!("Plugin: Sending GraphQL response via on_response hook");
         if !res.errors.is_empty() {
-             println!("  - Errors: {:?}", res.errors);
+            println!("  - Errors: {:?}", res.errors);
         }
         Ok(())
     }
@@ -472,7 +474,10 @@ impl grpc_graphql_gateway::plugin::Plugin for ExamplePlugin {
         service_name: &str,
         metadata: &mut tonic::metadata::MetadataMap,
     ) -> Result<(), Self::Error> {
-        println!("Plugin: Sending gRPC request to subgraph '{}'", service_name);
+        println!(
+            "Plugin: Sending gRPC request to subgraph '{}'",
+            service_name
+        );
         metadata.insert("x-plugin-header", "example-value".parse().unwrap());
         Ok(())
     }

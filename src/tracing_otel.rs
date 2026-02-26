@@ -299,10 +299,10 @@ mod tests {
         // Ensure we can create and manipulate spans without panicking
         // Note: Use no-op global tracer implicitly
         let mut span = GraphQLSpan::new("getUsers", "query", "{ users { id } }");
-        
+
         span.set_attribute("custom.tag", "value");
         span.set_attribute("complexity", 100);
-        
+
         span.ok();
         // Should not panic on end()
     }
@@ -316,10 +316,10 @@ mod tests {
     #[test]
     fn test_grpc_span_lifecycle() {
         let mut span = GrpcSpan::new("UserService", "GetUser");
-        
+
         span.set_attribute("peer.address", "127.0.0.1");
         span.set_attribute("retry", 1);
-        
+
         span.ok();
     }
 
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_init_tracer() {
-        // Just verify it runs without crashing. 
+        // Just verify it runs without crashing.
         // Real verification would require checking the global state which is hard in parallel tests.
         let config = TracingConfig::disabled();
         let _provider = init_tracer(&config);

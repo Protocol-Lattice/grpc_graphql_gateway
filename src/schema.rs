@@ -7,8 +7,7 @@
 use crate::error::{Error, Result};
 use crate::federation::{EntityResolver, FederationConfig, GrpcEntityResolver};
 use crate::graphql::{
-    GraphqlField, GraphqlLiveQuery, GraphqlResponse, GraphqlSchema, GraphqlService,
-    GraphqlType,
+    GraphqlField, GraphqlLiveQuery, GraphqlResponse, GraphqlSchema, GraphqlService, GraphqlType,
 };
 use crate::grpc_client::{GrpcClient, GrpcClientPool};
 use crate::headers::HeaderPropagationConfig;
@@ -410,8 +409,6 @@ impl SchemaBuilder {
             FederationConfig::new()
         };
 
-
-
         let live_query_ext = pool.get_extension_by_name("graphql.live_query");
         let mut live_query_configs = AHashMap::new();
 
@@ -472,19 +469,26 @@ impl SchemaBuilder {
 
                         // LIVE QUERY SUPPORT
                         if let Some(ext) = &live_query_ext {
-                            if let Some(live_opts) = decode_extension::<GraphqlLiveQuery>(
-                                &method.options(),
-                                ext,
-                            )? {
+                            if let Some(live_opts) =
+                                decode_extension::<GraphqlLiveQuery>(&method.options(), ext)?
+                            {
                                 if live_opts.enabled {
-                                    let strategy = crate::graphql::LiveQueryStrategy::try_from(live_opts.strategy)
-                                        .ok()
-                                        .map(|s| match s {
-                                            crate::graphql::LiveQueryStrategy::Invalidation => LiveQueryStrategy::Invalidation,
-                                            crate::graphql::LiveQueryStrategy::Polling => LiveQueryStrategy::Polling,
-                                            crate::graphql::LiveQueryStrategy::HashDiff => LiveQueryStrategy::HashDiff,
-                                        })
-                                        .unwrap_or(LiveQueryStrategy::Invalidation);
+                                    let strategy = crate::graphql::LiveQueryStrategy::try_from(
+                                        live_opts.strategy,
+                                    )
+                                    .ok()
+                                    .map(|s| match s {
+                                        crate::graphql::LiveQueryStrategy::Invalidation => {
+                                            LiveQueryStrategy::Invalidation
+                                        }
+                                        crate::graphql::LiveQueryStrategy::Polling => {
+                                            LiveQueryStrategy::Polling
+                                        }
+                                        crate::graphql::LiveQueryStrategy::HashDiff => {
+                                            LiveQueryStrategy::HashDiff
+                                        }
+                                    })
+                                    .unwrap_or(LiveQueryStrategy::Invalidation);
 
                                     let config = LiveQueryOperationConfig {
                                         operation_name: field_name.clone(),
@@ -719,7 +723,7 @@ impl SchemaBuilder {
             .finish()
             .map_err(|e| Error::Schema(format!("failed to build schema: {e}")))?;
 
-        Ok(DynamicSchema { 
+        Ok(DynamicSchema {
             inner: schema,
             live_query_configs: Arc::new(live_query_configs),
         })
@@ -2221,8 +2225,7 @@ mod builder_tests {
 
     #[test]
     fn test_schema_builder_with_descriptor_bytes() {
-        let builder = SchemaBuilder::new()
-            .with_descriptor_set_bytes(vec![1, 2, 3]);
+        let builder = SchemaBuilder::new().with_descriptor_set_bytes(vec![1, 2, 3]);
         assert_eq!(builder.descriptor_count(), 1);
     }
 
@@ -2262,7 +2265,7 @@ mod builder_tests {
     fn test_schema_builder_service_allowlist() {
         let builder = SchemaBuilder::new()
             .with_services(vec!["ServiceA".to_string(), "ServiceB".to_string()]);
-        
+
         let allowlist = builder.service_allowlist.unwrap();
         assert!(allowlist.contains("ServiceA"));
         assert!(allowlist.contains("ServiceB"));
@@ -2276,7 +2279,7 @@ mod builder_tests {
         let result = builder.build(&pool);
         assert!(result.is_err());
         if let Err(e) = result {
-             assert!(e.to_string().contains("at least one descriptor set"));
+            assert!(e.to_string().contains("at least one descriptor set"));
         }
     }
 
@@ -2291,9 +2294,8 @@ mod builder_tests {
     #[test]
     fn test_schema_builder_invalid_descriptor_bytes() {
         let pool = GrpcClientPool::new();
-        let builder = SchemaBuilder::new()
-            .with_descriptor_set_bytes(vec![0xFF, 0xFF, 0xFF]); // Invalid protobuf
-        
+        let builder = SchemaBuilder::new().with_descriptor_set_bytes(vec![0xFF, 0xFF, 0xFF]); // Invalid protobuf
+
         let result = builder.build(&pool);
         assert!(result.is_err());
     }

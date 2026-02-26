@@ -50,10 +50,20 @@ fn bench<F: Fn()>(label: &'static str, ops: u64, warmup: u64, f: F) -> BenchResu
         f();
         black_box(());
     }
-    BenchResult { label, ops, elapsed: start.elapsed() }
+    BenchResult {
+        label,
+        ops,
+        elapsed: start.elapsed(),
+    }
 }
 
-fn bench_threaded<F>(label: &'static str, threads: usize, ops_each: u64, warmup: u64, f: F) -> BenchResult
+fn bench_threaded<F>(
+    label: &'static str,
+    threads: usize,
+    ops_each: u64,
+    warmup: u64,
+    f: F,
+) -> BenchResult
 where
     F: Fn() + Send + Sync + Clone + 'static,
 {
@@ -111,22 +121,16 @@ fn print_comparison(before: &BenchResult, after: &BenchResult) {
     if speedup >= 1.0 {
         println!(
             "    {:<52}  +{:>7.1}%  ({:.2}x faster)  {} ",
-            "  └─ improvement:",
-            delta_pct,
-            speedup,
-            bar
+            "  └─ improvement:", delta_pct, speedup, bar
         );
     } else {
         println!(
             "    {:<52}  {:>8.1}%  ({:.2}x)  (no regression expected here) ",
-            "  └─ change:",
-            delta_pct,
-            speedup,
+            "  └─ change:", delta_pct, speedup,
         );
     }
     println!();
 }
-
 
 // ─── "Before" infrastructure ─────────────────────────────────────────────────
 
@@ -136,7 +140,9 @@ struct NaiveCache {
 }
 impl NaiveCache {
     fn new() -> Self {
-        Self { data: RwLock::new(HashMap::new()) }
+        Self {
+            data: RwLock::new(HashMap::new()),
+        }
     }
     fn get(&self, key: &str) -> Option<Vec<u8>> {
         self.data.read().get(key).cloned()
@@ -164,7 +170,6 @@ fn simulate_execute() -> Vec<u8> {
     serde_json::to_vec(&resp).unwrap()
 }
 
-
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 fn main() {
@@ -177,7 +182,10 @@ fn main() {
     println!("║      grpc_graphql_gateway — Full Pipeline A/B  (v1.0.0  vs  v1.0.1)       ║");
     println!("╠══════════════════════════════════════════════════════════════════════════════╣");
     println!("║  Simulates the exact hot path: Parse → Cache lookup → Execute → Serialize  ║");
-    println!("║  Machine: {} logical CPUs (Apple Silicon)                                   ║", ncpus);
+    println!(
+        "║  Machine: {} logical CPUs (Apple Silicon)                                   ║",
+        ncpus
+    );
     println!("╚══════════════════════════════════════════════════════════════════════════════╝");
     println!();
 
@@ -191,9 +199,10 @@ fn main() {
 
     // AFTER infrastructure
     let perf_cfg = HighPerfConfig::ultra_fast();
-    let sharded: Arc<ShardedCache<Vec<u8>>> = Arc::new(
-        ShardedCache::new(perf_cfg.cache_shards, perf_cfg.max_entries_per_shard)
-    );
+    let sharded: Arc<ShardedCache<Vec<u8>>> = Arc::new(ShardedCache::new(
+        perf_cfg.cache_shards,
+        perf_cfg.max_entries_per_shard,
+    ));
     let parser = Arc::new(FastJsonParser::new(perf_cfg.buffer_pool_size));
 
     // BEFORE infrastructure
@@ -225,16 +234,26 @@ fn main() {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
     {
-        let before = bench("BEFORE: serde_json + NaiveCache (global RwLock)", 1_000_000, 50_000, || {
-            let _parsed = black_box(parse_before(small_gql));
-            black_box(naive.get(hit_key));
-        });
+        let before = bench(
+            "BEFORE: serde_json + NaiveCache (global RwLock)",
+            1_000_000,
+            50_000,
+            || {
+                let _parsed = black_box(parse_before(small_gql));
+                black_box(naive.get(hit_key));
+            },
+        );
         let p = parser.clone();
         let s = sharded.clone();
-        let after = bench("AFTER:  SIMD JSON + ShardedCache (lock-free read)", 1_000_000, 50_000, move || {
-            let _parsed = black_box(parse_after(&p, small_gql));
-            black_box(s.get(hit_key));
-        });
+        let after = bench(
+            "AFTER:  SIMD JSON + ShardedCache (lock-free read)",
+            1_000_000,
+            50_000,
+            move || {
+                let _parsed = black_box(parse_after(&p, small_gql));
+                black_box(s.get(hit_key));
+            },
+        );
         print_comparison(&before, &after);
         all_results.push(("Cache hit (1 thread)", before.rps(), after.rps()));
     }
@@ -243,7 +262,10 @@ fn main() {
     // SCENARIO B — Cache HIT, high concurrency (N threads)
     // ════════════════════════════════════════════════════════════
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("  SCENARIO B: CACHE HIT — {} concurrent workers (production scenario)", ncpus);
+    println!(
+        "  SCENARIO B: CACHE HIT — {} concurrent workers (production scenario)",
+        ncpus
+    );
     println!("  (mimalloc thread-local arenas eliminate cross-thread alloc contention)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
@@ -251,22 +273,26 @@ fn main() {
         let naive2 = naive.clone();
         let before = bench_threaded(
             "BEFORE: serde_json + NaiveCache + system alloc",
-            ncpus, 200_000, 1_000,
+            ncpus,
+            200_000,
+            1_000,
             move || {
                 let _parsed = black_box(parse_before(small_gql));
                 black_box(naive2.get(hit_key));
-            }
+            },
         );
 
         let p = parser.clone();
         let s = sharded.clone();
         let after = bench_threaded(
             "AFTER:  SIMD JSON + ShardedCache + mimalloc",
-            ncpus, 200_000, 1_000,
+            ncpus,
+            200_000,
+            1_000,
             move || {
                 let _parsed = black_box(parse_after(&p, small_gql));
                 black_box(s.get(hit_key));
-            }
+            },
         );
         print_comparison(&before, &after);
         all_results.push(("Cache hit (concurrent)", before.rps(), after.rps()));
@@ -282,21 +308,31 @@ fn main() {
     println!();
     {
         let naive3 = naive.clone();
-        let before = bench("BEFORE: serde_json + NaiveCache write + execute", 500_000, 10_000, move || {
-            let _q = black_box(parse_before(small_gql));
-            let _miss = black_box(naive3.get("gql:key:MISS"));
-            let resp = black_box(simulate_execute());
-            naive3.insert("gql:key:MISS", resp);
-        });
+        let before = bench(
+            "BEFORE: serde_json + NaiveCache write + execute",
+            500_000,
+            10_000,
+            move || {
+                let _q = black_box(parse_before(small_gql));
+                let _miss = black_box(naive3.get("gql:key:MISS"));
+                let resp = black_box(simulate_execute());
+                naive3.insert("gql:key:MISS", resp);
+            },
+        );
 
         let p = parser.clone();
         let s = sharded.clone();
-        let after = bench("AFTER:  SIMD JSON + ShardedCache write + execute", 500_000, 10_000, move || {
-            let _q = black_box(parse_after(&p, small_gql));
-            let _miss = black_box(s.get("gql:key:MISS"));
-            let resp = black_box(simulate_execute());
-            s.insert("gql:key:MISS", resp, Duration::from_secs(60));
-        });
+        let after = bench(
+            "AFTER:  SIMD JSON + ShardedCache write + execute",
+            500_000,
+            10_000,
+            move || {
+                let _q = black_box(parse_after(&p, small_gql));
+                let _miss = black_box(s.get("gql:key:MISS"));
+                let resp = black_box(simulate_execute());
+                s.insert("gql:key:MISS", resp, Duration::from_secs(60));
+            },
+        );
         print_comparison(&before, &after);
         all_results.push(("Cache miss (1 thread)", before.rps(), after.rps()));
     }
@@ -311,14 +347,24 @@ fn main() {
     println!();
     {
         let med = medium_gql.clone();
-        let before = bench("BEFORE: serde_json medium payload", 500_000, 10_000, move || {
-            black_box(parse_before(&med));
-        });
+        let before = bench(
+            "BEFORE: serde_json medium payload",
+            500_000,
+            10_000,
+            move || {
+                black_box(parse_before(&med));
+            },
+        );
         let p = parser.clone();
         let med2 = medium_gql.clone();
-        let after = bench("AFTER:  SIMD JSON medium payload", 500_000, 10_000, move || {
-            black_box(parse_after(&p, &med2));
-        });
+        let after = bench(
+            "AFTER:  SIMD JSON medium payload",
+            500_000,
+            10_000,
+            move || {
+                black_box(parse_after(&p, &med2));
+            },
+        );
         print_comparison(&before, &after);
         all_results.push(("Medium payload parse", before.rps(), after.rps()));
     }
@@ -327,7 +373,10 @@ fn main() {
     // SCENARIO E — Allocation pressure (what mimalloc fixes most)
     // ════════════════════════════════════════════════════════════
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("  SCENARIO E: ALLOCATION PRESSURE — {} threads, request-like alloc pattern", ncpus);
+    println!(
+        "  SCENARIO E: ALLOCATION PRESSURE — {} threads, request-like alloc pattern",
+        ncpus
+    );
     println!("  (mimalloc replaces the system allocator globally — zero code change)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
@@ -336,26 +385,34 @@ fn main() {
         // This is what every request did in v1.0.0 with the system alloc
         let before = bench_threaded(
             "BEFORE: system alloc  (estimated — mimalloc already active)",
-            ncpus, 500_000, 5_000,
+            ncpus,
+            500_000,
+            5_000,
             || {
                 // Simulate what the system allocator would do: fragmented allocs
                 // We approximate by doing many small-then-large allocs
-                let s1 = black_box(String::with_capacity(36));  // request ID (UUID)
+                let s1 = black_box(String::with_capacity(36)); // request ID (UUID)
                 let s2 = black_box(String::with_capacity(256)); // query string
-                let v  = black_box(Vec::<u8>::with_capacity(4096)); // response buffer
-                drop(s1); drop(s2); drop(v);
-            }
+                let v = black_box(Vec::<u8>::with_capacity(4096)); // response buffer
+                drop(s1);
+                drop(s2);
+                drop(v);
+            },
         );
         let after = bench_threaded(
             "AFTER:  mimalloc      (thread-local arenas, no cross-thread lock)",
-            ncpus, 500_000, 5_000,
+            ncpus,
+            500_000,
+            5_000,
             || {
                 // Same workload — mimalloc is now the global allocator
                 let s1 = black_box(String::with_capacity(36));
                 let s2 = black_box(String::with_capacity(256));
-                let v  = black_box(Vec::<u8>::with_capacity(4096));
-                drop(s1); drop(s2); drop(v);
-            }
+                let v = black_box(Vec::<u8>::with_capacity(4096));
+                drop(s1);
+                drop(s2);
+                drop(v);
+            },
         );
         // Note: both benchmarks run WITH mimalloc since it's now the global allocator.
         // The "before" row shows what would happen if each thread had to fight for the
@@ -363,13 +420,16 @@ fn main() {
         // by running with 1 thread vs N threads (lock-free = nearly linear scaling).
         let before_1t = bench(
             "BEFORE: system alloc (1 thread only — no contention baseline)",
-            500_000, 5_000,
+            500_000,
+            5_000,
             || {
                 let s1 = black_box(String::with_capacity(36));
                 let s2 = black_box(String::with_capacity(256));
-                let v  = black_box(Vec::<u8>::with_capacity(4096));
-                drop(s1); drop(s2); drop(v);
-            }
+                let v = black_box(Vec::<u8>::with_capacity(4096));
+                drop(s1);
+                drop(s2);
+                drop(v);
+            },
         );
         print_result(&before_1t);
         print_result(&before);
@@ -380,7 +440,11 @@ fn main() {
             "  └─ scaling efficiency (N-thread vs 1-thread):", scale
         );
         println!();
-        all_results.push(("Alloc pressure (N threads)", before.rps() * 0.6, after.rps())); // 0.6 = sys alloc contention est
+        all_results.push((
+            "Alloc pressure (N threads)",
+            before.rps() * 0.6,
+            after.rps(),
+        )); // 0.6 = sys alloc contention est
     }
 
     // ════════════════════════════════════════════════════════════

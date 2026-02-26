@@ -982,9 +982,7 @@ impl RestConnectorBuilder {
 
         // Use custom client (e.g., mTLS-configured) if provided, otherwise build default
         let client = if let Some(client) = self.custom_client {
-            info!(
-                "REST connector using pre-configured HTTP client (mTLS)",
-            );
+            info!("REST connector using pre-configured HTTP client (mTLS)",);
             client
         } else {
             reqwest::Client::builder()
@@ -1505,7 +1503,9 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("id".to_string(), serde_json::json!("123"));
 
-        let req = connector.build_request(&endpoint, &args).expect("Should build");
+        let req = connector
+            .build_request(&endpoint, &args)
+            .expect("Should build");
         assert_eq!(req.url, "http://api.com/users/123");
     }
 
@@ -1519,11 +1519,13 @@ mod tests {
         let endpoint = RestEndpoint::new("test", "/search")
             .query_param("q", "{query}")
             .query_param("limit", "10");
-        
+
         let mut args = HashMap::new();
         args.insert("query".to_string(), serde_json::json!("hello world"));
 
-        let req = connector.build_request(&endpoint, &args).expect("Should build");
+        let req = connector
+            .build_request(&endpoint, &args)
+            .expect("Should build");
         // query params order is not guaranteed, check contains
         assert!(req.url.contains("q=hello%20world"));
         assert!(req.url.contains("limit=10"));
@@ -1539,11 +1541,13 @@ mod tests {
         let endpoint = RestEndpoint::new("create", "/users")
             .method(HttpMethod::POST)
             .body_template(r#"{"name": "{name}"}"#);
-        
+
         let mut args = HashMap::new();
         args.insert("name".to_string(), serde_json::json!("Alice"));
 
-        let req = connector.build_request(&endpoint, &args).expect("Should build");
+        let req = connector
+            .build_request(&endpoint, &args)
+            .expect("Should build");
         assert_eq!(req.body, Some(r#"{"name": "Alice"}"#.to_string()));
     }
 
@@ -1585,13 +1589,18 @@ mod tests {
             .build()
             .unwrap();
 
-        let endpoint = RestEndpoint::new("test", "/test")
-            .header("X-Endpoint", "local");
-        
+        let endpoint = RestEndpoint::new("test", "/test").header("X-Endpoint", "local");
+
         let args = HashMap::new();
         let req = connector.build_request(&endpoint, &args).unwrap();
-        
-        assert_eq!(req.headers.get("X-Global").map(|s| s.as_str()), Some("global"));
-        assert_eq!(req.headers.get("X-Endpoint").map(|s| s.as_str()), Some("local"));
+
+        assert_eq!(
+            req.headers.get("X-Global").map(|s| s.as_str()),
+            Some("global")
+        );
+        assert_eq!(
+            req.headers.get("X-Endpoint").map(|s| s.as_str()),
+            Some("local")
+        );
     }
 }

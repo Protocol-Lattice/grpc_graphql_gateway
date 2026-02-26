@@ -1087,20 +1087,20 @@ mod tests {
         assert!(connector.get_endpoint("listPets").is_some());
         assert!(connector.get_endpoint("createPet").is_some());
         assert!(connector.get_endpoint("getPet").is_some());
-        
+
         let endpoint = connector.get_endpoint("getPet").unwrap();
         let schema = endpoint.response_schema.as_ref().unwrap();
         assert_eq!(schema.type_name, "Pet");
         assert!(schema.fields.iter().any(|f| f.name == "id"));
     }
-    
+
     #[test]
     fn test_array_response_handling() {
         let connector = OpenApiParser::from_string(PETSTORE_JSON, false)
             .unwrap()
             .build()
             .unwrap();
-            
+
         let endpoint = connector.get_endpoint("listPets").unwrap();
         let schema = endpoint.response_schema.as_ref().unwrap();
         assert_eq!(schema.type_name, "Pet");
@@ -1138,7 +1138,7 @@ mod tests {
 
         assert!(connector.get_endpoint("petstore_listPets").is_some());
     }
-    
+
     #[test]
     fn test_tag_filter() {
         let connector = OpenApiParser::from_string(PETSTORE_JSON, false)
@@ -1150,7 +1150,7 @@ mod tests {
         assert!(connector.get_endpoint("createPet").is_some());
         assert!(connector.get_endpoint("getPet").is_none());
     }
-    
+
     #[test]
     fn test_operation_filter() {
         let connector = OpenApiParser::from_string(PETSTORE_JSON, false)
@@ -1162,12 +1162,12 @@ mod tests {
         assert!(connector.get_endpoint("getPet").is_some());
         assert!(connector.get_endpoint("createPet").is_none());
     }
-    
+
     #[test]
     fn test_schema_resolution() {
         let parser = OpenApiParser::from_string(PETSTORE_JSON, false).unwrap();
         let schemas = parser.get_schemas();
-        
+
         assert!(schemas.contains_key("Pet"));
         let pet_schema = schemas.get("Pet").unwrap();
         assert_eq!(pet_schema.schema_type.as_deref(), Some("object"));
@@ -1218,6 +1218,4 @@ mod tests {
 
         assert_eq!(connector.base_url(), "https://api.secure.com");
     }
-    
-
 }

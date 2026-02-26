@@ -300,8 +300,9 @@ impl WasmPluginEngine {
         // Cranelift optimizations for production
         config.cranelift_opt_level(OptLevel::Speed);
 
-        let engine = Engine::new(&config)
-            .map_err(|e| crate::error::Error::WasmPlugin(format!("Failed to create WASM engine: {}", e)))?;
+        let engine = Engine::new(&config).map_err(|e| {
+            crate::error::Error::WasmPlugin(format!("Failed to create WASM engine: {}", e))
+        })?;
 
         tracing::info!("🧩 WASM plugin engine initialized (fuel metering enabled)");
 
@@ -432,32 +433,33 @@ impl WasmPlugin {
         &self,
         headers: HashMap<String, String>,
     ) -> std::result::Result<(Store<HostState>, Instance), crate::error::Error> {
-        let mut store = Store::new(&self.engine, HostState::new(
-            self.plugin_config.clone(),
-            self.max_memory_bytes,
-            WasmResourceLimits::default().max_table_elements,
-        ));
+        let mut store = Store::new(
+            &self.engine,
+            HostState::new(
+                self.plugin_config.clone(),
+                self.max_memory_bytes,
+                WasmResourceLimits::default().max_table_elements,
+            ),
+        );
 
         // Set resource limits
         store.limiter(|state| state);
 
         // Add fuel budget
-        store.set_fuel(self.max_fuel).map_err(|e| {
-            crate::error::Error::WasmPlugin(format!("Failed to set fuel: {}", e))
-        })?;
+        store
+            .set_fuel(self.max_fuel)
+            .map_err(|e| crate::error::Error::WasmPlugin(format!("Failed to set fuel: {}", e)))?;
 
         // Link host functions
         let mut linker = Linker::new(&self.engine);
         Self::link_host_functions(&mut linker)?;
 
-        let instance = linker
-            .instantiate(&mut store, &self.module)
-            .map_err(|e| {
-                crate::error::Error::WasmPlugin(format!(
-                    "Failed to instantiate WASM module '{}': {}",
-                    self.name, e
-                ))
-            })?;
+        let instance = linker.instantiate(&mut store, &self.module).map_err(|e| {
+            crate::error::Error::WasmPlugin(format!(
+                "Failed to instantiate WASM module '{}': {}",
+                self.name, e
+            ))
+        })?;
 
         // Set headers in state
         store.data_mut().headers = headers;
@@ -466,7 +468,9 @@ impl WasmPlugin {
     }
 
     /// Link all host functions into the linker.
-    fn link_host_functions(linker: &mut Linker<HostState>) -> std::result::Result<(), crate::error::Error> {
+    fn link_host_functions(
+        linker: &mut Linker<HostState>,
+    ) -> std::result::Result<(), crate::error::Error> {
         // host_log(level: i32, ptr: i32, len: i32)
         linker
             .func_wrap(
@@ -494,7 +498,9 @@ impl WasmPlugin {
                     }
                 },
             )
-            .map_err(|e| crate::error::Error::WasmPlugin(format!("Failed to link host_log: {}", e)))?;
+            .map_err(|e| {
+                crate::error::Error::WasmPlugin(format!("Failed to link host_log: {}", e))
+            })?;
 
         // host_get_header(key_ptr: i32, key_len: i32) -> i64
         // Returns (ptr << 32 | len) of the value written to guest memory,
@@ -563,7 +569,9 @@ impl WasmPlugin {
                     ((val_ptr as i64) << 32) | (val_len as i64)
                 },
             )
-            .map_err(|e| crate::error::Error::WasmPlugin(format!("Failed to link host_get_header: {}", e)))?;
+            .map_err(|e| {
+                crate::error::Error::WasmPlugin(format!("Failed to link host_get_header: {}", e))
+            })?;
 
         // host_set_header(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32)
         linker
@@ -602,7 +610,9 @@ impl WasmPlugin {
                     caller.data_mut().metadata.insert(key, val);
                 },
             )
-            .map_err(|e| crate::error::Error::WasmPlugin(format!("Failed to link host_set_header: {}", e)))?;
+            .map_err(|e| {
+                crate::error::Error::WasmPlugin(format!("Failed to link host_set_header: {}", e))
+            })?;
 
         // host_get_metadata(key_ptr: i32, key_len: i32) -> i64
         linker
@@ -663,7 +673,9 @@ impl WasmPlugin {
                     ((val_ptr as i64) << 32) | (val_len as i64)
                 },
             )
-            .map_err(|e| crate::error::Error::WasmPlugin(format!("Failed to link host_get_metadata: {}", e)))?;
+            .map_err(|e| {
+                crate::error::Error::WasmPlugin(format!("Failed to link host_get_metadata: {}", e))
+            })?;
 
         // host_set_metadata(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32)
         linker
@@ -702,7 +714,9 @@ impl WasmPlugin {
                     caller.data_mut().metadata.insert(key, val);
                 },
             )
-            .map_err(|e| crate::error::Error::WasmPlugin(format!("Failed to link host_set_metadata: {}", e)))?;
+            .map_err(|e| {
+                crate::error::Error::WasmPlugin(format!("Failed to link host_set_metadata: {}", e))
+            })?;
 
         // host_get_config() -> i64
         // Returns a packed (ptr << 32 | len) pointing to the plugin config JSON in guest memory.
@@ -746,7 +760,9 @@ impl WasmPlugin {
                     ((config_ptr as i64) << 32) | (config_len as i64)
                 },
             )
-            .map_err(|e| crate::error::Error::WasmPlugin(format!("Failed to link host_get_config: {}", e)))?;
+            .map_err(|e| {
+                crate::error::Error::WasmPlugin(format!("Failed to link host_get_config: {}", e))
+            })?;
 
         Ok(())
     }
@@ -759,29 +775,23 @@ impl WasmPlugin {
         json_data: &[u8],
     ) -> std::result::Result<i32, crate::error::Error> {
         // First, allocate space in guest memory
-        let alloc = instance
-            .get_func(&mut *store, "alloc")
-            .ok_or_else(|| {
-                crate::error::Error::WasmPlugin(format!(
-                    "WASM module missing 'alloc' export (required for passing data)"
-                ))
-            })?;
+        let alloc = instance.get_func(&mut *store, "alloc").ok_or_else(|| {
+            crate::error::Error::WasmPlugin(format!(
+                "WASM module missing 'alloc' export (required for passing data)"
+            ))
+        })?;
 
         let data_len = json_data.len() as i32;
         let mut alloc_results = [Val::I32(0)];
         alloc
             .call(&mut *store, &[Val::I32(data_len)], &mut alloc_results)
-            .map_err(|e| {
-                crate::error::Error::WasmPlugin(format!("alloc call failed: {}", e))
-            })?;
+            .map_err(|e| crate::error::Error::WasmPlugin(format!("alloc call failed: {}", e)))?;
         let data_ptr = alloc_results[0].unwrap_i32();
 
         // Write data to guest memory
-        let memory = instance
-            .get_memory(&mut *store, "memory")
-            .ok_or_else(|| {
-                crate::error::Error::WasmPlugin("WASM module missing 'memory' export".to_string())
-            })?;
+        let memory = instance.get_memory(&mut *store, "memory").ok_or_else(|| {
+            crate::error::Error::WasmPlugin("WASM module missing 'memory' export".to_string())
+        })?;
         {
             let mem_data = memory.data_mut(&mut *store);
             let start = data_ptr as usize;
@@ -795,29 +805,28 @@ impl WasmPlugin {
         }
 
         // Call the guest function
-        let func = instance
-            .get_func(&mut *store, fn_name)
-            .ok_or_else(|| {
-                crate::error::Error::WasmPlugin(format!("Missing WASM export: '{}'", fn_name))
-            })?;
+        let func = instance.get_func(&mut *store, fn_name).ok_or_else(|| {
+            crate::error::Error::WasmPlugin(format!("Missing WASM export: '{}'", fn_name))
+        })?;
 
         let mut results = [Val::I32(0)];
-        func.call(&mut *store, &[Val::I32(data_ptr), Val::I32(data_len)], &mut results)
-            .map_err(|e| {
-                // Check if this was a fuel exhaustion (OOM / infinite loop protection)
-                let msg = e.to_string();
-                if msg.contains("fuel") {
-                    crate::error::Error::WasmPlugin(format!(
-                        "WASM plugin exceeded CPU budget (fuel exhausted) in '{}'",
-                        fn_name
-                    ))
-                } else {
-                    crate::error::Error::WasmPlugin(format!(
-                        "WASM plugin '{}' trapped: {}",
-                        fn_name, e
-                    ))
-                }
-            })?;
+        func.call(
+            &mut *store,
+            &[Val::I32(data_ptr), Val::I32(data_len)],
+            &mut results,
+        )
+        .map_err(|e| {
+            // Check if this was a fuel exhaustion (OOM / infinite loop protection)
+            let msg = e.to_string();
+            if msg.contains("fuel") {
+                crate::error::Error::WasmPlugin(format!(
+                    "WASM plugin exceeded CPU budget (fuel exhausted) in '{}'",
+                    fn_name
+                ))
+            } else {
+                crate::error::Error::WasmPlugin(format!("WASM plugin '{}' trapped: {}", fn_name, e))
+            }
+        })?;
 
         Ok(results[0].unwrap_i32())
     }
@@ -859,7 +868,8 @@ impl Plugin for WasmPlugin {
             headers.insert("x-client-ip".to_string(), ip.clone());
         }
 
-        let (mut store, instance) = self.create_instance(headers)
+        let (mut store, instance) = self
+            .create_instance(headers)
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
         let result = Self::call_guest_fn(&mut store, &instance, "on_request", &json_bytes)
@@ -877,11 +887,12 @@ impl Plugin for WasmPlugin {
 
         if result != 0 {
             // Guest signaled an error
-            let error_msg = store
-                .data()
-                .guest_output
-                .clone()
-                .unwrap_or_else(|| format!("WASM plugin '{}' rejected the request (code: {})", self.name, result));
+            let error_msg = store.data().guest_output.clone().unwrap_or_else(|| {
+                format!(
+                    "WASM plugin '{}' rejected the request (code: {})",
+                    self.name, result
+                )
+            });
             return Err(error_msg.into());
         }
 
@@ -904,7 +915,8 @@ impl Plugin for WasmPlugin {
         });
         let json_bytes = serde_json::to_vec(&payload)?;
 
-        let (mut store, instance) = self.create_instance(HashMap::new())
+        let (mut store, instance) = self
+            .create_instance(HashMap::new())
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
         let result = Self::call_guest_fn(&mut store, &instance, "on_response", &json_bytes)
@@ -917,11 +929,12 @@ impl Plugin for WasmPlugin {
         );
 
         if result != 0 {
-            let error_msg = store
-                .data()
-                .guest_output
-                .clone()
-                .unwrap_or_else(|| format!("WASM plugin '{}' response hook failed (code: {})", self.name, result));
+            let error_msg = store.data().guest_output.clone().unwrap_or_else(|| {
+                format!(
+                    "WASM plugin '{}' response hook failed (code: {})",
+                    self.name, result
+                )
+            });
             return Err(error_msg.into());
         }
 
@@ -963,7 +976,8 @@ impl Plugin for WasmPlugin {
         });
         let json_bytes = serde_json::to_vec(&payload)?;
 
-        let (mut store, instance) = self.create_instance(current_headers)
+        let (mut store, instance) = self
+            .create_instance(current_headers)
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
         let result = Self::call_guest_fn(&mut store, &instance, "on_subgraph_request", &json_bytes)
@@ -988,16 +1002,12 @@ impl Plugin for WasmPlugin {
         );
 
         if result != 0 {
-            let error_msg = store
-                .data()
-                .guest_output
-                .clone()
-                .unwrap_or_else(|| {
-                    format!(
-                        "WASM plugin '{}' rejected subgraph request to '{}' (code: {})",
-                        self.name, service_name, result
-                    )
-                });
+            let error_msg = store.data().guest_output.clone().unwrap_or_else(|| {
+                format!(
+                    "WASM plugin '{}' rejected subgraph request to '{}' (code: {})",
+                    self.name, service_name, result
+                )
+            });
             return Err(error_msg.into());
         }
 

@@ -268,9 +268,10 @@ mod tests {
         let loader2 = loader1.clone();
 
         // Verify the clone shares the same underlying data
-        assert!(
-            Arc::ptr_eq(&loader1.entity_configs, &loader2.entity_configs)
-        );
+        assert!(Arc::ptr_eq(
+            &loader1.entity_configs,
+            &loader2.entity_configs
+        ));
     }
 
     #[tokio::test]
@@ -408,7 +409,7 @@ mod tests {
             GqlValue::Number(Number::from(3)),
         ]);
         let normalized = NormalizedValue::from(&value);
-        
+
         if let NormalizedValue::List(items) = normalized {
             assert_eq!(items.len(), 3);
         } else {
@@ -447,7 +448,7 @@ mod tests {
     async fn test_representation_key_equality() {
         let repr1 = simple_representation("1");
         let repr2 = simple_representation("1");
-        
+
         let key1 = RepresentationKey::new("User", repr1);
         let key2 = RepresentationKey::new("User", repr2);
 
@@ -457,7 +458,7 @@ mod tests {
     #[tokio::test]
     async fn test_representation_key_different_entity_types() {
         let repr = simple_representation("1");
-        
+
         let key1 = RepresentationKey::new("User", repr.clone());
         let key2 = RepresentationKey::new("Product", repr);
 
@@ -474,7 +475,7 @@ mod tests {
 
         let mut set = HashSet::new();
         set.insert(key1.clone());
-        
+
         // key2 should be found in set since it's equal to key1
         assert!(set.contains(&key2));
     }
@@ -484,7 +485,7 @@ mod tests {
         let repr = simple_representation("1");
         let key = RepresentationKey::new("User", repr);
         let debug_str = format!("{:?}", key);
-        
+
         assert!(debug_str.contains("RepresentationKey"));
     }
 

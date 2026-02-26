@@ -227,10 +227,7 @@ impl QueryWhitelist {
             query_by_id.insert(id.clone(), query.clone());
 
             // Track which IDs map to this hash
-            ids_by_hash
-                .entry(hash)
-                .or_default()
-                .insert(id.clone());
+            ids_by_hash.entry(hash).or_default().insert(id.clone());
         }
 
         Self {
@@ -459,11 +456,7 @@ impl QueryWhitelist {
         self.query_by_id.write().insert(id.clone(), query);
 
         // Add to reverse lookup
-        self.ids_by_hash
-            .write()
-            .entry(hash)
-            .or_default()
-            .insert(id);
+        self.ids_by_hash.write().entry(hash).or_default().insert(id);
     }
 
     /// Remove a query from the whitelist

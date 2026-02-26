@@ -1091,10 +1091,10 @@ mod tests {
             payload: None,
         };
         let pong = ProtocolMessage::pong();
-        
+
         assert_eq!(ping.message_type, MessageType::Ping);
         assert_eq!(pong.message_type, MessageType::Pong);
-        
+
         let json = pong.to_json().unwrap();
         assert!(json.contains("pong"));
     }
@@ -1102,13 +1102,13 @@ mod tests {
     #[test]
     fn test_protocol_message_error() {
         let error = ProtocolMessage::error(
-            "sub1".to_string(), 
-            vec![serde_json::json!({"message": "Something went wrong"})]
+            "sub1".to_string(),
+            vec![serde_json::json!({"message": "Something went wrong"})],
         );
-        
+
         assert_eq!(error.message_type, MessageType::Error);
         assert_eq!(error.id, Some("sub1".to_string()));
-        
+
         let json = error.to_json().unwrap();
         assert!(json.contains("error"));
         assert!(json.contains("Something went wrong"));
@@ -1117,7 +1117,7 @@ mod tests {
     #[test]
     fn test_protocol_message_complete() {
         let complete = ProtocolMessage::complete("sub1".to_string());
-        
+
         assert_eq!(complete.message_type, MessageType::Complete);
         assert_eq!(complete.id, Some("sub1".to_string()));
     }
@@ -1131,11 +1131,11 @@ mod tests {
                 "query": "subscription { userAdded { id } }"
             }
         }"#;
-        
+
         let msg: ProtocolMessage = serde_json::from_str(json).unwrap();
         assert_eq!(msg.message_type, MessageType::Subscribe);
         assert_eq!(msg.id, Some("sub1".to_string()));
-        
+
         let payload = msg.payload.unwrap();
         assert!(payload.get("query").is_some());
     }
@@ -1144,14 +1144,14 @@ mod tests {
     async fn test_registry_cancel() {
         let mut registry = SubscriptionRegistry::default();
         let (tx, mut rx) = mpsc::channel::<()>(1);
-        
+
         registry.add("sub1".to_string(), tx);
-        
+
         // Cancel should remove and send signal
         let cancelled = registry.cancel("sub1").await;
         assert!(cancelled);
         assert!(!registry.contains("sub1"));
-        
+
         // Verify signal received
         assert!(rx.recv().await.is_some());
     }
@@ -1161,13 +1161,13 @@ mod tests {
         let mut registry = SubscriptionRegistry::default();
         let (tx1, mut rx1) = mpsc::channel::<()>(1);
         let (tx2, mut rx2) = mpsc::channel::<()>(1);
-        
+
         registry.add("sub1".to_string(), tx1);
         registry.add("sub2".to_string(), tx2);
-        
+
         registry.cancel_all().await;
         assert!(registry.is_empty());
-        
+
         assert!(rx1.recv().await.is_some());
         assert!(rx2.recv().await.is_some());
     }
@@ -1183,8 +1183,11 @@ mod tests {
     fn test_parse_arguments_basic() {
         let args_str = "id: \"123\", count: 5";
         let args = parse_arguments(args_str).unwrap();
-        
-        assert_eq!(args.get("id"), Some(&serde_json::Value::String("123".to_string())));
+
+        assert_eq!(
+            args.get("id"),
+            Some(&serde_json::Value::String("123".to_string()))
+        );
         assert_eq!(args.get("count"), Some(&serde_json::json!(5)));
     }
 
@@ -1192,7 +1195,7 @@ mod tests {
     fn test_parse_arguments_boolean() {
         let args_str = "active: true, deleted: false";
         let args = parse_arguments(args_str).unwrap();
-        
+
         assert_eq!(args.get("active"), Some(&serde_json::Value::Bool(true)));
         assert_eq!(args.get("deleted"), Some(&serde_json::Value::Bool(false)));
     }
@@ -1201,34 +1204,37 @@ mod tests {
     fn test_parse_arguments_null() {
         let args_str = "value: null";
         let args = parse_arguments(args_str).unwrap();
-        
+
         assert_eq!(args.get("value"), Some(&serde_json::Value::Null));
     }
-    
+
     // We cannot easily test GrpcSubscriptionResolver::parse_subscription directly without mocking GrpcClientPool?
     // Actually GrpcSubscriptionResolver does not use the pool for parsing, only for resolution.
     // The parse_subscription method is on the trait, implemented by the struct.
-    
+
     #[test]
     fn test_grpc_resolver_parse_subscription_valid() {
         let pool = GrpcClientPool::new();
         let resolver = GrpcSubscriptionResolver::new(pool);
-        
+
         let query = "subscription { callback(id: \"123\") { status } }";
         let info = resolver.parse_subscription(query).expect("Should parse");
-        
+
         assert_eq!(info.field_name, "callback");
-        assert_eq!(info.arguments.get("id"), Some(&serde_json::Value::String("123".to_string())));
+        assert_eq!(
+            info.arguments.get("id"),
+            Some(&serde_json::Value::String("123".to_string()))
+        );
     }
 
     #[test]
     fn test_grpc_resolver_parse_subscription_named() {
         let pool = GrpcClientPool::new();
         let resolver = GrpcSubscriptionResolver::new(pool);
-        
+
         let query = "subscription MySub { userUpdates { id } }";
         let info = resolver.parse_subscription(query).expect("Should parse");
-        
+
         assert_eq!(info.field_name, "userUpdates");
     }
 
@@ -1236,7 +1242,7 @@ mod tests {
     fn test_grpc_resolver_parse_subscription_invalid_start() {
         let pool = GrpcClientPool::new();
         let resolver = GrpcSubscriptionResolver::new(pool);
-        
+
         let query = "query { user }";
         let result = resolver.parse_subscription(query);
         assert!(matches!(result, Err(Error::InvalidRequest(_))));
@@ -1246,7 +1252,7 @@ mod tests {
     fn test_grpc_resolver_parse_subscription_malformed() {
         let pool = GrpcClientPool::new();
         let resolver = GrpcSubscriptionResolver::new(pool);
-        
+
         let query = "subscription { }"; // No field
         let result = resolver.parse_subscription(query);
         assert!(matches!(result, Err(Error::InvalidRequest(_))));
@@ -1257,7 +1263,7 @@ mod tests {
         // This exercises json_to_prost_value somewhat indirectly or we can test private if we want?
         // private functions are accessible in mod tests
         // Let's try to unit test build_request_from_variables if possible, but it requires MessageDescriptor.
-        // We can create a simple DynamicMessage if we have a descriptor. 
+        // We can create a simple DynamicMessage if we have a descriptor.
         // Descriptors are hard to synthesize without a file descriptor set.
         // We'll skip complex prost conversions for now unless we mock descriptors.
     }

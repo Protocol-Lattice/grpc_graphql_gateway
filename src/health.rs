@@ -260,7 +260,10 @@ mod tests {
     fn test_healthy_with_message() {
         let response = HealthResponse::healthy_with_message("All systems operational");
         assert_eq!(response.status, HealthStatus::Healthy);
-        assert_eq!(response.message, Some("All systems operational".to_string()));
+        assert_eq!(
+            response.message,
+            Some("All systems operational".to_string())
+        );
         assert!(response.checks.is_empty());
     }
 
@@ -317,12 +320,11 @@ mod tests {
 
     #[test]
     fn test_degraded_to_unhealthy_propagation() {
-        let response = HealthResponse::degraded("Already degraded")
-            .with_check(ComponentHealth {
-                name: "service".to_string(),
-                status: HealthStatus::Unhealthy,
-                message: Some("Critical failure".to_string()),
-            });
+        let response = HealthResponse::degraded("Already degraded").with_check(ComponentHealth {
+            name: "service".to_string(),
+            status: HealthStatus::Unhealthy,
+            message: Some("Critical failure".to_string()),
+        });
 
         // Degraded + Unhealthy = Unhealthy
         assert_eq!(response.status, HealthStatus::Unhealthy);
@@ -394,7 +396,7 @@ mod tests {
     fn test_health_response_serialization() {
         let response = HealthResponse::healthy_with_message("OK");
         let json = serde_json::to_string(&response).unwrap();
-        
+
         assert!(json.contains("healthy"));
         assert!(json.contains("OK"));
     }
@@ -403,7 +405,7 @@ mod tests {
     fn test_health_response_serialization_skip_empty() {
         let response = HealthResponse::healthy();
         let json = serde_json::to_string(&response).unwrap();
-        
+
         // Empty checks and None message should be skipped
         assert!(!json.contains("message"));
         assert!(!json.contains("checks"));
@@ -413,7 +415,7 @@ mod tests {
     fn test_health_response_deserialization() {
         let json = r#"{"status":"healthy","message":"All good"}"#;
         let response: HealthResponse = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(response.status, HealthStatus::Healthy);
         assert_eq!(response.message, Some("All good".to_string()));
     }
@@ -448,7 +450,7 @@ mod tests {
     fn test_into_response_healthy() {
         let response = HealthResponse::healthy();
         let http_response = response.into_response();
-        
+
         assert_eq!(http_response.status(), StatusCode::OK);
     }
 
@@ -456,7 +458,7 @@ mod tests {
     fn test_into_response_degraded() {
         let response = HealthResponse::degraded("Slow performance");
         let http_response = response.into_response();
-        
+
         // Degraded still returns OK (200) but with warning
         assert_eq!(http_response.status(), StatusCode::OK);
     }
@@ -465,7 +467,7 @@ mod tests {
     fn test_into_response_unhealthy() {
         let response = HealthResponse::unhealthy("Service down");
         let http_response = response.into_response();
-        
+
         assert_eq!(http_response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
@@ -473,7 +475,7 @@ mod tests {
     fn test_health_state_new() {
         let pool = GrpcClientPool::new();
         let state = HealthState::new(pool);
-        
+
         assert!(state.custom_check.is_none());
         assert_eq!(state.client_pool.names().len(), 0);
     }
@@ -481,12 +483,11 @@ mod tests {
     #[test]
     fn test_health_state_with_custom_check() {
         let pool = GrpcClientPool::new();
-        let state = HealthState::new(pool).with_custom_check(|| {
-            HealthResponse::healthy_with_message("Custom check passed")
-        });
-        
+        let state = HealthState::new(pool)
+            .with_custom_check(|| HealthResponse::healthy_with_message("Custom check passed"));
+
         assert!(state.custom_check.is_some());
-        
+
         // Execute custom check
         if let Some(check) = &state.custom_check {
             let result = check();
@@ -500,8 +501,11 @@ mod tests {
         let pool = GrpcClientPool::new();
         let state = HealthState::new(pool);
         let cloned = state.clone();
-        
-        assert_eq!(Arc::strong_count(&state.client_pool), Arc::strong_count(&cloned.client_pool));
+
+        assert_eq!(
+            Arc::strong_count(&state.client_pool),
+            Arc::strong_count(&cloned.client_pool)
+        );
     }
 
     #[tokio::test]
@@ -515,9 +519,9 @@ mod tests {
     async fn test_readiness_handler_no_clients() {
         let pool = GrpcClientPool::new();
         let state = Arc::new(HealthState::new(pool));
-        
+
         let response = readiness_handler(State(state)).await;
-        
+
         // Should be degraded when no clients configured
         assert_eq!(response.status, HealthStatus::Degraded);
         assert_eq!(response.checks.len(), 1);
@@ -527,17 +531,17 @@ mod tests {
     #[tokio::test]
     async fn test_readiness_handler_with_clients() {
         use crate::grpc_client::GrpcClient;
-        
+
         let pool = GrpcClientPool::new();
-        
+
         // Create a mock client (using a dummy endpoint - test won't actually connect)
         let client = GrpcClient::connect_lazy("http://localhost:50051", true).unwrap();
         pool.add("test-service", client);
-        
+
         let state = Arc::new(HealthState::new(pool));
-        
+
         let response = readiness_handler(State(state)).await;
-        
+
         // Should be healthy with clients configured
         assert_eq!(response.status, HealthStatus::Healthy);
         assert_eq!(response.checks.len(), 1);
@@ -555,9 +559,9 @@ mod tests {
                 message: Some("Custom check OK".to_string()),
             })
         }));
-        
+
         let response = readiness_handler(State(state)).await;
-        
+
         // Should have both grpc_clients and custom checks
         assert_eq!(response.checks.len(), 2);
         assert!(response.checks.iter().any(|c| c.name == "custom"));
@@ -567,25 +571,28 @@ mod tests {
     async fn test_deep_readiness_handler_no_clients() {
         let pool = GrpcClientPool::new();
         let state = Arc::new(HealthState::new(pool));
-        
+
         let response = deep_readiness_handler(State(state)).await;
-        
+
         assert_eq!(response.status, HealthStatus::Degraded);
-        assert_eq!(response.message, Some("No gRPC clients configured".to_string()));
+        assert_eq!(
+            response.message,
+            Some("No gRPC clients configured".to_string())
+        );
     }
 
     #[tokio::test]
     async fn test_deep_readiness_handler_with_clients() {
         use crate::grpc_client::GrpcClient;
-        
+
         let pool = GrpcClientPool::new();
         let client = GrpcClient::connect_lazy("http://localhost:50051", true).unwrap();
         pool.add("test-service", client);
-        
+
         let state = Arc::new(HealthState::new(pool));
-        
+
         let response = deep_readiness_handler(State(state)).await;
-        
+
         // Should check each client
         assert_eq!(response.checks.len(), 1);
         assert_eq!(response.checks[0].name, "grpc:test-service");
@@ -620,7 +627,7 @@ mod tests {
     fn test_health_response_clone() {
         let original = HealthResponse::healthy_with_message("Test");
         let cloned = original.clone();
-        
+
         assert_eq!(cloned.status, original.status);
         assert_eq!(cloned.message, original.message);
     }
@@ -629,7 +636,7 @@ mod tests {
     fn test_health_response_debug() {
         let response = HealthResponse::healthy();
         let debug_str = format!("{:?}", response);
-        
+
         assert!(debug_str.contains("HealthResponse"));
         assert!(debug_str.contains("Healthy"));
     }
@@ -642,7 +649,7 @@ mod tests {
             message: Some("OK".to_string()),
         };
         let cloned = original.clone();
-        
+
         assert_eq!(cloned.name, original.name);
         assert_eq!(cloned.status, original.status);
         assert_eq!(cloned.message, original.message);

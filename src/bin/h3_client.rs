@@ -71,23 +71,39 @@ async fn run() -> anyhow::Result<()> {
     // ── CLI argument parsing (no external deps, just std::env) ──────────────
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let mut url_str    = "https://127.0.0.1:4000/health".to_string();
+    let mut url_str = "https://127.0.0.1:4000/health".to_string();
     let mut method_str = "GET".to_string();
-    let mut body_str   = String::new();
-    let mut verbose    = false;
-    let mut insecure   = true;  // accept self-signed certs by default
+    let mut body_str = String::new();
+    let mut verbose = false;
+    let mut insecure = true; // accept self-signed certs by default
     let mut repeat: u32 = 1;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--url"     | "-u" => { i += 1; url_str    = args[i].clone(); }
-            "--method"  | "-X" => { i += 1; method_str = args[i].clone(); }
-            "--body"    | "-d" => { i += 1; body_str   = args[i].clone(); }
-            "--repeat"  | "-n" => { i += 1; repeat     = args[i].parse().unwrap_or(1); }
-            "--verbose" | "-v" => { verbose = true; }
-            "--secure"         => { insecure = false; }
-            "--help" | "-h"    => {
+            "--url" | "-u" => {
+                i += 1;
+                url_str = args[i].clone();
+            }
+            "--method" | "-X" => {
+                i += 1;
+                method_str = args[i].clone();
+            }
+            "--body" | "-d" => {
+                i += 1;
+                body_str = args[i].clone();
+            }
+            "--repeat" | "-n" => {
+                i += 1;
+                repeat = args[i].parse().unwrap_or(1);
+            }
+            "--verbose" | "-v" => {
+                verbose = true;
+            }
+            "--secure" => {
+                insecure = false;
+            }
+            "--help" | "-h" => {
                 print_help();
                 return Ok(());
             }
@@ -115,8 +131,14 @@ async fn run() -> anyhow::Result<()> {
     println!("║  Target : {url_str:<51}║");
     println!("║  Method : {method:<51}║");
     println!("║  Server : {server_addr:<51}║");
-    println!("║  TLS    : {} (self-signed ok)                    ║",
-        if insecure { "⚠️  INSECURE" } else { "🔒 Verified " });
+    println!(
+        "║  TLS    : {} (self-signed ok)                    ║",
+        if insecure {
+            "⚠️  INSECURE"
+        } else {
+            "🔒 Verified "
+        }
+    );
     if repeat > 1 {
         println!("║  Repeat : {repeat:<51}║");
     }
@@ -127,23 +149,21 @@ async fn run() -> anyhow::Result<()> {
     // For development we accept self-signed certificates.
     let tls_config = if insecure {
         // Custom verifier: accept any cert (dev only)
-        let mut cfg = rustls::ClientConfig::builder_with_protocol_versions(
-            &[&rustls::version::TLS13],
-        )
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
-        .with_no_client_auth();
+        let mut cfg =
+            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
+                .with_no_client_auth();
         cfg.alpn_protocols = vec![b"h3".to_vec()];
         cfg
     } else {
         // Production: use system root CAs
         let mut root_store = RootCertStore::empty();
         root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let mut cfg = rustls::ClientConfig::builder_with_protocol_versions(
-            &[&rustls::version::TLS13],
-        )
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
+        let mut cfg =
+            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
         cfg.alpn_protocols = vec![b"h3".to_vec()];
         cfg
     };
@@ -175,9 +195,15 @@ async fn run() -> anyhow::Result<()> {
             &host,
             uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/"),
             method.clone(),
-            if body_str.is_empty() { None } else { Some(body_str.as_bytes().to_vec()) },
+            if body_str.is_empty() {
+                None
+            } else {
+                Some(body_str.as_bytes().to_vec())
+            },
             verbose,
-        ).await {
+        )
+        .await
+        {
             Ok((status, headers, body)) => {
                 let elapsed = t0.elapsed();
                 total_ms += elapsed.as_millis();
@@ -187,7 +213,9 @@ async fn run() -> anyhow::Result<()> {
                 println!("✅  HTTP/3 {status}  ({} ms)", elapsed.as_millis());
 
                 if verbose {
-                    println!("\n── Response Headers ──────────────────────────────────────────────");
+                    println!(
+                        "\n── Response Headers ──────────────────────────────────────────────"
+                    );
                     for (k, v) in &headers {
                         println!("  {k}: {}", v.to_str().unwrap_or("<binary>"));
                     }
@@ -197,7 +225,10 @@ async fn run() -> anyhow::Result<()> {
                 let body_str = std::str::from_utf8(&body).unwrap_or("<binary>");
                 // Pretty-print JSON if possible
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(body_str) {
-                    println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json).unwrap_or_default()
+                    );
                 } else {
                     println!("{body_str}");
                 }
@@ -259,10 +290,9 @@ async fn send_h3_request(
     }
 
     // HTTP/3 connection over QUIC
-    let (mut driver, mut send_req) =
-        h3::client::new(h3_quinn::Connection::new(conn))
-            .await
-            .context("HTTP/3 connection negotiation failed")?;
+    let (mut driver, mut send_req) = h3::client::new(h3_quinn::Connection::new(conn))
+        .await
+        .context("HTTP/3 connection negotiation failed")?;
 
     // Drive the h3 connection in background
     let drive = tokio::spawn(async move {
@@ -270,7 +300,11 @@ async fn send_h3_request(
     });
 
     // Build request
-    let content_type = if body.is_some() { "application/json" } else { "" };
+    let content_type = if body.is_some() {
+        "application/json"
+    } else {
+        ""
+    };
     let mut req_builder = http::Request::builder()
         .method(method)
         .uri(format!("https://{host}{path}"))
@@ -305,7 +339,10 @@ async fn send_h3_request(
             .await
             .context("Failed to send HTTP/3 request body")?;
     }
-    stream.finish().await.context("Failed to finish HTTP/3 request stream")?;
+    stream
+        .finish()
+        .await
+        .context("Failed to finish HTTP/3 request stream")?;
 
     // Receive response headers
     let response = stream

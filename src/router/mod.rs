@@ -66,9 +66,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
-use crate::waf::{WafConfig, validate_raw, is_introspection};
-use crate::query_cost_analyzer::{QueryCostConfig, QueryCostAnalyzer};
 use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
+use crate::query_cost_analyzer::{QueryCostAnalyzer, QueryCostConfig};
+use crate::waf::{is_introspection, validate_raw, WafConfig};
 
 /// Configuration for DDoS protection
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,7 +140,8 @@ impl TrackedLimiter {
     }
 
     fn touch(&self) {
-        self.last_seen_secs.store(Self::current_secs(), Ordering::Relaxed);
+        self.last_seen_secs
+            .store(Self::current_secs(), Ordering::Relaxed);
     }
 
     fn current_secs() -> u64 {
@@ -235,7 +236,7 @@ impl DdosProtection {
                 // Clamp to 1 to avoid panic on creation
                 let safe_rps = NonZeroU32::new(self.config.per_ip_rps.max(1)).unwrap();
                 let safe_burst = NonZeroU32::new(self.config.per_ip_burst.max(1)).unwrap();
-                
+
                 let quota = Quota::per_second(safe_rps).allow_burst(safe_burst);
                 let new_limiter = Arc::new(RateLimiter::direct(quota));
                 let new_tracked = Arc::new(TrackedLimiter::new(new_limiter));
@@ -269,13 +270,13 @@ impl DdosProtection {
     pub async fn cleanup_stale_limiters(&self, max_age_secs: u64) {
         let mut limiters = self.ip_limiters.write().await;
         let before = limiters.len();
-        
+
         let now = TrackedLimiter::current_secs();
         limiters.retain(|_, v| {
             let last_seen = v.last_seen_secs.load(Ordering::Relaxed);
             now.saturating_sub(last_seen) < max_age_secs
         });
-        
+
         let after = limiters.len();
         if before != after {
             tracing::debug!("🧹 Cleaned up stale IP limiters: {} -> {}", before, after);
@@ -412,9 +413,9 @@ impl GbpRouter {
                             // Build mTLS client synchronously (we're in a sync constructor)
                             // Use a one-shot runtime for async SVID operations
                             let rt = tokio::runtime::Runtime::new().ok();
-                            let mtls_client = rt.as_ref().and_then(|rt| {
-                                rt.block_on(provider.build_client()).ok()
-                            });
+                            let mtls_client = rt
+                                .as_ref()
+                                .and_then(|rt| rt.block_on(provider.build_client()).ok());
 
                             if let Some(client) = mtls_client {
                                 builder = builder.with_client(client);
@@ -458,10 +459,13 @@ impl GbpRouter {
                 subgraph.name.clone(),
                 builder.build().expect("invalid connector config"),
             );
-            
+
             circuit_breakers.insert(
                 subgraph.name.clone(),
-                Arc::new(CircuitBreaker::new(subgraph.name.clone(), cb_config.clone()))
+                Arc::new(CircuitBreaker::new(
+                    subgraph.name.clone(),
+                    cb_config.clone(),
+                )),
             );
         }
 
@@ -585,10 +589,7 @@ impl GbpRouter {
             match registry.try_collapse(req_key).await {
                 CollapseResult::Follower(receiver) => {
                     tracing::debug!("Request collapsed (follower)");
-                    let gql_val = receiver
-                        .recv()
-                        .await
-                        .map_err(crate::Error::Internal)?;
+                    let gql_val = receiver.recv().await.map_err(crate::Error::Internal)?;
                     // Convert sync_graphql::Value -> serde_json::Value
                     return serde_json::to_value(gql_val).map_err(|e| {
                         crate::Error::Internal(format!("Serialization error: {}", e))
@@ -616,7 +617,12 @@ impl GbpRouter {
                 // Check Circuit Breaker
                 if let Some(cb) = &circuit_breaker {
                     if let Err(e) = cb.allow_request() {
-                        return (name, Err(crate::Error::Internal(e.to_string())), Duration::from_secs(0), force_gbp);
+                        return (
+                            name,
+                            Err(crate::Error::Internal(e.to_string())),
+                            Duration::from_secs(0),
+                            force_gbp,
+                        );
                     }
                 }
 
@@ -629,21 +635,24 @@ impl GbpRouter {
                 let req_start = Instant::now();
                 let res = client.execute("query", args).await;
                 let duration = req_start.elapsed();
-                
+
                 // Update Circuit Breaker
                 if let Some(cb) = &circuit_breaker {
                     match &res {
                         Ok(val) => {
                             // Check for severe GraphQL errors (errors present + no data)
-                            let has_errors = val.get("errors").and_then(|e| e.as_array()).is_some_and(|a| !a.is_empty());
+                            let has_errors = val
+                                .get("errors")
+                                .and_then(|e| e.as_array())
+                                .is_some_and(|a| !a.is_empty());
                             let has_data = val.get("data").is_some_and(|d| !d.is_null());
-                            
+
                             if has_errors && !has_data {
                                 cb.record_failure();
                             } else {
                                 cb.record_success();
                             }
-                        },
+                        }
                         Err(_) => cb.record_failure(),
                     }
                 }
@@ -775,10 +784,7 @@ impl GbpRouter {
             let req_key = RequestKey::new("router", "graphql", cache_key.as_bytes());
             match registry.try_collapse(req_key).await {
                 CollapseResult::Follower(receiver) => {
-                    let gql_val = receiver
-                        .recv()
-                        .await
-                        .map_err(crate::Error::Internal)?;
+                    let gql_val = receiver.recv().await.map_err(crate::Error::Internal)?;
                     return serde_json::to_value(gql_val).map_err(|e| {
                         crate::Error::Internal(format!("Serialization error: {}", e))
                     });
@@ -806,33 +812,36 @@ impl GbpRouter {
                         return (name, Err(crate::Error::Internal(e.to_string())));
                     }
                 }
-            
+
                 let mut args = HashMap::with_capacity(2);
                 args.insert("query".to_string(), serde_json::json!(query_str));
                 if let Some(vars) = variables_clone {
                     args.insert("variables".to_string(), vars);
                 }
-                
+
                 let res = client.execute("query", args).await;
-                
-                 // Update Circuit Breaker
+
+                // Update Circuit Breaker
                 if let Some(cb) = &circuit_breaker {
                     match &res {
                         Ok(val) => {
                             // Check for severe GraphQL errors (errors present + no data)
-                            let has_errors = val.get("errors").and_then(|e| e.as_array()).is_some_and(|a| !a.is_empty());
+                            let has_errors = val
+                                .get("errors")
+                                .and_then(|e| e.as_array())
+                                .is_some_and(|a| !a.is_empty());
                             let has_data = val.get("data").is_some_and(|d| !d.is_null());
-                            
+
                             if has_errors && !has_data {
                                 cb.record_failure();
                             } else {
                                 cb.record_success();
                             }
-                        },
+                        }
                         Err(_) => cb.record_failure(),
                     }
                 }
-                
+
                 (name, res)
             });
         }

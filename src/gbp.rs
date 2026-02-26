@@ -97,7 +97,11 @@ impl GbpEncoder {
     pub fn encode_lz4(&mut self, value: &Value) -> Result<Vec<u8>, std::io::Error> {
         let gbp_data = self.encode(value);
         // Use LZ4 HC (high compression) mode with level 12 for maximum compression
-        let compressed = lz4::block::compress(&gbp_data, Some(lz4::block::CompressionMode::HIGHCOMPRESSION(12)), false)?;
+        let compressed = lz4::block::compress(
+            &gbp_data,
+            Some(lz4::block::CompressionMode::HIGHCOMPRESSION(12)),
+            false,
+        )?;
         let mut result = Vec::with_capacity(4 + compressed.len());
         result.extend_from_slice(&(gbp_data.len() as u32).to_le_bytes());
         result.extend_from_slice(&compressed);
@@ -158,7 +162,7 @@ impl GbpEncoder {
                 if !arr.is_empty() && self.try_encode_columnar(arr, buf) {
                     return;
                 }
-                
+
                 let content_hash = self.fast_array_hash(arr);
                 let array_marker = 0xFFFFFFFF;
                 if let Some(&ref_idx) = self.position_map.get(&(array_marker, content_hash)) {
@@ -174,7 +178,8 @@ impl GbpEncoder {
                 }
 
                 let ref_idx = self.value_counter;
-                self.position_map.insert((array_marker, content_hash), ref_idx);
+                self.position_map
+                    .insert((array_marker, content_hash), ref_idx);
                 self.value_positions.push((start_pos, buf.len()));
                 self.value_counter += 1;
             }
@@ -210,10 +215,13 @@ impl GbpEncoder {
         if arr.len() > 50000 {
             let chunk_size = 25000;
             // Parallel encode chunks
-            let chunks: Vec<Vec<u8>> = arr.par_chunks(chunk_size).map(|chunk| {
-                let mut encoder = GbpEncoder::new();
-                encoder.encode_slice(chunk)
-            }).collect();
+            let chunks: Vec<Vec<u8>> = arr
+                .par_chunks(chunk_size)
+                .map(|chunk| {
+                    let mut encoder = GbpEncoder::new();
+                    encoder.encode_slice(chunk)
+                })
+                .collect();
 
             buf.push(0x0C); // Tag: Parallel Multipart Array
             write_varint(chunks.len() as u32, buf);
@@ -240,9 +248,13 @@ impl GbpEncoder {
         let mut hasher = AHasher::default();
         arr.len().hash(&mut hasher);
         // Only hash first/last components for O(1) speed on large arrays
-        if let Some(first) = arr.first() { self.hash_value_shallow(first, &mut hasher); }
+        if let Some(first) = arr.first() {
+            self.hash_value_shallow(first, &mut hasher);
+        }
         if arr.len() > 1 {
-            if let Some(last) = arr.last() { self.hash_value_shallow(last, &mut hasher); }
+            if let Some(last) = arr.last() {
+                self.hash_value_shallow(last, &mut hasher);
+            }
         }
         hasher.finish()
     }
@@ -253,8 +265,11 @@ impl GbpEncoder {
             Value::Null => 0u8.hash(hasher),
             Value::Bool(b) => b.hash(hasher),
             Value::Number(n) => {
-                if let Some(i) = n.as_i64() { i.hash(hasher); } 
-                else if let Some(f) = n.as_f64() { f.to_bits().hash(hasher); }
+                if let Some(i) = n.as_i64() {
+                    i.hash(hasher);
+                } else if let Some(f) = n.as_f64() {
+                    f.to_bits().hash(hasher);
+                }
             }
             Value::String(s) => s.hash(hasher),
             Value::Array(arr) => {
@@ -269,12 +284,16 @@ impl GbpEncoder {
     }
 
     fn try_encode_columnar(&mut self, arr: &[Value], buf: &mut Vec<u8>) -> bool {
-        if arr.len() < 8 { return false; }
+        if arr.len() < 8 {
+            return false;
+        }
         let first = &arr[0];
-        if !first.is_object() { return false; }
+        if !first.is_object() {
+            return false;
+        }
         let first_obj = first.as_object().unwrap();
         let shape_id = self.get_shape_id_from_map(first_obj);
-        
+
         // Strict shape check: every item must have the *same keys in the same order*.
         // Checking only length is insufficient — different key-sets share the same
         // count but produce different shape_ids, corrupting the columnar layout and
@@ -285,9 +304,16 @@ impl GbpEncoder {
                 Some(o) => o,
                 None => return false,
             };
-            if obj.len() != first_obj.len() { return false; }
+            if obj.len() != first_obj.len() {
+                return false;
+            }
             // Compare keys positionally (serde_json::Map preserves insertion order)
-            if !obj.keys().map(String::as_str).zip(first_keys.iter().copied()).all(|(a, b)| a == b) {
+            if !obj
+                .keys()
+                .map(String::as_str)
+                .zip(first_keys.iter().copied())
+                .all(|(a, b)| a == b)
+            {
                 return false;
             }
         }
@@ -307,27 +333,30 @@ impl GbpEncoder {
             let mut i = 0;
             while i < arr.len() {
                 let val = &arr[i][&key_name];
-                
+
                 // RLE Check: Look ahead for identical values
                 // Only for primitives to avoid expensive deep comparisons on objects/arrays
                 let mut run = 0;
                 if !val.is_object() && !val.is_array() {
                     let mut j = i + 1;
-                    while j < arr.len() && run < 2000000 { // Cap run length to avoid infinite hangs
-                         if &arr[j][&key_name] == val {
-                             run += 1;
-                             j += 1;
-                         } else {
-                             break;
-                         }
+                    while j < arr.len() && run < 2000000 {
+                        // Cap run length to avoid infinite hangs
+                        if &arr[j][&key_name] == val {
+                            run += 1;
+                            j += 1;
+                        } else {
+                            break;
+                        }
                     }
                 }
 
-                if run > 0 { // Threshold of 0 means we RLE even 2 items? No, run is additional items.
-                             // if run >= 2 (so 3+ items), RLE is definitely smaller.
-                             // Tag(1) + Count(1-5) + Value(N) vs Value(N)*Run
-                    
-                    if run >= 15 { // Heuristic: Only RLE massive runs to keep overhead low for micro-runs
+                if run > 0 {
+                    // Threshold of 0 means we RLE even 2 items? No, run is additional items.
+                    // if run >= 2 (so 3+ items), RLE is definitely smaller.
+                    // Tag(1) + Count(1-5) + Value(N) vs Value(N)*Run
+
+                    if run >= 15 {
+                        // Heuristic: Only RLE massive runs to keep overhead low for micro-runs
                         buf.push(0x0B); // RLE Tag
                         write_varint((run + 1) as u32, buf); // count = 1 (current) + run
                         self.encode_recursive(val, buf); // Encode value once
@@ -361,7 +390,7 @@ impl GbpEncoder {
             let idx = self.get_string_idx(k);
             self.key_scratchpad.push(idx);
         }
-        
+
         if let Some(&id) = self.shape_map.get(&self.key_scratchpad) {
             id
         } else {
@@ -459,28 +488,36 @@ impl GbpDecoder {
 
         let mut tag = [0u8; 1];
         if cursor.read_exact(&mut tag).is_err() {
-             return Err("Unexpected EOF".to_string());
+            return Err("Unexpected EOF".to_string());
         }
 
         if tag[0] == 0x08 {
             let idx = read_varint(cursor)?;
             if idx as usize >= self.value_pool.len() {
-                eprintln!("🔥 GBP DECODER ERROR: Requested ref {} but value_pool length is {}", idx, self.value_pool.len());
+                eprintln!(
+                    "🔥 GBP DECODER ERROR: Requested ref {} but value_pool length is {}",
+                    idx,
+                    self.value_pool.len()
+                );
             }
-            return self
-                .value_pool
-                .get(idx as usize)
-                .cloned()
-                .ok_or_else(|| format!("Invalid value reference: requested {} but max is {}", idx, self.value_pool.len().saturating_sub(1)));
+            return self.value_pool.get(idx as usize).cloned().ok_or_else(|| {
+                format!(
+                    "Invalid value reference: requested {} but max is {}",
+                    idx,
+                    self.value_pool.len().saturating_sub(1)
+                )
+            });
         }
 
         // Handle RLE Tag
         if tag[0] == 0x0B {
             let count = read_varint(cursor)? as usize;
-            if count == 0 { return Err("RLE count must be > 0".to_string()); }
+            if count == 0 {
+                return Err("RLE count must be > 0".to_string());
+            }
             // Recursively decode the next value (which is the repeated value)
             let val = self.decode_recursive(cursor)?;
-            
+
             // Set up state for subsequent calls
             if count > 1 {
                 self.rle_count = count - 1;
@@ -656,8 +693,6 @@ fn read_varint_i64(cursor: &mut Cursor<&[u8]>) -> Result<i64, String> {
     Err("Varint too long for i64".to_string())
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -773,14 +808,20 @@ mod tests {
         let encoded = encoder.encode_lz4(&data).unwrap();
         let duration = start.elapsed();
 
-        println!("Encoding Time (LZ4): {:.3}ms", duration.as_secs_f64() * 1000.0);
+        println!(
+            "Encoding Time (LZ4): {:.3}ms",
+            duration.as_secs_f64() * 1000.0
+        );
         println!("Size (LZ4):          {} bytes", encoded.len());
 
         // Gzip Benchmark for comparison
         let start_gzip = std::time::Instant::now();
         let encoded_gzip = encoder.encode_gzip(&data).unwrap();
         let duration_gzip = start_gzip.elapsed();
-        println!("Encoding Time (Gzip): {:.3}ms", duration_gzip.as_secs_f64() * 1000.0);
+        println!(
+            "Encoding Time (Gzip): {:.3}ms",
+            duration_gzip.as_secs_f64() * 1000.0
+        );
         println!("Size (Gzip):         {} bytes", encoded_gzip.len());
 
         // Assert speed < 20ms (relaxed for debug/CI)
@@ -852,7 +893,7 @@ mod tests {
         println!("Verifying data integrity for Behemoth (fast-path)...");
         let mut decoder = GbpDecoder::new();
         let decoded = decoder.decode_lz4(&encoded).expect("Decoding failed");
-        
+
         assert!(decoded.is_object(), "Root is not an object: {:?}", decoded);
         println!("✅ Integrity verified (fast check)");
 
@@ -861,12 +902,12 @@ mod tests {
 
     #[test]
     fn test_gbp_worst_case_compression() {
-        use rand::{Rng, SeedableRng};
         use rand::rngs::StdRng;
-        
+        use rand::{Rng, SeedableRng};
+
         let mut encoder = GbpEncoder::new();
         let mut rng = StdRng::seed_from_u64(42); // Deterministic for reproducibility
-        
+
         // Generate worst-case payload: completely random, unique data with no patterns
         println!("\nGenerating Worst-Case payload (10,000 random users)...");
         let data = json!({
@@ -879,7 +920,7 @@ mod tests {
                         "status": format!("STATUS_{}", rng.gen::<u16>()),
                         "role": format!("Role_{}_{}", i, rng.gen::<u32>()),
                         "randomField1": rng.gen::<f64>(),
-                        "randomField2": format!("random_string_{}_{}_{}", 
+                        "randomField2": format!("random_string_{}_{}_{}",
                             rng.gen::<u64>(), rng.gen::<u64>(), rng.gen::<u64>()),
                         "randomField3": rng.gen::<i64>(),
                         "organization": {
@@ -939,13 +980,23 @@ mod tests {
         let reduction = (1.0 - ratio) * 100.0;
 
         println!("\n--- GBP Worst-Case Compression Test ---");
-        println!("Original JSON size:  {:>12} bytes ({:.2} MB)", 
-            json_bytes.len(), json_bytes.len() as f64 / 1024.0 / 1024.0);
-        println!("GBP Ultra size:      {:>12} bytes ({:.2} MB)", 
-            encoded.len(), encoded.len() as f64 / 1024.0 / 1024.0);
+        println!(
+            "Original JSON size:  {:>12} bytes ({:.2} MB)",
+            json_bytes.len(),
+            json_bytes.len() as f64 / 1024.0 / 1024.0
+        );
+        println!(
+            "GBP Ultra size:      {:>12} bytes ({:.2} MB)",
+            encoded.len(),
+            encoded.len() as f64 / 1024.0 / 1024.0
+        );
         println!("Compression Ratio:   {:>12.2}% reduction", reduction);
-        println!("Encoding Time:       {:>12.2}ms", duration.as_secs_f64() * 1000.0);
-        println!("Throughput:          {:>12.2} MB/s",
+        println!(
+            "Encoding Time:       {:>12.2}ms",
+            duration.as_secs_f64() * 1000.0
+        );
+        println!(
+            "Throughput:          {:>12.2} MB/s",
             (json_bytes.len() as f64 / 1024.0 / 1024.0) / duration.as_secs_f64()
         );
 
@@ -953,50 +1004,67 @@ mod tests {
         println!("Verifying data integrity for Worst-Case...");
         let mut decoder = GbpDecoder::new();
         let decoded = decoder.decode_lz4(&encoded).expect("Decoding failed");
-        
+
         // Verify structure (not full deep equality, which is expensive for large random data)
         assert!(decoded.is_object(), "Root should be an object");
         let decoded_data = decoded.get("data").expect("Missing 'data' field");
         let decoded_users = decoded_data.get("users").expect("Missing 'users' field");
         assert!(decoded_users.is_array(), "Users should be an array");
-        assert_eq!(decoded_users.as_array().unwrap().len(), 10000, "Should have 10000 users");
-        
+        assert_eq!(
+            decoded_users.as_array().unwrap().len(),
+            10000,
+            "Should have 10000 users"
+        );
+
         // Spot check a few users have the expected fields
         let first_user = &decoded_users[0];
         assert!(first_user.get("id").is_some());
         assert!(first_user.get("typename").is_some());
         assert!(first_user.get("organization").is_some());
-        
+
         println!("✅ Integrity verified (structural check)");
 
         // In worst case, we expect compression to be much lower
         // Even with completely random data, GBP structure + LZ4 should provide some compression
         println!("\nℹ️  Note: This is the WORST-CASE scenario with maximum entropy.");
-        println!("   Achieved reduction: {:.2}% (vs 95-99% for typical GraphQL data)", reduction);
+        println!(
+            "   Achieved reduction: {:.2}% (vs 95-99% for typical GraphQL data)",
+            reduction
+        );
     }
 
     #[test]
     fn test_gbp_mid_case_compression() {
         let mut encoder = GbpEncoder::new();
-        
+
         // Define realistic, limited value sets for categorical fields
         let statuses = ["ACTIVE", "INACTIVE", "PENDING", "SUSPENDED", "TRIAL"];
         let roles = ["ADMIN", "MEMBER", "VIEWER", "OWNER", "CONTRIBUTOR", "GUEST"];
         let tiers = ["FREE", "BASIC", "PREMIUM", "ENTERPRISE"];
-        let regions = ["US-EAST", "US-WEST", "EU-CENTRAL", "ASIA-PACIFIC", "SOUTH-AMERICA"];
+        let regions = [
+            "US-EAST",
+            "US-WEST",
+            "EU-CENTRAL",
+            "ASIA-PACIFIC",
+            "SOUTH-AMERICA",
+        ];
         let themes = ["dark", "light", "auto"];
-        
+
         // Simulate 10 different organizations (shared across users)
-        let organizations: Vec<Value> = (0..10).map(|i| json!({
-            "id": format!("org-{}", i),
-            "name": format!("Organization {}", i),
-            "settings": {
-                "theme": themes[i % themes.len()],
-                "notifications": i % 2 == 0,
-                "audit": if i % 3 == 0 { "enabled" } else { "disabled" }
-            }
-        })).collect();
-        
+        let organizations: Vec<Value> = (0..10)
+            .map(|i| {
+                json!({
+                    "id": format!("org-{}", i),
+                    "name": format!("Organization {}", i),
+                    "settings": {
+                        "theme": themes[i % themes.len()],
+                        "notifications": i % 2 == 0,
+                        "audit": if i % 3 == 0 { "enabled" } else { "disabled" }
+                    }
+                })
+            })
+            .collect();
+
         // Generate mid-case payload: realistic mix of shared and unique data
         println!("\nGenerating Mid-Case payload (10,000 users with realistic variation)...");
         let data = json!({
@@ -1041,13 +1109,23 @@ mod tests {
         let reduction = (1.0 - ratio) * 100.0;
 
         println!("\n--- GBP Mid-Case Compression Test ---");
-        println!("Original JSON size:  {:>12} bytes ({:.2} MB)", 
-            json_bytes.len(), json_bytes.len() as f64 / 1024.0 / 1024.0);
-        println!("GBP Ultra size:      {:>12} bytes ({:.2} MB)", 
-            encoded.len(), encoded.len() as f64 / 1024.0 / 1024.0);
+        println!(
+            "Original JSON size:  {:>12} bytes ({:.2} MB)",
+            json_bytes.len(),
+            json_bytes.len() as f64 / 1024.0 / 1024.0
+        );
+        println!(
+            "GBP Ultra size:      {:>12} bytes ({:.2} MB)",
+            encoded.len(),
+            encoded.len() as f64 / 1024.0 / 1024.0
+        );
         println!("Compression Ratio:   {:>12.2}% reduction", reduction);
-        println!("Encoding Time:       {:>12.2}ms", duration.as_secs_f64() * 1000.0);
-        println!("Throughput:          {:>12.2} MB/s",
+        println!(
+            "Encoding Time:       {:>12.2}ms",
+            duration.as_secs_f64() * 1000.0
+        );
+        println!(
+            "Throughput:          {:>12.2} MB/s",
             (json_bytes.len() as f64 / 1024.0 / 1024.0) / duration.as_secs_f64()
         );
 
@@ -1055,19 +1133,26 @@ mod tests {
         println!("Verifying data integrity for Mid-Case...");
         let mut decoder = GbpDecoder::new();
         let decoded = decoder.decode_lz4(&encoded).expect("Decoding failed");
-        
+
         // Verify structure
         assert!(decoded.is_object(), "Root should be an object");
         let decoded_data = decoded.get("data").expect("Missing 'data' field");
         let decoded_users = decoded_data.get("users").expect("Missing 'users' field");
         assert!(decoded_users.is_array(), "Users should be an array");
-        assert_eq!(decoded_users.as_array().unwrap().len(), 10000, "Should have 10000 users");
-        
+        assert_eq!(
+            decoded_users.as_array().unwrap().len(),
+            10000,
+            "Should have 10000 users"
+        );
+
         // Spot check values
         let first_user = &decoded_users[0];
-        assert_eq!(first_user.get("typename").unwrap().as_str().unwrap(), "User");
+        assert_eq!(
+            first_user.get("typename").unwrap().as_str().unwrap(),
+            "User"
+        );
         assert_eq!(first_user.get("id").unwrap().as_i64().unwrap(), 0);
-        
+
         println!("✅ Integrity verified (structural check)");
 
         println!("\nℹ️  Note: This is a MID-CASE scenario with realistic data patterns.");
@@ -1078,9 +1163,13 @@ mod tests {
         println!("   - Mix of repetition and variation");
         println!("   Achieved reduction: {:.2}%", reduction);
         println!("   Expected range: 90-98% (realistic GraphQL data compresses very well)");
-        
+
         // Mid-case should show good compression due to realistic patterns
-        assert!(reduction >= 90.0, "Mid-case reduction was only {:.2}%, expected >= 90%", reduction);
+        assert!(
+            reduction >= 90.0,
+            "Mid-case reduction was only {:.2}%, expected >= 90%",
+            reduction
+        );
     }
 
     #[test]
@@ -1120,14 +1209,14 @@ mod tests {
             "b": "foo",
             "c": "foo"
         });
-        
+
         encoder.encode(&val);
-        
+
         // "foo" implies one entry. Keys "a", "b", "c" are also strings in the pool.
         // So total strings should be "a", "b", "c", "foo".
         // Depending on implementation order: "a", "foo", "b", "c" etc.
         // We just check that "foo" isn't duplicated.
-        
+
         let foo_count = encoder.string_pool.iter().filter(|s| *s == "foo").count();
         assert_eq!(foo_count, 1, "String 'foo' should be pooled and reused");
     }
@@ -1146,7 +1235,11 @@ mod tests {
         // Should have only 1 shape: ["name", "age"] (order depends on map iteration, usually sorted or insertion)
         // Actually typical JSON maps (serde_json::Map) preserve insertion order or are BTreeMaps (sorted keys).
         // serde_json uses BTreeMap by default which sorts keys.
-        assert_eq!(encoder.shape_pool.len(), 1, "Should reuse shape for identical object structures");
+        assert_eq!(
+            encoder.shape_pool.len(),
+            1,
+            "Should reuse shape for identical object structures"
+        );
     }
 
     #[test]
@@ -1154,13 +1247,17 @@ mod tests {
         let mut encoder = GbpEncoder::new();
         // Array with enough items to trigger columnar check (>8), but mixed types to force fallback
         let mut items = Vec::new();
-        for _ in 0..5 { items.push(json!({"a": 1})); }
+        for _ in 0..5 {
+            items.push(json!({"a": 1}));
+        }
         items.push(json!(123)); // Not an object
-        for _ in 0..4 { items.push(json!({"a": 2})); }
-        
+        for _ in 0..4 {
+            items.push(json!({"a": 2}));
+        }
+
         let val = Value::Array(items);
         let encoded = encoder.encode(&val);
-        
+
         let mut decoder = GbpDecoder::new();
         let decoded = decoder.decode(&encoded).unwrap();
         assert_eq!(val, decoded);
@@ -1174,25 +1271,25 @@ mod tests {
         let run_length = 20;
         let mut items = Vec::new();
         for _ in 0..run_length {
-            items.push(json!({"id": 1, "val": 100})); 
+            items.push(json!({"id": 1, "val": 100}));
         }
-        
+
         // This array of objects might trigger columnar encoding first.
         // Inside columnar, for the "val" column, it sees 20 x 100.
         // 100 is a number (primitive), so RLE check runs.
         // Run of 20 > 15, so RLE should activate.
-        
+
         let val = json!(items);
         let encoded = encoder.encode(&val);
-        
+
         // We can't easily inspect the encoded bytes for RLE tag 0x0B without parsing,
         // but we can ensure it roundtrips correctly.
         let mut decoder = GbpDecoder::new();
         let decoded = decoder.decode(&encoded).unwrap();
         assert_eq!(val, decoded);
-        
+
         // Use a simpler case: simple array of integers (non-columnar)
-        // Wait, regular parsing doesn't use RLE? 
+        // Wait, regular parsing doesn't use RLE?
         // `encode_recursive` doesn't seem to implement RLE for standard arrays, only `try_encode_columnar` does for columns.
         // Let's verify `try_encode_columnar` is used.
         // items.len() = 20 > 8. All are objects. All same shape.
@@ -1202,18 +1299,18 @@ mod tests {
     #[test]
     fn test_decoder_error_handling() {
         let mut decoder = GbpDecoder::new();
-        
+
         // 1. Empty data
         assert!(decoder.decode(&[]).is_err());
-        
+
         // 2. Invalid magic
         assert!(decoder.decode(b"BAD\x00").is_err());
-        
+
         // 3. Truncated varint
         let mut data = b"GBP\x08".to_vec();
         data.push(0x80); // Unfinished varint
         assert!(decoder.decode(&data).is_err());
-        
+
         // 4. Unknown tag
         // Construct valid header but invalid body tag
         let mut valid_header = b"GBP\x08\x00\x00".to_vec(); // 0 strings, 0 shapes
@@ -1229,11 +1326,11 @@ mod tests {
         for _ in 0..depth {
             current = json!({ "next": current });
         }
-        
+
         let encoded = encoder.encode(&current);
         let mut decoder = GbpDecoder::new();
         let decoded = decoder.decode(&encoded).unwrap();
-        
+
         assert_eq!(current, decoded);
     }
 }

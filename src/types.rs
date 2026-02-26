@@ -418,16 +418,20 @@ mod tests {
     #[test]
     fn test_graphql_request_complex_variables() {
         let request = GraphQLRequest {
-            query: "mutation CreateUser($input: UserInput!) { createUser(input: $input) { id } }".to_string(),
+            query: "mutation CreateUser($input: UserInput!) { createUser(input: $input) { id } }"
+                .to_string(),
             operation_name: Some("CreateUser".to_string()),
             variables: {
                 let mut vars = HashMap::new();
-                vars.insert("input".to_string(), json!({
-                    "name": "Alice",
-                    "email": "alice@example.com",
-                    "age": 30,
-                    "tags": ["developer", "rust"]
-                }));
+                vars.insert(
+                    "input".to_string(),
+                    json!({
+                        "name": "Alice",
+                        "email": "alice@example.com",
+                        "age": 30,
+                        "tags": ["developer", "rust"]
+                    }),
+                );
                 vars
             },
         };

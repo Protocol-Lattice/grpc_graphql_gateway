@@ -836,21 +836,24 @@ mod tests {
         // iter().take(cutoff).
         // It removes 110 items (sorted by time).
         // This clears the WHOLE cache if len > max. Use verification in test.
-        
-        // Actually, if I look at the code: 
+
+        // Actually, if I look at the code:
         // if state.queries.len() > self.config.max_queries (10)
         //   prune_queries()
         //     cutoff = 20 - 10 + 100 = 110.
         //     remove 110 oldest.
-        // All 20 are removed. 
-        // This seems like a bug in the implementation or intended "bulk prune". 
+        // All 20 are removed.
+        // This seems like a bug in the implementation or intended "bulk prune".
         // But for the test, I expect count to be <= max_queries (or 0).
         assert!(snapshot.top_queries.len() <= 10);
     }
 
     #[test]
     fn test_prune_fields() {
-        let config = AnalyticsConfig { max_fields: 5, ..Default::default() };
+        let config = AnalyticsConfig {
+            max_fields: 5,
+            ..Default::default()
+        };
         let analytics = QueryAnalytics::new(config);
 
         for i in 0..10 {
@@ -863,13 +866,20 @@ mod tests {
 
     #[test]
     fn test_prune_errors() {
-        let config = AnalyticsConfig { max_errors: 5, ..Default::default() };
+        let config = AnalyticsConfig {
+            max_errors: 5,
+            ..Default::default()
+        };
         let analytics = QueryAnalytics::new(config);
 
         for i in 0..10 {
             analytics.record_query(
-                "query", None, "query", Duration::from_millis(1), true,
-                Some((&format!("ERR_{}", i), "msg"))
+                "query",
+                None,
+                "query",
+                Duration::from_millis(1),
+                true,
+                Some((&format!("ERR_{}", i), "msg")),
             );
         }
 
@@ -880,7 +890,14 @@ mod tests {
     #[test]
     fn test_reset() {
         let analytics = QueryAnalytics::new(AnalyticsConfig::default());
-        analytics.record_query("query { id }", None, "query", Duration::from_millis(10), false, None);
+        analytics.record_query(
+            "query { id }",
+            None,
+            "query",
+            Duration::from_millis(10),
+            false,
+            None,
+        );
         assert_eq!(analytics.get_snapshot().total_requests, 1);
 
         analytics.reset();
@@ -891,7 +908,7 @@ mod tests {
     #[test]
     fn test_analytics_guard() {
         let analytics = create_analytics(AnalyticsConfig::default());
-        
+
         {
             let mut guard = AnalyticsGuard::new(
                 analytics.clone(),

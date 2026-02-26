@@ -107,8 +107,7 @@ impl LiveQueryConfig {
 }
 
 /// Strategy for detecting when to push live query updates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LiveQueryStrategy {
     /// Push updates when invalidation triggers fire (recommended)
     #[default]
@@ -118,7 +117,6 @@ pub enum LiveQueryStrategy {
     /// Compare response hashes to detect changes
     HashDiff,
 }
-
 
 impl std::str::FromStr for LiveQueryStrategy {
     type Err = ();
@@ -421,7 +419,7 @@ impl LiveQueryStore {
         sender: mpsc::Sender<LiveQueryUpdate>,
     ) -> Result<(), LiveQueryError> {
         let queries = self.queries.read();
-        
+
         // Check global limit
         if queries.len() >= self.config.max_total {
             return Err(LiveQueryError::TooManyQueries {
@@ -522,9 +520,7 @@ impl LiveQueryStore {
                 .unwrap_or_default()
         };
 
-        ids.iter()
-            .filter_map(|id| self.unregister(id))
-            .collect()
+        ids.iter().filter_map(|id| self.unregister(id)).collect()
     }
 
     /// Broadcast an invalidation event
@@ -533,7 +529,7 @@ impl LiveQueryStore {
 
         // Find affected subscriptions
         let mut affected = HashSet::new();
-        
+
         // Check exact trigger matches
         let trigger_pattern = format!("{}.{}", event.type_name, event.action);
         let wildcard_type = format!("*.{}", event.action);
@@ -541,7 +537,12 @@ impl LiveQueryStore {
         let wildcard_all = "*.*".to_string();
 
         let trigger_index = self.trigger_index.read();
-        for pattern in [trigger_pattern, wildcard_type, wildcard_action, wildcard_all] {
+        for pattern in [
+            trigger_pattern,
+            wildcard_type,
+            wildcard_action,
+            wildcard_all,
+        ] {
             if let Some(ids) = trigger_index.get(&pattern) {
                 affected.extend(ids.iter().cloned());
             }
@@ -597,10 +598,12 @@ impl LiveQueryStore {
             cache_control: None,  // Can be set by caller for advanced features
             changed_fields: None, // Can be set by caller for field-level invalidation
             batched: None,        // Can be set by caller for batch invalidation
-            timestamp: Some(std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()),
+            timestamp: Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            ),
         };
 
         sender
@@ -623,7 +626,7 @@ impl LiveQueryStore {
     pub fn get_for_connection(&self, connection_id: &str) -> Vec<ActiveLiveQuery> {
         let connection_index = self.connection_index.read();
         let ids = connection_index.get(connection_id);
-        
+
         if let Some(ids) = ids {
             let queries = self.queries.read();
             ids.iter()
@@ -635,7 +638,11 @@ impl LiveQueryStore {
     }
 
     /// Check if a query operation supports live mode
-    pub fn is_live_enabled(&self, operation_name: &str, live_query_configs: &AHashMap<String, LiveQueryOperationConfig>) -> bool {
+    pub fn is_live_enabled(
+        &self,
+        operation_name: &str,
+        live_query_configs: &AHashMap<String, LiveQueryOperationConfig>,
+    ) -> bool {
         live_query_configs.contains_key(operation_name)
     }
 
@@ -698,7 +705,7 @@ lazy_static::lazy_static! {
 }
 
 /// Get the global live query store
-/// 
+///
 /// This returns a reference to the singleton store that is shared across
 /// all WebSocket connections and can be used by mutations to trigger invalidations.
 pub fn global_live_query_store() -> SharedLiveQueryStore {
@@ -810,21 +817,21 @@ pub fn has_live_directive(query: &str) -> bool {
     if normalized.trim_end().ends_with("@live") {
         return true;
     }
-    
+
     false
 }
 
 /// Strip the `@live` directive from a GraphQL query.
-/// 
+///
 /// This is necessary because async-graphql doesn't support custom client directives
 /// without explicit registration. We detect the directive, store its presence, then
 /// strip it before executing the query.
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// use grpc_graphql_gateway::live_query::strip_live_directive;
-/// 
+///
 /// let query = "query @live { user { name } }";
 /// let stripped = strip_live_directive(query);
 /// assert_eq!(stripped, "query  { user { name } }");
@@ -833,7 +840,7 @@ pub fn strip_live_directive(query: &str) -> String {
     // Simple regex-like replacement for @live directive
     // Handles common patterns: @live, @live(), @live(throttle: 100)
     let mut result = query.to_string();
-    
+
     // Pattern 1: @live with arguments - @live(...)
     if let Some(start) = result.find("@live(") {
         // Find matching closing paren
@@ -858,17 +865,17 @@ pub fn strip_live_directive(query: &str) -> String {
         // Pattern 2: Simple @live without arguments
         result = result.replace("@live", "");
     }
-    
+
     result
 }
 
 /// Detect field-level changes between two JSON values
 /// Returns a list of changed fields with their old and new values
-/// 
+///
 /// # Example
 /// ```
 /// use grpc_graphql_gateway::live_query::detect_field_changes;
-/// 
+///
 /// let old = serde_json::json!({"name": "Alice", "age": 30});
 /// let new = serde_json::json!({"name": "Alice", "age": 31});
 /// let changes = detect_field_changes(&old, &new, "", 0, 10);
@@ -909,7 +916,13 @@ pub fn detect_field_changes(
                     (Some(old_v), Some(new_v)) => {
                         if old_v != new_v {
                             // Recurse for nested objects/arrays
-                            let nested = detect_field_changes(old_v, new_v, &field_path, depth + 1, max_depth);
+                            let nested = detect_field_changes(
+                                old_v,
+                                new_v,
+                                &field_path,
+                                depth + 1,
+                                max_depth,
+                            );
                             if nested.is_empty() {
                                 // Leaf change
                                 changes.push(FieldChange {
@@ -951,7 +964,8 @@ pub fn detect_field_changes(
 
                 match (old_val, new_val) {
                     (Some(old_v), Some(new_v)) if old_v != new_v => {
-                        let nested = detect_field_changes(old_v, new_v, &field_path, depth + 1, max_depth);
+                        let nested =
+                            detect_field_changes(old_v, new_v, &field_path, depth + 1, max_depth);
                         if nested.is_empty() {
                             changes.push(FieldChange {
                                 field_path: field_path.clone(),
@@ -996,24 +1010,21 @@ pub fn detect_field_changes(
 }
 
 /// Generate cache control hints based on data volatility
-/// 
+///
 /// # Example
 /// ```
 /// use grpc_graphql_gateway::live_query::{generate_cache_control, DataVolatility};
-/// 
+///
 /// let cache = generate_cache_control(DataVolatility::Low, None);
 /// assert_eq!(cache.max_age, 300); // 5 minutes
 /// ```
-pub fn generate_cache_control(
-    volatility: DataVolatility,
-    etag: Option<String>,
-) -> CacheControl {
+pub fn generate_cache_control(volatility: DataVolatility, etag: Option<String>) -> CacheControl {
     let max_age = match volatility {
-        DataVolatility::VeryHigh => 0,           // No caching
-        DataVolatility::High => 5,               // 5 seconds
-        DataVolatility::Medium => 30,            // 30 seconds
-        DataVolatility::Low => 300,              // 5 minutes
-        DataVolatility::VeryLow => 3600,         // 1 hour
+        DataVolatility::VeryHigh => 0,   // No caching
+        DataVolatility::High => 5,       // 5 seconds
+        DataVolatility::Medium => 30,    // 30 seconds
+        DataVolatility::Low => 300,      // 5 minutes
+        DataVolatility::VeryLow => 3600, // 1 hour
     };
 
     CacheControl {
@@ -1026,11 +1037,11 @@ pub fn generate_cache_control(
 
 /// Parse query arguments for filtered live queries
 /// Supports simple key:value parsing for filters
-/// 
+///
 /// # Example
 /// ```
 /// use grpc_graphql_gateway::live_query::parse_query_arguments;
-/// 
+///
 /// let query = "users(status: ONLINE, limit: 10)";
 /// let args = parse_query_arguments(query);
 /// assert_eq!(args.get("status"), Some(&"ONLINE".to_string()));
@@ -1059,25 +1070,22 @@ pub fn parse_query_arguments(query: &str) -> AHashMap<String, String> {
 
 /// Check if query result matches filter criteria
 /// Supports filtered live queries like: users(status: ONLINE) @live
-/// 
+///
 /// # Example
 /// ```
 /// use grpc_graphql_gateway::live_query::matches_filter;
 /// use ahash::AHashMap;
-/// 
+///
 /// let mut filter = AHashMap::new();
 /// filter.insert("status".to_string(), "ONLINE".to_string());
-/// 
+///
 /// let data = serde_json::json!({"status": "ONLINE", "name": "Alice"});
 /// assert!(matches_filter(&filter, &data));
-/// 
+///
 /// let data2 = serde_json::json!({"status": "OFFLINE", "name": "Bob"});
 /// assert!(!matches_filter(&filter, &data2));
 /// ```
-pub fn matches_filter(
-    filter: &AHashMap<String, String>,
-    entity_data: &serde_json::Value,
-) -> bool {
+pub fn matches_filter(filter: &AHashMap<String, String>, entity_data: &serde_json::Value) -> bool {
     if filter.is_empty() {
         return true; // No filter = match all
     }
@@ -1092,7 +1100,7 @@ pub fn matches_filter(
                     serde_json::Value::Bool(b) => b.to_string(),
                     _ => actual_value.to_string(),
                 };
-                
+
                 if &actual_str != expected_value {
                     return false;
                 }
@@ -1151,10 +1159,12 @@ mod tests {
     #[test]
     fn test_has_live_directive() {
         assert!(has_live_directive("query @live { user { name } }"));
-        assert!(has_live_directive("query GetUser @live { user(id: 1) { name } }"));
+        assert!(has_live_directive(
+            "query GetUser @live { user(id: 1) { name } }"
+        ));
         assert!(has_live_directive("query @live\n{ user { name } }"));
         assert!(has_live_directive("query @live(throttle: 100) { user }"));
-        
+
         assert!(!has_live_directive("query { user { name } }"));
         assert!(!has_live_directive("# @live\nquery { user { name } }"));
     }
@@ -1164,10 +1174,10 @@ mod tests {
         let config = LiveQueryConfig::default();
         assert_eq!(config.default_throttle_ms, 100);
         assert_eq!(config.max_per_connection, 10);
-        
+
         let prod = LiveQueryConfig::production();
         assert_eq!(prod.max_total, 5000);
-        
+
         let dev = LiveQueryConfig::development();
         assert_eq!(dev.max_total, 50000);
         assert_eq!(dev.default_throttle_ms, 50);
@@ -1175,21 +1185,42 @@ mod tests {
 
     #[test]
     fn test_strategy_parsing() {
-        assert_eq!(LiveQueryStrategy::from_str("INVALIDATION"), Ok(LiveQueryStrategy::Invalidation));
-        assert_eq!(LiveQueryStrategy::from_str("POLLING"), Ok(LiveQueryStrategy::Polling));
-        assert_eq!(LiveQueryStrategy::from_str("HASH_DIFF"), Ok(LiveQueryStrategy::HashDiff));
-        assert_eq!(LiveQueryStrategy::from_str("HashDiff"), Ok(LiveQueryStrategy::HashDiff));
+        assert_eq!(
+            LiveQueryStrategy::from_str("INVALIDATION"),
+            Ok(LiveQueryStrategy::Invalidation)
+        );
+        assert_eq!(
+            LiveQueryStrategy::from_str("POLLING"),
+            Ok(LiveQueryStrategy::Polling)
+        );
+        assert_eq!(
+            LiveQueryStrategy::from_str("HASH_DIFF"),
+            Ok(LiveQueryStrategy::HashDiff)
+        );
+        assert_eq!(
+            LiveQueryStrategy::from_str("HashDiff"),
+            Ok(LiveQueryStrategy::HashDiff)
+        );
         assert!(LiveQueryStrategy::from_str("Unknown").is_err());
     }
 
     #[test]
     fn test_strip_live_directive() {
         // Basic usage
-        assert_eq!(strip_live_directive("query @live { foo }"), "query  { foo }");
+        assert_eq!(
+            strip_live_directive("query @live { foo }"),
+            "query  { foo }"
+        );
         // With arguments
-        assert_eq!(strip_live_directive("query @live(throttle: 100) { foo }"), "query  { foo }");
+        assert_eq!(
+            strip_live_directive("query @live(throttle: 100) { foo }"),
+            "query  { foo }"
+        );
         // Nested parenthesis
-        assert_eq!(strip_live_directive("query @live(a: (b)) { foo }"), "query  { foo }");
+        assert_eq!(
+            strip_live_directive("query @live(a: (b)) { foo }"),
+            "query  { foo }"
+        );
         // Whitespace handling
         let stripped = strip_live_directive("query @live\n{ foo }");
         assert!(!stripped.contains("@live"));
@@ -1262,7 +1293,10 @@ mod tests {
         assert_eq!(store.get("sub-1").unwrap().connection_id, "conn-1");
 
         // Send Update
-        store.send_update("sub-1", serde_json::json!({"data": "test"}), true).await.unwrap();
+        store
+            .send_update("sub-1", serde_json::json!({"data": "test"}), true)
+            .await
+            .unwrap();
         let update = rx.recv().await.unwrap();
         assert_eq!(update.id, "sub-1");
         assert!(update.is_initial);
@@ -1279,7 +1313,10 @@ mod tests {
         assert_eq!(store.stats().active_count, 0);
 
         // Fail to send update to unregistered
-        assert!(store.send_update("sub-1", serde_json::json!({}), false).await.is_err());
+        assert!(store
+            .send_update("sub-1", serde_json::json!({}), false)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -1343,10 +1380,37 @@ mod tests {
     fn test_unregister_connection() {
         let store = LiveQueryStore::new();
         let (tx, _rx) = mpsc::channel(1);
-        
-        store.register(ActiveLiveQuery { id: "1".into(), connection_id: "c1".into(), ..default_query() }, tx.clone()).unwrap();
-        store.register(ActiveLiveQuery { id: "2".into(), connection_id: "c1".into(), ..default_query() }, tx.clone()).unwrap();
-        store.register(ActiveLiveQuery { id: "3".into(), connection_id: "c2".into(), ..default_query() }, tx.clone()).unwrap();
+
+        store
+            .register(
+                ActiveLiveQuery {
+                    id: "1".into(),
+                    connection_id: "c1".into(),
+                    ..default_query()
+                },
+                tx.clone(),
+            )
+            .unwrap();
+        store
+            .register(
+                ActiveLiveQuery {
+                    id: "2".into(),
+                    connection_id: "c1".into(),
+                    ..default_query()
+                },
+                tx.clone(),
+            )
+            .unwrap();
+        store
+            .register(
+                ActiveLiveQuery {
+                    id: "3".into(),
+                    connection_id: "c2".into(),
+                    ..default_query()
+                },
+                tx.clone(),
+            )
+            .unwrap();
 
         assert_eq!(store.get_for_connection("c1").len(), 2);
 
@@ -1360,12 +1424,12 @@ mod tests {
     fn test_prune_expired() {
         let store = LiveQueryStore::new();
         let (tx, _rx) = mpsc::channel(1);
-        
+
         let mut q_expired = default_query();
         q_expired.id = "exp".to_string();
         q_expired.ttl_seconds = 1;
         q_expired.created_at = Instant::now() - Duration::from_secs(2);
-        
+
         let mut q_active = default_query();
         q_active.id = "act".to_string();
         q_active.ttl_seconds = 100;

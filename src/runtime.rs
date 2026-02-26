@@ -4,6 +4,10 @@ use crate::analytics::{AnalyticsConfig, SharedQueryAnalytics};
 use crate::cache::{CacheConfig, CacheLookupResult, SharedResponseCache};
 use crate::circuit_breaker::{CircuitBreakerConfig, SharedCircuitBreakerRegistry};
 use crate::compression::{create_compression_layer, CompressionConfig};
+use crate::defer::{
+    extract_deferred_fragments, format_initial_part, format_subsequent_part, has_defer_directive,
+    strip_defer_directives, DeferConfig, DeferredExecution, DeferredPart, MULTIPART_CONTENT_TYPE,
+};
 use crate::error::{GraphQLError, Result};
 use crate::grpc_client::GrpcClientPool;
 use crate::health::{health_handler, readiness_handler, HealthState};
@@ -16,15 +20,10 @@ use crate::middleware::{Context, Middleware};
 use crate::persisted_queries::{
     process_apq_request, PersistedQueryConfig, PersistedQueryError, SharedPersistedQueryStore,
 };
+use crate::plugin::PluginRegistry;
 use crate::query_whitelist::{QueryWhitelistConfig, SharedQueryWhitelist};
 use crate::request_collapsing::{RequestCollapsingConfig, SharedRequestCollapsingRegistry};
 use crate::schema::{DynamicSchema, GrpcResponseCache};
-use crate::defer::{
-    has_defer_directive, strip_defer_directives, extract_deferred_fragments,
-    DeferConfig, DeferredExecution, DeferredPart,
-    format_initial_part, format_subsequent_part, MULTIPART_CONTENT_TYPE,
-};
-use crate::plugin::PluginRegistry;
 use async_graphql::ServerError;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use axum::{
@@ -37,8 +36,8 @@ use axum::{
     routing::{get, get_service, post},
     Extension, Router,
 };
-use futures::{SinkExt, StreamExt};
 use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -317,7 +316,7 @@ impl ServeMux {
         gql_request = gql_request.data(GrpcResponseCache::default());
 
         let response = self.schema.execute(gql_request).await;
-        
+
         // Plugin Hook: on_response
         self.plugins.on_response(&ctx, &response).await?;
 
@@ -360,8 +359,8 @@ impl ServeMux {
                 is_live = is_live_query,
                 "Live query detected, stripping @live directive"
             );
-            let mut new_request = async_graphql::Request::new(stripped_query)
-                .variables(processed_request.variables);
+            let mut new_request =
+                async_graphql::Request::new(stripped_query).variables(processed_request.variables);
             if let Some(op_name) = processed_request.operation_name {
                 new_request = new_request.operation_name(op_name);
             }
@@ -369,7 +368,6 @@ impl ServeMux {
         } else {
             processed_request
         };
-
 
         // WAF Security Check: Validate request for SQL Injection patterns
         if let Err(err) = crate::waf::validate_request(&processed_request) {
@@ -782,8 +780,7 @@ impl ServeMux {
         let router = Router::new();
         let router = if use_fast_path {
             // When fast path is enabled, still route @defer queries through the standard handler
-            router
-                .route("/graphql", post(handle_graphql_fast_or_defer))
+            router.route("/graphql", post(handle_graphql_fast_or_defer))
         } else {
             router.route("/graphql", post(handle_graphql_post))
         };
@@ -889,7 +886,9 @@ impl ServeMux {
             // Permissions Policy - Limit browser features
             headers.insert(
                 axum::http::header::HeaderName::from_static("permissions-policy"),
-                axum::http::HeaderValue::from_static("camera=(), microphone=(), geolocation=(), browsing-topics=(), payment=()"),
+                axum::http::HeaderValue::from_static(
+                    "camera=(), microphone=(), geolocation=(), browsing-topics=(), payment=()",
+                ),
             );
 
             // DNS Prefetch Control - Privacy
@@ -940,9 +939,7 @@ impl ServeMux {
 
         // Add health check routes if enabled
         if health_checks_enabled {
-            let health_state = Arc::new(HealthState::new(
-                client_pool.unwrap_or_default(),
-            ));
+            let health_state = Arc::new(HealthState::new(client_pool.unwrap_or_default()));
             router = router
                 .route("/health", get(health_handler))
                 .route("/ready", get(readiness_handler).with_state(health_state));
@@ -1306,8 +1303,8 @@ async fn handle_graphql_defer(
 
     // Strip @defer directives and execute the full query eagerly
     let stripped_query = strip_defer_directives(&query);
-    let mut eager_request = async_graphql::Request::new(stripped_query)
-        .variables(gql_request.variables);
+    let mut eager_request =
+        async_graphql::Request::new(stripped_query).variables(gql_request.variables);
     if let Some(op_name) = gql_request.operation_name {
         eager_request = eager_request.operation_name(op_name);
     }
@@ -1321,9 +1318,9 @@ async fn handle_graphql_defer(
     let full_response = mux.handle_http(headers, eager_request).await;
 
     // Convert to serde_json::Value for splitting
-    let full_json = serde_json::to_value(&full_response).unwrap_or_else(|_| {
-        serde_json::json!({"data": null, "errors": [{"message": "Serialization failed"}]})
-    });
+    let full_json = serde_json::to_value(&full_response).unwrap_or_else(
+        |_| serde_json::json!({"data": null, "errors": [{"message": "Serialization failed"}]}),
+    );
 
     // Create the deferred execution engine
     let boundary = config.multipart_boundary.clone();
@@ -1494,7 +1491,10 @@ pub fn build_tcp_listener_tuned(addr: &str) -> std::io::Result<std::net::TcpList
     use std::net::SocketAddr;
 
     let addr: SocketAddr = addr.parse().map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("invalid addr: {e}"))
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid addr: {e}"),
+        )
     })?;
 
     let socket = socket2::Socket::new(
@@ -1561,13 +1561,12 @@ pub async fn serve_reuseport(
             ))
         })?;
 
-        std_listener.set_nonblocking(true).map_err(|e| {
-            crate::error::Error::Internal(format!("set_nonblocking failed: {e}"))
-        })?;
+        std_listener
+            .set_nonblocking(true)
+            .map_err(|e| crate::error::Error::Internal(format!("set_nonblocking failed: {e}")))?;
 
-        let listener = tokio::net::TcpListener::from_std(std_listener).map_err(|e| {
-            crate::error::Error::Internal(format!("from_std failed: {e}"))
-        })?;
+        let listener = tokio::net::TcpListener::from_std(std_listener)
+            .map_err(|e| crate::error::Error::Internal(format!("from_std failed: {e}")))?;
 
         let app = app.clone();
         let addr_clone = addr_owned.clone();
@@ -1615,9 +1614,9 @@ async fn handle_live_query_ws(
 async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
     use std::collections::HashMap;
     use tokio::sync::mpsc;
-    
+
     let (sender, mut receiver) = socket.split();
-    
+
     #[derive(serde::Deserialize)]
     struct WsMessage {
         #[serde(rename = "type")]
@@ -1625,7 +1624,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
         id: Option<String>,
         payload: Option<serde_json::Value>,
     }
-    
+
     #[derive(serde::Serialize, Clone)]
     struct WsResponse {
         #[serde(rename = "type")]
@@ -1635,7 +1634,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
         #[serde(skip_serializing_if = "Option::is_none")]
         payload: Option<serde_json::Value>,
     }
-    
+
     // Track active live subscriptions
     #[derive(Clone)]
     struct LiveSubscription {
@@ -1646,31 +1645,31 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
         triggers: Vec<String>,
         is_live: bool,
     }
-    
+
     // Track compression preference (negotiated during connection_init)
     let use_gbp_compression = Arc::new(parking_lot::RwLock::new(false));
-    
+
     let mut connection_initialized = false;
-    let active_subscriptions: Arc<parking_lot::RwLock<HashMap<String, LiveSubscription>>> = 
+    let active_subscriptions: Arc<parking_lot::RwLock<HashMap<String, LiveSubscription>>> =
         Arc::new(parking_lot::RwLock::new(HashMap::new()));
-    
+
     // Channel to send messages to the WebSocket
     let (ws_tx, mut ws_rx) = mpsc::channel::<WsResponse>(100);
-    
+
     // Get live query store for invalidation events
     let live_query_store = crate::live_query::create_live_query_store();
     let mut invalidation_rx = live_query_store.subscribe_invalidations();
-    
+
     // Spawn task to forward messages to WebSocket
     let _ws_tx_clone = ws_tx.clone();
     let sender = Arc::new(tokio::sync::Mutex::new(sender));
     let sender_clone = sender.clone();
-    
+
     let use_compression_clone = use_gbp_compression.clone();
     let forward_task = tokio::spawn(async move {
         while let Some(msg) = ws_rx.recv().await {
             let mut sender = sender_clone.lock().await;
-            
+
             // Check if GBP compression is enabled for this connection
             if *use_compression_clone.read() {
                 // Use GBP binary compression
@@ -1684,19 +1683,30 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                                 "compressed": true
                             });
                             let envelope_json = serde_json::to_string(&envelope).unwrap();
-                            
+
                             // Send envelope + binary payload as separate frames
                             // Frame 1: JSON envelope
-                            if sender.send(Message::Text(envelope_json.into())).await.is_err() {
+                            if sender
+                                .send(Message::Text(envelope_json.into()))
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                             // Frame 2: Binary GBP payload
-                            if sender.send(Message::Binary(compressed.into())).await.is_err() {
+                            if sender
+                                .send(Message::Binary(compressed.into()))
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to compress with GBP, falling back to JSON: {}", e);
+                            tracing::warn!(
+                                "Failed to compress with GBP, falling back to JSON: {}",
+                                e
+                            );
                             // Fallback to JSON
                             let json = serde_json::to_string(&msg).unwrap();
                             if sender.send(Message::Text(json.into())).await.is_err() {
@@ -1720,34 +1730,35 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
             }
         }
     });
-    
+
     // Spawn task to handle invalidation events and push updates
     let subscriptions_clone = active_subscriptions.clone();
     let mux_clone = mux.clone();
     let ws_tx_for_invalidation = ws_tx.clone();
-    
+
     let invalidation_task = tokio::spawn(async move {
         loop {
             match invalidation_rx.recv().await {
                 Ok(event) => {
                     let trigger_pattern = format!("{}.{}", event.type_name, event.action);
-                    
+
                     // Find subscriptions that match this invalidation
                     let matching_subs: Vec<LiveSubscription> = {
                         let subs = subscriptions_clone.read();
                         subs.values()
                             .filter(|sub| {
-                                sub.is_live && sub.triggers.iter().any(|t| {
-                                    t == &trigger_pattern || 
-                                    t == &format!("{}.*", event.type_name) ||
-                                    t == &format!("*.{}", event.action) ||
-                                    t == "*.*"
-                                })
+                                sub.is_live
+                                    && sub.triggers.iter().any(|t| {
+                                        t == &trigger_pattern
+                                            || t == &format!("{}.*", event.type_name)
+                                            || t == &format!("*.{}", event.action)
+                                            || t == "*.*"
+                                    })
                             })
                             .cloned()
                             .collect()
                     };
-                    
+
                     // Re-execute and push updates for matching subscriptions
                     for sub in matching_subs {
                         tracing::info!(
@@ -1755,7 +1766,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                             trigger = %trigger_pattern,
                             "Re-executing live query due to invalidation"
                         );
-                        
+
                         // Build request
                         let mut gql_request = async_graphql::Request::new(&sub.query);
                         if let Some(vars) = &sub.variables {
@@ -1766,18 +1777,18 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                         if let Some(op_name) = &sub.operation_name {
                             gql_request = gql_request.operation_name(op_name);
                         }
-                        
+
                         // Execute
                         let response = mux_clone.handle_http(HeaderMap::new(), gql_request).await;
                         let response_json = serde_json::to_value(&response).unwrap_or_default();
-                        
+
                         // Send update
                         let update = WsResponse {
                             msg_type: "next".to_string(),
                             id: Some(sub.id.clone()),
                             payload: Some(response_json),
                         };
-                        
+
                         if ws_tx_for_invalidation.send(update).await.is_err() {
                             break;
                         }
@@ -1793,7 +1804,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
             }
         }
     });
-    
+
     // Main message loop
     while let Some(msg) = receiver.next().await {
         let msg = match msg {
@@ -1801,7 +1812,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
             Ok(Message::Close(_)) => break,
             _ => continue,
         };
-        
+
         let parsed: WsMessage = match serde_json::from_str(&msg) {
             Ok(m) => m,
             Err(e) => {
@@ -1809,11 +1820,11 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                 continue;
             }
         };
-        
+
         match parsed.msg_type.as_str() {
             "connection_init" => {
                 connection_initialized = true;
-                
+
                 // Check if client requests GBP compression
                 if let Some(payload) = &parsed.payload {
                     if let Some(compression) = payload.get("compression").and_then(|c| c.as_str()) {
@@ -1823,7 +1834,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                         }
                     }
                 }
-                
+
                 let mut ack_payload = serde_json::json!({});
                 if *use_gbp_compression.read() {
                     ack_payload["compression"] = serde_json::json!("gbp-lz4");
@@ -1833,7 +1844,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                         "format": "binary"
                     });
                 }
-                
+
                 let ack = WsResponse {
                     msg_type: "connection_ack".to_string(),
                     id: None,
@@ -1847,7 +1858,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                     break;
                 }
             }
-            
+
             "ping" => {
                 let pong = WsResponse {
                     msg_type: "pong".to_string(),
@@ -1856,29 +1867,30 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                 };
                 let _ = ws_tx.send(pong).await;
             }
-            
+
             "subscribe" => {
                 if !connection_initialized {
                     tracing::warn!("Received subscribe before connection_init");
                     continue;
                 }
-                
+
                 let id = parsed.id.clone().unwrap_or_default();
-                
+
                 // Extract query from payload
-                let query = parsed.payload
+                let query = parsed
+                    .payload
                     .as_ref()
                     .and_then(|p| p.get("query"))
                     .and_then(|q| q.as_str())
                     .unwrap_or("");
-                
+
                 // Check for @live directive
                 let is_live = crate::live_query::has_live_directive(query);
-                
+
                 // Strip @live directive and convert subscription to query for live queries
                 let clean_query = if is_live {
                     let stripped = crate::live_query::strip_live_directive(query);
-                    // Convert "subscription" to "query" because standard GraphQL doesn't allow 
+                    // Convert "subscription" to "query" because standard GraphQL doesn't allow
                     // Subscription operations without a Subscription root in the schema
                     if stripped.trim_start().starts_with("subscription") {
                         stripped.replacen("subscription", "query", 1)
@@ -1888,67 +1900,73 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                 } else {
                     query.to_string()
                 };
-                
-                let variables = parsed.payload.as_ref().and_then(|p| p.get("variables")).cloned();
-                let operation_name = parsed.payload.as_ref()
+
+                let variables = parsed
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("variables"))
+                    .cloned();
+                let operation_name = parsed
+                    .payload
+                    .as_ref()
                     .and_then(|p| p.get("operationName"))
                     .and_then(|n| n.as_str())
                     .map(|s| s.to_string());
-                
+
                 tracing::info!(
                     subscription_id = %id,
                     is_live = is_live,
                     "Live query subscription started"
                 );
-                
+
                 // Build and execute the GraphQL request
                 let mut gql_request = async_graphql::Request::new(&clean_query);
-                
+
                 if let Some(vars) = &variables {
                     if let Ok(v) = serde_json::from_value(vars.clone()) {
                         gql_request = gql_request.variables(v);
                     }
                 }
-                
+
                 if let Some(ref op_name) = operation_name {
                     gql_request = gql_request.operation_name(op_name);
                 }
-                
+
                 // Execute initial query
                 let response = mux.handle_http(HeaderMap::new(), gql_request).await;
                 let response_json = serde_json::to_value(&response).unwrap_or_default();
-                
+
                 // Send initial result
                 let next_msg = WsResponse {
                     msg_type: "next".to_string(),
                     id: Some(id.clone()),
                     payload: Some(response_json),
                 };
-                
+
                 if ws_tx.send(next_msg).await.is_err() {
                     break;
                 }
-                
+
                 if is_live {
                     // Improve trigger detection using Schema Config
                     let configs = mux.schema.live_query_configs();
                     let mut triggers = std::collections::HashSet::new();
 
                     if !configs.is_empty() {
-                         // Heuristic: check if any configured operation name appears in the query
-                         // In a robust implementation, we would parse the query to find the root field
-                         for (op_name, config) in configs {
-                             if clean_query.contains(op_name) {
-                                 for trigger in &config.triggers {
-                                     triggers.insert(trigger.clone());
-                                 }
-                                 tracing::info!(
-                                     operation = %op_name, 
-                                     found_triggers = ?config.triggers,
-                                     "Configured live query triggers found"
-                                 );
-                             }
-                         }
+                        // Heuristic: check if any configured operation name appears in the query
+                        // In a robust implementation, we would parse the query to find the root field
+                        for (op_name, config) in configs {
+                            if clean_query.contains(op_name) {
+                                for trigger in &config.triggers {
+                                    triggers.insert(trigger.clone());
+                                }
+                                tracing::info!(
+                                    operation = %op_name,
+                                    found_triggers = ?config.triggers,
+                                    "Configured live query triggers found"
+                                );
+                            }
+                        }
                     }
 
                     // Fallback to defaults if no config found or no triggers specified
@@ -1959,7 +1977,7 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                         triggers.insert("User.delete".to_string());
                         triggers.insert("*.*".to_string());
                     }
-                    
+
                     let subscription = LiveSubscription {
                         id: id.clone(),
                         query: clean_query,
@@ -1968,8 +1986,10 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                         triggers: triggers.into_iter().collect(),
                         is_live: true,
                     };
-                    
-                    active_subscriptions.write().insert(id.clone(), subscription);
+
+                    active_subscriptions
+                        .write()
+                        .insert(id.clone(), subscription);
                     tracing::info!(subscription_id = %id, "Live subscription registered for updates");
                 } else {
                     // Non-live query: send complete immediately
@@ -1983,20 +2003,20 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                     }
                 }
             }
-            
+
             "complete" => {
                 if let Some(id) = parsed.id {
                     active_subscriptions.write().remove(&id);
                     tracing::debug!(subscription_id = %id, "Client completed subscription");
                 }
             }
-            
+
             _ => {
                 tracing::debug!("Unknown message type: {}", parsed.msg_type);
             }
         }
     }
-    
+
     // Cleanup
     forward_task.abort();
     invalidation_task.abort();
@@ -2164,7 +2184,12 @@ mod tests {
         let app = mux.into_router();
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -2179,7 +2204,12 @@ mod tests {
         let app = mux.into_router();
 
         let response = app
-            .oneshot(Request::builder().uri("/ready").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -2194,7 +2224,12 @@ mod tests {
         let app = mux.into_router();
 
         let response = app
-            .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -2208,7 +2243,12 @@ mod tests {
         let app = mux.into_router();
 
         let response = app
-            .oneshot(Request::builder().uri("/analytics").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/analytics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -2376,21 +2416,26 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_configurations() {
         let mut mux = build_router_mux();
-        
+
         // Enable multiple features
         mux.enable_metrics();
         mux.enable_playground();
         mux.enable_analytics(crate::analytics::AnalyticsConfig::default());
         mux.enable_compression(crate::compression::CompressionConfig::default());
-        
+
         let app = mux.into_router();
-        
+
         // Verify routes work
         let response = app
-            .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
-        
+
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -2409,15 +2454,24 @@ mod tests {
         let app = mux.into_router();
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         let headers = response.headers();
-        
+
         // Check core security headers are present and have correct values
         assert_eq!(
-            headers.get("x-content-type-options").unwrap().to_str().unwrap(),
+            headers
+                .get("x-content-type-options")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "nosniff"
         );
         assert_eq!(
@@ -2428,10 +2482,14 @@ mod tests {
             headers.get("x-xss-protection").unwrap().to_str().unwrap(),
             "1; mode=block"
         );
-        
+
         // Check new 0.9.0 security headers
         assert_eq!(
-            headers.get("strict-transport-security").unwrap().to_str().unwrap(),
+            headers
+                .get("strict-transport-security")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "max-age=31536000; includeSubDomains"
         );
         assert_eq!(
@@ -2443,7 +2501,11 @@ mod tests {
             "strict-origin-when-cross-origin"
         );
         assert_eq!(
-            headers.get("x-dns-prefetch-control").unwrap().to_str().unwrap(),
+            headers
+                .get("x-dns-prefetch-control")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "off"
         );
 
@@ -2452,9 +2514,13 @@ mod tests {
         assert!(p_policy.contains("camera=()"));
         assert!(p_policy.contains("microphone=()"));
         assert!(p_policy.contains("geolocation=()"));
-        
+
         // Check Content-Security-Policy
-        let csp = headers.get("content-security-policy").unwrap().to_str().unwrap();
+        let csp = headers
+            .get("content-security-policy")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(csp.contains("default-src 'self'"));
         assert!(csp.contains("object-src 'none'"));
         assert!(csp.contains("base-uri 'self'"));
@@ -2462,15 +2528,27 @@ mod tests {
 
         // Check Isolation Headers
         assert_eq!(
-            headers.get("cross-origin-opener-policy").unwrap().to_str().unwrap(),
+            headers
+                .get("cross-origin-opener-policy")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "same-origin"
         );
         assert_eq!(
-            headers.get("cross-origin-embedder-policy").unwrap().to_str().unwrap(),
+            headers
+                .get("cross-origin-embedder-policy")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "require-corp"
         );
         assert_eq!(
-            headers.get("cross-origin-resource-policy").unwrap().to_str().unwrap(),
+            headers
+                .get("cross-origin-resource-policy")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "same-origin"
         );
     }
@@ -2481,7 +2559,12 @@ mod tests {
         let app = mux.into_router();
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

@@ -327,21 +327,31 @@ async fn test_circuit_breaker_integration() {
 
     // 2. Trigger failures to open the circuit
     // Request 1: Fails (Count = 1)
-    let _ = router.execute_scatter_gather(Some("query { test }"), None, None).await;
-    
+    let _ = router
+        .execute_scatter_gather(Some("query { test }"), None, None)
+        .await;
+
     // Request 2: Fails (Count = 2) -> Circuit Opens!
-    let _ = router.execute_scatter_gather(Some("query { test }"), None, None).await;
+    let _ = router
+        .execute_scatter_gather(Some("query { test }"), None, None)
+        .await;
 
     // 3. Next request should fail FAST with Circuit Open error
     // Use execute_fail_fast to see the error, as execute_scatter_gather swallows individual subgraph errors
-    let result = router.execute_fail_fast(Some("query { test }"), None, None).await;
+    let result = router
+        .execute_fail_fast(Some("query { test }"), None, None)
+        .await;
 
     // Verify error was propagated
     assert!(result.is_err(), "Expected error when circuit is open");
     let err_str = result.err().unwrap().to_string();
-    
+
     // We expect "Circuit breaker open" message in the error output
-    assert!(err_str.contains("Circuit breaker open"), "Should contain circuit breaker error, got: {}", err_str);
+    assert!(
+        err_str.contains("Circuit breaker open"),
+        "Should contain circuit breaker error, got: {}",
+        err_str
+    );
 }
 
 #[tokio::test]
@@ -357,7 +367,7 @@ async fn test_security_ddos_zero_values_should_not_crash() {
     // We catch the panic to verification, or better, the code should just handle it (e.g. strict block or clamp)
     // For now, let's see if it runs.
     let protection = DdosProtection::new(ddos_config);
-    
+
     // If it survives, it should block everything
     let allowed = protection.check("1.2.3.4".parse().unwrap()).await;
     assert!(!allowed, "Should block requests when RPS is 0");

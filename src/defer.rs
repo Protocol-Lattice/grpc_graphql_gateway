@@ -219,9 +219,7 @@ pub fn extract_deferred_fragments(query: &str) -> Vec<DeferredFragment> {
     let mut fragments = Vec::new();
 
     // Use regex to find @defer directive occurrences with optional args
-    let defer_re = Regex::new(
-        r"\.{3}\s*@defer(?:\(([^)]*)\))?\s*\{([^}]*)\}"
-    ).unwrap();
+    let defer_re = Regex::new(r"\.{3}\s*@defer(?:\(([^)]*)\))?\s*\{([^}]*)\}").unwrap();
 
     for cap in defer_re.captures_iter(query) {
         let args = cap.get(1).map(|m| m.as_str()).unwrap_or("");
@@ -239,7 +237,10 @@ pub fn extract_deferred_fragments(query: &str) -> Vec<DeferredFragment> {
         let fields: Vec<String> = body
             .split_whitespace()
             .filter(|s| !s.is_empty() && !s.starts_with('#'))
-            .map(|s| s.trim_matches(|c: char| !c.is_alphanumeric() && c != '_').to_string())
+            .map(|s| {
+                s.trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
+                    .to_string()
+            })
             .filter(|s| !s.is_empty())
             .collect();
 
@@ -322,24 +323,19 @@ pub struct SubsequentPayload {
 // ─── Multipart Response Formatting ─────────────────────────────────────
 
 /// The content type for incremental delivery via multipart/mixed.
-pub const MULTIPART_CONTENT_TYPE: &str =
-    "multipart/mixed; boundary=\"-\"";
+pub const MULTIPART_CONTENT_TYPE: &str = "multipart/mixed; boundary=\"-\"";
 
 /// Format the initial payload as a multipart part.
 pub fn format_initial_part(payload: &InitialPayload, boundary: &str) -> String {
     let json = serde_json::to_string(payload).unwrap_or_default();
-    format!(
-        "\r\n--{boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n{json}\r\n"
-    )
+    format!("\r\n--{boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n{json}\r\n")
 }
 
 /// Format a subsequent payload as a multipart part.
 pub fn format_subsequent_part(payload: &SubsequentPayload, boundary: &str) -> String {
     let json = serde_json::to_string(payload).unwrap_or_default();
     if payload.has_next {
-        format!(
-            "--{boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n{json}\r\n"
-        )
+        format!("--{boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n{json}\r\n")
     } else {
         format!(
             "--{boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n{json}\r\n--{boundary}--\r\n"
@@ -401,10 +397,7 @@ impl DeferredExecution {
     /// `full_response` is the complete response from executing the query
     /// with all `@defer` directives stripped. This method splits it into
     /// initial + deferred parts and sends them through the channel.
-    pub async fn execute(
-        &self,
-        full_response: serde_json::Value,
-    ) -> Result<(), DeferError> {
+    pub async fn execute(&self, full_response: serde_json::Value) -> Result<(), DeferError> {
         let active_fragments: Vec<_> = self
             .fragments
             .iter()
@@ -440,11 +433,8 @@ impl DeferredExecution {
         let mut deferred_patches: Vec<(DeferredFragment, serde_json::Value)> = Vec::new();
 
         for fragment in &active_fragments {
-            let extracted = extract_and_remove_fields(
-                &mut initial_data,
-                &fragment.path,
-                &fragment.fields,
-            );
+            let extracted =
+                extract_and_remove_fields(&mut initial_data, &fragment.path, &fragment.fields);
             deferred_patches.push((fragment.clone(), extracted));
         }
 
@@ -475,10 +465,7 @@ impl DeferredExecution {
                     incremental: vec![],
                     has_next: false,
                 };
-                let _ = self
-                    .tx
-                    .send(DeferredPart::Subsequent(final_payload))
-                    .await;
+                let _ = self.tx.send(DeferredPart::Subsequent(final_payload)).await;
                 return Err(DeferError::Timeout);
             }
 
@@ -636,12 +623,18 @@ mod tests {
 
     #[test]
     fn test_has_defer_directive() {
-        assert!(has_defer_directive("query { user { ... @defer { email } } }"));
+        assert!(has_defer_directive(
+            "query { user { ... @defer { email } } }"
+        ));
         assert!(has_defer_directive(
             "query { user { ... @defer(label: \"details\") { email } } }"
         ));
-        assert!(has_defer_directive("query { user { ... @defer(if: true) { email } } }"));
-        assert!(has_defer_directive("query { user { ...@defer { email } } }"));
+        assert!(has_defer_directive(
+            "query { user { ... @defer(if: true) { email } } }"
+        ));
+        assert!(has_defer_directive(
+            "query { user { ...@defer { email } } }"
+        ));
         assert!(has_defer_directive(
             "query {\n  user {\n    ... @defer {\n      email\n    }\n  }\n}"
         ));
@@ -728,11 +721,7 @@ mod tests {
             "slow_field": "slow-data"
         });
 
-        let extracted = extract_and_remove_fields(
-            &mut data,
-            &[],
-            &["slow_field".to_string()],
-        );
+        let extracted = extract_and_remove_fields(&mut data, &[], &["slow_field".to_string()]);
 
         assert_eq!(extracted["slow_field"], "slow-data");
         assert!(data.get("slow_field").is_none());
@@ -749,10 +738,7 @@ mod tests {
             extract_arg(r#"label: "details", if: true"#, "if"),
             Some("true".to_string())
         );
-        assert_eq!(
-            extract_arg(r#"label: "details""#, "missing"),
-            None,
-        );
+        assert_eq!(extract_arg(r#"label: "details""#, "missing"), None,);
     }
 
     #[test]
@@ -850,14 +836,8 @@ mod tests {
             DeferredPart::Subsequent(payload) => {
                 assert!(!payload.has_next);
                 assert_eq!(payload.incremental.len(), 1);
-                assert_eq!(
-                    payload.incremental[0].data["email"],
-                    "alice@example.com"
-                );
-                assert_eq!(
-                    payload.incremental[0].label,
-                    Some("details".to_string())
-                );
+                assert_eq!(payload.incremental[0].data["email"], "alice@example.com");
+                assert_eq!(payload.incremental[0].label, Some("details".to_string()));
             }
             _ => panic!("Expected subsequent payload"),
         }

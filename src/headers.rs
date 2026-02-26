@@ -651,7 +651,7 @@ mod tests {
     #[test]
     fn test_binary_metadata() {
         let mut metadata = MetadataMap::new();
-        
+
         // Binary metadata keys end with "-bin"
         let binary_key = MetadataKey::from_bytes(b"data-bin").unwrap();
         let binary_value = tonic::metadata::MetadataValue::from_bytes(&[1, 2, 3, 4]);

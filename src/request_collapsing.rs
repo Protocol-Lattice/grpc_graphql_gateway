@@ -655,54 +655,53 @@ mod tests {
             _ => panic!("Expected new leader after expiry"),
         }
     }
-    
+
     #[tokio::test]
     async fn test_max_waiters_reached() {
-        let config = RequestCollapsingConfig::default()
-            .max_waiters(1); 
+        let config = RequestCollapsingConfig::default().max_waiters(1);
         let registry = Arc::new(RequestCollapsingRegistry::new(config));
-        
+
         let key = RequestKey::new("param", "waiters", b"");
-        
+
         // 1. Leader
         let _ = registry.try_collapse(key.clone()).await;
-        
+
         // 2. First waiter (allowed)
         match registry.try_collapse(key.clone()).await {
-            CollapseResult::Follower(_) => {},
+            CollapseResult::Follower(_) => {}
             _ => panic!("Second should be follower"),
         }
-        
+
         // 3. Second waiter (max waiters reached) -> New Leader
         match registry.try_collapse(key).await {
-            CollapseResult::Leader(_) => {},
+            CollapseResult::Leader(_) => {}
             res => panic!("Third should be new leader. Got: {:?}", res),
         }
     }
-    
+
     #[tokio::test]
     async fn test_eviction() {
-         let config = RequestCollapsingConfig::default()
+        let config = RequestCollapsingConfig::default()
             .max_cache_size(1)
             .coalesce_window(Duration::from_millis(1));
-            
+
         let registry = RequestCollapsingRegistry::new(config);
-        
+
         let key1 = RequestKey::new("s", "p", b"1");
-        let _ = registry.try_collapse(key1.clone()).await; 
-        
+        let _ = registry.try_collapse(key1.clone()).await;
+
         assert_eq!(registry.stats().in_flight_count, 1);
-        
+
         sleep(Duration::from_millis(15)).await;
-        
+
         // Insert key 2, triggering eviction of stale key 1
         let key2 = RequestKey::new("s", "p", b"2");
         let _ = registry.try_collapse(key2).await;
-        
+
         assert_eq!(registry.stats().in_flight_count, 1);
-        
+
         match registry.try_collapse(key1).await {
-            CollapseResult::Leader(_) => {}, 
+            CollapseResult::Leader(_) => {}
             _ => panic!("Key1 should have been evicted"),
         }
     }
