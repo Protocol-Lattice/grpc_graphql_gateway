@@ -64,7 +64,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 // ─── SPIFFE Identity ────────────────────────────────────────────────────────
@@ -546,6 +546,12 @@ pub struct MtlsProvider {
     config: MtlsConfig,
     ca: Arc<CertificateAuthority>,
     current_svid: Arc<RwLock<Svid>>,
+    /// Guards the rotation critical section so only one task issues a new
+    /// certificate at a time.  After acquiring this lock a caller must
+    /// re-read `current_svid` (double-check pattern) before making a CA
+    /// call, to avoid redundant SVID issuances when another holder already
+    /// completed rotation.
+    rotation_lock: Arc<Mutex<()>>,
 }
 
 impl MtlsProvider {
@@ -584,11 +590,22 @@ impl MtlsProvider {
             config,
             ca,
             current_svid,
+            rotation_lock: Arc::new(Mutex::new(())),
         })
     }
 
-    /// Get the current SVID, rotating if necessary
+    /// Get the current SVID, rotating if necessary.
+    ///
+    /// Uses a double-check pattern around a `rotation_lock` Mutex so that
+    /// concurrent callers never race into the CA simultaneously:
+    ///
+    /// 1. Fast path: read SVID under shared lock; return immediately if fresh.
+    /// 2. Acquire the exclusive rotation lock (serialises all rotation attempts).
+    /// 3. Re-read the SVID — another task may have already rotated it while we
+    ///    were waiting for the rotation lock.  Return early if now fresh.
+    /// 4. Issue a new SVID and write it under the RwLock.
     pub async fn get_svid(&self) -> Result<Svid, MtlsError> {
+        // 1. Fast path
         {
             let svid = self.current_svid.read().await;
             if svid.is_valid() && !svid.should_renew() {
@@ -596,12 +613,23 @@ impl MtlsProvider {
             }
         }
 
-        // Need to rotate
-        self.rotate().await
+        // 2. Acquire rotation serialisation lock
+        let _rotation_guard = self.rotation_lock.lock().await;
+
+        // 3. Double-check: another task may have rotated while we waited
+        {
+            let svid = self.current_svid.read().await;
+            if svid.is_valid() && !svid.should_renew() {
+                return Ok(svid.clone());
+            }
+        }
+
+        // 4. Actually rotate (still holding rotation_lock)
+        self.rotate_locked().await
     }
 
-    /// Force rotation and return the new SVID
-    pub async fn rotate(&self) -> Result<Svid, MtlsError> {
+    /// Internal rotation helper — must be called while `rotation_lock` is held.
+    async fn rotate_locked(&self) -> Result<Svid, MtlsError> {
         let ttl = Duration::from_secs(self.config.cert_ttl_secs);
         let new_svid = self
             .ca
@@ -623,6 +651,12 @@ impl MtlsProvider {
     pub async fn build_client(&self) -> Result<reqwest::Client, MtlsError> {
         let svid = self.get_svid().await?;
         self.build_client_with_svid(&svid)
+    }
+
+    /// Force SVID rotation (acquires rotation lock; safe to call concurrently).
+    pub async fn rotate(&self) -> Result<Svid, MtlsError> {
+        let _guard = self.rotation_lock.lock().await;
+        self.rotate_locked().await
     }
 
     /// Build a `reqwest::Client` with a specific SVID
@@ -675,7 +709,7 @@ impl MtlsProvider {
                 if svid.should_renew() {
                     let serial = svid.serial.clone();
                     let remaining = svid.remaining();
-                    drop(svid); // Release read lock before acquiring write lock
+                    drop(svid); // Release read lock before acquiring rotation lock
 
                     info!(
                         old_serial = %serial,

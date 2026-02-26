@@ -10,12 +10,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: Build & Test
+  # ─── Linux (primary) ────────────────────────────────────────────────────────
+  linux:
+    name: Build & Test (Linux)
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v4
 
     - name: Install Protoc
       run: sudo apt-get install -y protobuf-compiler
@@ -23,10 +24,10 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
-        components: rustfmt
+        components: rustfmt, clippy
 
     - name: Cache dependencies
-      uses: actions/cache@v5
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
@@ -34,8 +35,52 @@ jobs:
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+    - name: Clippy
+      run: cargo clippy --all-targets -- -D warnings
+
     - name: Build
       run: cargo build --verbose
 
     - name: Test
       run: cargo test --verbose
+
+  # ─── Windows (MSVC) ─────────────────────────────────────────────────────────
+  # mimalloc's global-allocator override conflicts with the MSVC CRT when the
+  # crate is linked as a DLL.  SO_REUSEPORT (socket2) is Linux/macOS only.
+  # We compile the library crate only and set GRPC_GW_WINDOWS_CI=1 so any
+  # future platform-conditional code can detect the CI context.
+  windows:
+    name: Build & Test (Windows / MSVC)
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Protoc
+      run: choco install protoc --yes
+      shell: powershell
+
+    - name: Install Rust (stable MSVC toolchain)
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable-x86_64-pc-windows-msvc
+        components: rustfmt, clippy
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build (lib only)
+      run: cargo build --lib --verbose
+      env:
+        GRPC_GW_WINDOWS_CI: "1"
+
+    - name: Test (lib only)
+      run: cargo test --lib --verbose
+      env:
+        GRPC_GW_WINDOWS_CI: "1"
