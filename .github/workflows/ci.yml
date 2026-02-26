@@ -44,6 +44,42 @@ jobs:
     - name: Test
       run: cargo test --verbose
 
+  # ─── macOS (Apple Silicon / Intel) ───────────────────────────────────────────
+  # Catches macOS-specific regressions: mimalloc/ring segfault (v0.9.7),
+  # Mach thread_policy_set pinning, SO_REUSEPORT behaviour differences.
+  macos:
+    name: Build & Test (macOS)
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Protoc
+      run: brew install protobuf
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Clippy
+      run: cargo clippy --all-targets -- -D warnings
+
+    - name: Build
+      run: cargo build --verbose
+
+    - name: Test
+      run: cargo test --verbose
+
   # ─── Windows (MSVC) ─────────────────────────────────────────────────────────
   # mimalloc's global-allocator override conflicts with the MSVC CRT when the
   # crate is linked as a DLL.  SO_REUSEPORT (socket2) is Linux/macOS only.
