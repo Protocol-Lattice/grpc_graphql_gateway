@@ -287,11 +287,16 @@ impl CertificateAuthority {
         // Use a unique suffix to avoid race conditions in parallel tests
         static CA_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let unique_id = CA_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let key_tmp = std::env::temp_dir().join(format!("gbp_ca_key_{}_{}.pem", std::process::id(), unique_id));
+        // Canonicalize temp dir to resolve Windows 8.3 shortnames (e.g. RUNNER~1)
+        let tmp_base = std::fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
+        let key_tmp = tmp_base.join(format!("gbp_ca_key_{}_{}.pem", std::process::id(), unique_id));
         std::fs::write(&key_tmp, &ca_key_pem)
             .map_err(|e| MtlsError::CertGeneration(format!("Failed to write temp key: {}", e)))?;
 
         // Generate self-signed CA certificate
+        // NOTE: Use native OS path (to_string_lossy without \\ -> / replacement) for file
+        // arguments. On Windows, replacing backslashes causes OpenSSL's store loader to
+        // misinterpret the path as a URI, especially with 8.3 short-name paths.
         let ca_cert_output = Command::new("openssl")
             .env("MSYS_NO_PATHCONV", "1") // Prevent Windows MSYS mangling of /O=... paths
             .args([
@@ -299,7 +304,7 @@ impl CertificateAuthority {
                 "-new",
                 "-x509",
                 "-key",
-                &key_tmp.to_string_lossy().replace('\\', "/"),
+                &key_tmp.to_string_lossy(),
                 "-sha256",
                 "-days",
                 "365",
@@ -400,7 +405,8 @@ impl CertificateAuthority {
         // Create temp files for signing
         // Use a global atomic counter to avoid race conditions when tests run in parallel
         static SVID_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let tmp_dir = std::env::temp_dir();
+        // Canonicalize temp dir to resolve Windows 8.3 shortnames (e.g. RUNNER~1)
+        let tmp_dir = std::fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
         let pid = std::process::id();
         let unique_id = SVID_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let key_path = tmp_dir.join(format!("gbp_svid_key_{pid}_{unique_id}.pem"));
@@ -417,17 +423,21 @@ impl CertificateAuthority {
             .map_err(|e| MtlsError::CertGeneration(format!("Write CA key: {}", e)))?;
 
         // Generate CSR
+        // NOTE: Use native OS paths (to_string_lossy without \\ -> / replacement) for
+        // file arguments. On Windows, replacing backslashes causes OpenSSL's store
+        // loader to misinterpret the path as a URI, especially with 8.3 short-name
+        // paths like RUNNER~1.
         let csr_output = Command::new("openssl")
             .env("MSYS_NO_PATHCONV", "1") // Prevent Windows MSYS mangling of /O=... paths
             .args([
                 "req",
                 "-new",
                 "-key",
-                &key_path.to_string_lossy().replace('\\', "/"),
+                &key_path.to_string_lossy(),
                 "-subj",
                 &format!("/O=GBP Workload/CN={}", service_name),
                 "-out",
-                &csr_path.to_string_lossy().replace('\\', "/"),
+                &csr_path.to_string_lossy(),
             ])
             .output()
             .map_err(|e| MtlsError::CertGeneration(format!("CSR generation failed: {}", e)))?;
@@ -463,18 +473,18 @@ impl CertificateAuthority {
                 "x509",
                 "-req",
                 "-in",
-                &csr_path.to_string_lossy().replace('\\', "/"),
+                &csr_path.to_string_lossy(),
                 "-CA",
-                &ca_cert_path.to_string_lossy().replace('\\', "/"),
+                &ca_cert_path.to_string_lossy(),
                 "-CAkey",
-                &ca_key_path.to_string_lossy().replace('\\', "/"),
+                &ca_key_path.to_string_lossy(),
                 "-set_serial",
                 &format!("0x{}", serial_hex),
                 "-days",
                 &ttl_days.to_string(),
                 "-sha256",
                 "-extfile",
-                &ext_path.to_string_lossy().replace('\\', "/"),
+                &ext_path.to_string_lossy(),
                 "-extensions",
                 "v3_svid",
             ])
