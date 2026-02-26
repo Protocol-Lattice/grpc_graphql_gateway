@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] - 2026-02-26
+
+### Fixed
+- **mimalloc / ring SIGSEGV on macOS** (`high_performance.rs`): Extended the `#[global_allocator]` cfg guard to also disable `mimalloc` on macOS (`#[cfg(all(not(feature = "quic"), not(target_os = "macos")))]`). The `ring` C/ASM cryptographic primitives — always linked through reqwest's `rustls-tls` backend — segfault under mimalloc's malloc override on macOS x86_64. Previously the guard only protected the `quic` feature path, but the conflict exists on all macOS builds.
+- **mTLS PKCS#8 Key Format** (`mtls.rs`): Switched EC key generation from `openssl ecparam -genkey` (SEC 1 / `BEGIN EC PRIVATE KEY`) to `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256` (PKCS#8 / `BEGIN PRIVATE KEY`). The `rustls` TLS backend used by reqwest cannot parse SEC 1 keys, causing `Identity::from_pem()` failures. Affects both `CertificateAuthority::new_ephemeral()` and `CertificateAuthority::issue_svid()`.
+
 ## [1.1.3] - 2026-02-26
 
 ### Fixed

@@ -37,11 +37,12 @@ use std::time::{Duration, Instant};
 // Replaces the system allocator with thread-local arenas for lower contention.
 // Provides 10–30% throughput improvement at high concurrency.
 //
-// ⚠️  Disabled when the `quic` feature is active because `ring`'s C/ASM
-// cryptographic primitives can segfault under mimalloc's malloc override on
-// macOS (x86_64).  The system allocator is fast enough; ring compatibility
-// takes priority when QUIC/TLS 1.3 is in use.
-#[cfg(not(feature = "quic"))]
+// ⚠️  Disabled on macOS and when the `quic` feature is active because `ring`'s
+// C/ASM cryptographic primitives can segfault under mimalloc's malloc override
+// on macOS (x86_64).  `ring` is always linked through reqwest's `rustls-tls`
+// backend, so the conflict exists regardless of the `quic` feature on macOS.
+// The system allocator is fast enough; ring compatibility takes priority.
+#[cfg(all(not(feature = "quic"), not(target_os = "macos")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
