@@ -246,6 +246,35 @@ pub enum MtlsError {
     SpiffeId(String),
 }
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/// Return a usable temporary directory path.
+///
+/// `std::fs::canonicalize` on Windows prepends the `\\?\` extended-length
+/// prefix to disambiguate 8.3 short-names (e.g. `RUNNER~1`).  The OpenSSL
+/// CLI does **not** understand this prefix and fails with:
+///   "No such file or directory"
+/// We strip the prefix so that OpenSSL receives a plain `C:\...` path.
+fn resolve_temp_dir() -> std::path::PathBuf {
+    let raw = std::env::temp_dir();
+    match std::fs::canonicalize(&raw) {
+        Ok(canonical) => {
+            // On Windows, canonicalize returns `\\?\C:\...` – strip the prefix.
+            #[cfg(windows)]
+            {
+                let s = canonical.to_string_lossy();
+                if let Some(stripped) = s.strip_prefix(r"\\?\") {
+                    return std::path::PathBuf::from(stripped);
+                }
+            }
+            canonical
+        }
+        // If canonicalize itself fails (e.g. temp dir doesn't exist yet),
+        // fall back to the original path.
+        Err(_) => raw,
+    }
+}
+
 // ─── Certificate Authority ──────────────────────────────────────────────────
 
 /// An in-process Certificate Authority that issues short-lived SVIDs.
@@ -287,8 +316,7 @@ impl CertificateAuthority {
         // Use a unique suffix to avoid race conditions in parallel tests
         static CA_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let unique_id = CA_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        // Canonicalize temp dir to resolve Windows 8.3 shortnames (e.g. RUNNER~1)
-        let tmp_base = std::fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
+        let tmp_base = resolve_temp_dir();
         let key_tmp = tmp_base.join(format!("gbp_ca_key_{}_{}.pem", std::process::id(), unique_id));
         std::fs::write(&key_tmp, &ca_key_pem)
             .map_err(|e| MtlsError::CertGeneration(format!("Failed to write temp key: {}", e)))?;
@@ -405,8 +433,7 @@ impl CertificateAuthority {
         // Create temp files for signing
         // Use a global atomic counter to avoid race conditions when tests run in parallel
         static SVID_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        // Canonicalize temp dir to resolve Windows 8.3 shortnames (e.g. RUNNER~1)
-        let tmp_dir = std::fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
+        let tmp_dir = resolve_temp_dir();
         let pid = std::process::id();
         let unique_id = SVID_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let key_path = tmp_dir.join(format!("gbp_svid_key_{pid}_{unique_id}.pem"));

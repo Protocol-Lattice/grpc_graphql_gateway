@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5] - 2026-02-26
+
+### Fixed
+- **mTLS Windows CI: Extended-Length Path Prefix** (`mtls.rs`): Fixed all 7 mTLS tests failing on Windows CI runners with `openssl req failed: Could not open file or uri for loading private key from \\gbp_ca_key_*.pem: No such file or directory`.
+  - **Root Cause**: `std::fs::canonicalize(std::env::temp_dir())` on Windows GitHub Actions runners returns a path with the `\\?\` extended-length UNC prefix (e.g., `\\?\C:\Users\runneradmin\AppData\Local\Temp`). The OpenSSL CLI does not understand this kernel-level prefix and fails to locate the file, collapsing the directory component entirely.
+  - **Fix**: Replaced the two inline `canonicalize` calls in `CertificateAuthority::new_ephemeral()` and `CertificateAuthority::issue_svid()` with a new `resolve_temp_dir()` helper. The helper canonicalizes (to expand 8.3 short-names) and then strips the `\\?\` prefix on Windows via `#[cfg(windows)]`, leaving a plain `C:\...` path that OpenSSL accepts. On Linux/macOS the helper is a zero-cost passthrough.
+
 ## [1.1.4] - 2026-02-26
 
 ### Fixed
