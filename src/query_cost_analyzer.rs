@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -55,7 +55,7 @@ impl Default for QueryCostConfig {
 pub struct QueryCostAnalyzer {
     config: QueryCostConfig,
     user_budgets: Arc<RwLock<HashMap<String, UserBudget>>>,
-    query_costs: Arc<RwLock<Vec<u64>>>, // Historical costs for percentile calculation
+    query_costs: Arc<RwLock<VecDeque<u64>>>, // Historical costs for percentile calculation (ring buffer)
     current_load_factor: Arc<RwLock<f64>>,
 }
 
@@ -71,7 +71,7 @@ impl QueryCostAnalyzer {
         Self {
             config,
             user_budgets: Arc::new(RwLock::new(HashMap::new())),
-            query_costs: Arc::new(RwLock::new(Vec::with_capacity(10_000))),
+            query_costs: Arc::new(RwLock::new(VecDeque::with_capacity(10_000))),
             current_load_factor: Arc::new(RwLock::new(1.0)),
         }
     }
@@ -111,12 +111,13 @@ impl QueryCostAnalyzer {
         // Track query cost for analytics
         if self.config.track_expensive_queries {
             let mut costs = self.query_costs.write().await;
-            costs.push(total_cost);
 
-            // Keep only last 10k queries to prevent memory growth
-            if costs.len() > 10_000 {
-                costs.drain(0..5_000);
+            // SECURITY: Ring-buffer style eviction — O(1) instead of O(n) drain
+            const MAX_COST_HISTORY: usize = 10_000;
+            if costs.len() >= MAX_COST_HISTORY {
+                costs.pop_front();
             }
+            costs.push_back(total_cost);
         }
 
         Ok(QueryCostResult {
@@ -178,7 +179,7 @@ impl QueryCostAnalyzer {
             return self.config.max_cost_per_query;
         }
 
-        let mut sorted = costs.clone();
+        let mut sorted: Vec<u64> = costs.iter().copied().collect();
         sorted.sort_unstable();
 
         let index = ((sorted.len() as f64 * self.config.expensive_percentile) as usize)
@@ -195,7 +196,7 @@ impl QueryCostAnalyzer {
             return QueryCostAnalytics::default();
         }
 
-        let mut sorted = costs.clone();
+        let mut sorted: Vec<u64> = costs.iter().copied().collect();
         sorted.sort_unstable();
 
         let len = sorted.len();
@@ -205,8 +206,9 @@ impl QueryCostAnalyzer {
             total_queries: len,
             average_cost: sum / len as u64,
             median_cost: sorted[len / 2],
-            p95_cost: sorted[(len as f64 * 0.95) as usize],
-            p99_cost: sorted[(len as f64 * 0.99) as usize],
+            // SECURITY: Clamp indices to prevent out-of-bounds panic
+            p95_cost: sorted[((len as f64 * 0.95) as usize).min(len - 1)],
+            p99_cost: sorted[((len as f64 * 0.99) as usize).min(len - 1)],
             max_cost: *sorted.last().unwrap(),
             min_cost: *sorted.first().unwrap(),
         }
@@ -440,7 +442,7 @@ mod tests {
         // Simulate some queries
         for cost in [10, 20, 30, 40, 50, 60, 70, 80, 90, 100] {
             let mut costs = analyzer.query_costs.write().await;
-            costs.push(cost);
+            costs.push_back(cost);
         }
 
         let analytics = analyzer.get_analytics().await;
