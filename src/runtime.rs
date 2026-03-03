@@ -293,11 +293,13 @@ impl ServeMux {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.split(',').next())
                 .map(|s| s.trim().to_string())
+                .filter(|ip| ip.parse::<std::net::IpAddr>().is_ok())
                 .or_else(|| {
                     headers
                         .get("x-real-ip")
                         .and_then(|v| v.to_str().ok())
                         .map(String::from)
+                        .filter(|ip| ip.parse::<std::net::IpAddr>().is_ok())
                 }),
             encryption_key: None,
         };
@@ -814,9 +816,11 @@ impl ServeMux {
                     .unwrap();
                 let headers = response.headers_mut();
                 // CORS headers for preflight
+                // SECURITY: Use CORS_ALLOWED_ORIGIN env var for production (default: *)
+                let cors_origin = std::env::var("CORS_ALLOWED_ORIGIN").unwrap_or_else(|_| "*".to_string());
                 headers.insert(
                     axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                    axum::http::HeaderValue::from_static("*"),
+                    axum::http::HeaderValue::from_str(&cors_origin).unwrap_or_else(|_| axum::http::HeaderValue::from_static("*")),
                 );
                 headers.insert(
                     axum::http::header::ACCESS_CONTROL_ALLOW_METHODS,
@@ -912,9 +916,11 @@ impl ServeMux {
             );
 
             // CORS headers for regular requests
+            // SECURITY: Use CORS_ALLOWED_ORIGIN env var for production (default: *)
+            let cors_origin = std::env::var("CORS_ALLOWED_ORIGIN").unwrap_or_else(|_| "*".to_string());
             headers.insert(
                 axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                axum::http::HeaderValue::from_static("*"),
+                axum::http::HeaderValue::from_str(&cors_origin).unwrap_or_else(|_| axum::http::HeaderValue::from_static("*")),
             );
 
             response
@@ -1385,7 +1391,28 @@ async fn graphql_playground() -> impl IntoResponse {
 }
 
 /// Handler for Prometheus metrics endpoint
-async fn metrics_handler() -> impl IntoResponse {
+///
+/// # Security
+///
+/// Protected by METRICS_API_KEY env var when set. Without it, metrics are public.
+async fn metrics_handler(headers: HeaderMap) -> axum::response::Response {
+    // SECURITY: Check API key if configured
+    if let Ok(required_key) = std::env::var("METRICS_API_KEY") {
+        let provided_key = headers
+            .get("x-metrics-key")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+
+        // SECURITY: Constant-time comparison to prevent timing attacks
+        if !constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                "Unauthorized: Valid x-metrics-key header required",
+            )
+                .into_response();
+        }
+    }
+
     let metrics = GatewayMetrics::global();
     let body = metrics.render();
     (
@@ -1395,11 +1422,32 @@ async fn metrics_handler() -> impl IntoResponse {
         )],
         body,
     )
+        .into_response()
 }
 
 /// Handler for analytics dashboard HTML
-async fn analytics_dashboard_handler() -> impl IntoResponse {
-    Html(crate::analytics::analytics_dashboard_html())
+///
+/// # Security
+///
+/// Protected by ANALYTICS_API_KEY env var when set.
+async fn analytics_dashboard_handler(headers: HeaderMap) -> axum::response::Response {
+    // SECURITY: Check API key if configured (same as API endpoint)
+    if let Ok(required_key) = std::env::var("ANALYTICS_API_KEY") {
+        let provided_key = headers
+            .get("x-analytics-key")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+
+        // SECURITY: Constant-time comparison to prevent timing attacks
+        if !constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                "Unauthorized: Valid x-analytics-key header required",
+            )
+                .into_response();
+        }
+    }
+    Html(crate::analytics::analytics_dashboard_html()).into_response()
 }
 
 /// Handler for analytics API endpoint (JSON)
@@ -1419,7 +1467,8 @@ async fn analytics_api_handler(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
 
-        if provided_key != required_key {
+        // SECURITY: Constant-time comparison to prevent timing attacks
+        if !constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
             return Json(serde_json::json!({
                 "error": "Unauthorized",
                 "message": "Valid x-analytics-key header required"
@@ -1454,7 +1503,8 @@ async fn analytics_reset_handler(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
 
-        if provided_key != required_key {
+        // SECURITY: Constant-time comparison to prevent timing attacks
+        if !constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
             return Json(serde_json::json!({
                 "error": "Unauthorized",
                 "message": "Valid x-analytics-key header required"
@@ -1473,6 +1523,21 @@ async fn analytics_reset_handler(
 // =============================================================================
 // SO_REUSEPORT Multi-Listener Server (High-Throughput)
 // =============================================================================
+
+/// Constant-time byte comparison to prevent timing side-channel attacks.
+///
+/// Unlike `==`, this function always compares every byte regardless of position,
+/// preventing attackers from brute-forcing API keys byte-by-byte.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
+}
 
 /// Build a TCP listener with performance-oriented socket options.
 ///

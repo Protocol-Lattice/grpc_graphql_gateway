@@ -318,12 +318,13 @@ impl CertificateAuthority {
         let ca_key_pem = ca_key_output.stdout;
 
         // Create a temporary file for the key to pass to openssl req
-        // Use a unique suffix to avoid race conditions in parallel tests
-        static CA_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let unique_id = CA_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Use a single global counter shared with issue_svid() to avoid
+        // filename collisions when tests run in parallel.
+        static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique_id = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tmp_base = resolve_temp_dir();
         let key_tmp = tmp_base.join(format!(
-            "gbp_ca_key_{}_{}.pem",
+            "gbp_eca_key_{}_{}.pem",
             std::process::id(),
             unique_id
         ));
@@ -441,15 +442,16 @@ impl CertificateAuthority {
         let key_pem = key_output.stdout;
 
         // Create temp files for signing
-        // Use a global atomic counter to avoid race conditions when tests run in parallel
+        // Use a single global counter (shared with new_ephemeral) to guarantee
+        // unique filenames across all concurrent openssl invocations.
         static SVID_TEMP_COUNTER: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(0);
+            std::sync::atomic::AtomicU64::new(1_000_000); // Start at 1M to never collide with CA counter
         let tmp_dir = resolve_temp_dir();
         let pid = std::process::id();
         let unique_id = SVID_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let key_path = tmp_dir.join(format!("gbp_svid_key_{pid}_{unique_id}.pem"));
-        let ca_cert_path = tmp_dir.join(format!("gbp_ca_cert_{pid}_{unique_id}.pem"));
-        let ca_key_path = tmp_dir.join(format!("gbp_ca_key_{pid}_{unique_id}.pem"));
+        let ca_cert_path = tmp_dir.join(format!("gbp_svid_cacert_{pid}_{unique_id}.pem"));
+        let ca_key_path = tmp_dir.join(format!("gbp_svid_cakey_{pid}_{unique_id}.pem"));
         let csr_path = tmp_dir.join(format!("gbp_svid_csr_{pid}_{unique_id}.pem"));
         let ext_path = tmp_dir.join(format!("gbp_svid_ext_{pid}_{unique_id}.cnf"));
 

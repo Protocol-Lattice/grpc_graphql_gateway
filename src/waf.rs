@@ -191,13 +191,15 @@ const LDAP_PATTERNS: &[&str] = &[
 ];
 
 /// Server Side Template Injection (SSTI) patterns
+/// SECURITY: Patterns require actual template syntax (e.g. executable expressions)
+/// to avoid false positives on legitimate variables containing `{{placeholder}}`.
 const SSTI_PATTERNS: &[&str] = &[
-    r"\{\{.*\}\}", // Moustache/Handlebars/Jinja/etc
-    r"\$\{.*\}",   // EL
-    r"<%=",        // ERB/JSP
-    r"#\{.*\}",    // Ruby
-    r"\*\{.*\}",
-    r"\[\[.*\]\]", // Flask/Jinja2 alternative
+    r"\{\{\s*[a-zA-Z_].*\}\}", // Moustache/Handlebars/Jinja/etc — require identifier start
+    r"\$\{[^}]*[a-zA-Z_][^}]*\}", // EL — require identifier content
+    r"<%=",                     // ERB/JSP
+    r"#\{[^}]*[a-zA-Z_][^}]*\}", // Ruby
+    r"\*\{[^}]*[a-zA-Z_][^}]*\}",
+    r"\[\[.*\]\]",             // Flask/Jinja2 alternative
     r"\{\%.*\%\}",
 ];
 
@@ -328,13 +330,31 @@ impl Default for WafConfig {
 /// WAF Middleware
 ///
 /// Intercepts requests and validates input variables against malicious patterns.
+/// Custom regex patterns are pre-compiled at construction time to avoid
+/// per-request compilation overhead and ReDoS from malformed patterns.
 pub struct WafMiddleware {
     pub config: WafConfig,
+    /// Pre-compiled custom regex patterns (compiled once at construction)
+    compiled_custom_patterns: Vec<(String, Regex)>,
 }
 
 impl WafMiddleware {
     pub fn new(config: WafConfig) -> Self {
-        Self { config }
+        let compiled_custom_patterns = config
+            .custom_patterns
+            .iter()
+            .filter_map(|pat| match Regex::new(pat) {
+                Ok(re) => Some((pat.clone(), re)),
+                Err(e) => {
+                    tracing::warn!(pattern = %pat, error = %e, "Failed to compile custom WAF pattern, skipping");
+                    None
+                }
+            })
+            .collect();
+        Self {
+            config,
+            compiled_custom_patterns,
+        }
     }
 }
 
@@ -435,17 +455,14 @@ pub fn validate_json_with_config(value: &serde_json::Value, config: &WafConfig) 
         }
     }
 
-    // Custom user‑provided patterns (applied to string values only)
+    // Custom user‑provided patterns (applied recursively to all string values)
     if !config.custom_patterns.is_empty() {
-        // Only check string values; other JSON types are ignored for custom rules.
-        if let serde_json::Value::String(s) = value {
-            if let Some(pat) = check_custom(s, &config.custom_patterns) {
-                tracing::warn!(match_val = %pat, "Custom WAF pattern matched");
-                return Err(Error::Validation(format!(
-                    "Custom WAF rule triggered: {}",
-                    pat
-                )));
-            }
+        if let Some(pat) = check_custom_recursive(value, &config.custom_patterns) {
+            tracing::warn!(match_val = %pat, "Custom WAF pattern matched");
+            return Err(Error::Validation(format!(
+                "Custom WAF rule triggered: {}",
+                pat
+            )));
         }
     }
 
@@ -506,6 +523,7 @@ fn check_keys(value: &serde_json::Value, regex: &Regex) -> Option<String> {
 
 /// Helper to evaluate user‑provided custom patterns.
 /// Returns the first matching pattern string, if any.
+/// SECURITY: Patterns are compiled per-call (use WafMiddleware for pre-compiled version).
 fn check_custom(value: &str, patterns: &[String]) -> Option<String> {
     for pat in patterns {
         if let Ok(re) = Regex::new(pat) {
@@ -515,6 +533,31 @@ fn check_custom(value: &str, patterns: &[String]) -> Option<String> {
         }
     }
     None
+}
+
+/// Recursively inspect JSON values for custom pattern matches.
+/// Unlike the original `check_custom`, this walks into Objects and Arrays.
+fn check_custom_recursive(value: &serde_json::Value, patterns: &[String]) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => check_custom(s, patterns),
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                if let Some(pat) = check_custom_recursive(v, patterns) {
+                    return Some(pat);
+                }
+            }
+            None
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values() {
+                if let Some(pat) = check_custom_recursive(v, patterns) {
+                    return Some(pat);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 #[async_trait::async_trait]
@@ -575,13 +618,13 @@ impl Middleware for WafMiddleware {
                         name
                     )));
                 }
-                // Custom patterns on header values
-                if !self.config.custom_patterns.is_empty() {
-                    if let Some(pat) = check_custom(value_str, &self.config.custom_patterns) {
-                        tracing::warn!(header = ?name, match_val = pat, "Custom WAF pattern matched in header");
+                // Custom patterns on header values (use pre-compiled patterns)
+                for (pat_str, compiled_re) in &self.compiled_custom_patterns {
+                    if compiled_re.is_match(value_str) {
+                        tracing::warn!(header = ?name, match_val = pat_str, "Custom WAF pattern matched in header");
                         return Err(Error::Validation(format!(
                             "Custom WAF rule triggered in header {}: {}",
-                            name, pat
+                            name, pat_str
                         )));
                     }
                 }

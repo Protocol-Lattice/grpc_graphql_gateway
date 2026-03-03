@@ -150,45 +150,37 @@ impl Context {
     }
 
     /// Encrypt a value if an encryption key is present
-    pub fn encrypt_value(&self, value: &str) -> crate::error::Result<String> {
-        if let Some(key) = &self.encryption_key {
-            // Simple XOR encryption for demonstration
-            // In production, use AES-GCM or ChaCha20-Poly1305
-            // This is just a placeholder to demonstrate the architecture
-            let encrypted: Vec<u8> = value
-                .bytes()
-                .enumerate()
-                .map(|(i, b)| b ^ key[i % key.len()])
-                .collect();
-            use base64::Engine;
-            Ok(base64::engine::general_purpose::STANDARD.encode(encrypted))
-        } else {
-            Ok(value.to_string())
-        }
+    ///
+    /// # Security Warning
+    ///
+    /// This method previously used XOR which provides NO real encryption.
+    /// Use a proper AEAD cipher (AES-GCM, ChaCha20-Poly1305) for production.
+    #[deprecated(
+        note = "XOR cipher is not real encryption. Use AES-GCM or ChaCha20-Poly1305 instead."
+    )]
+    pub fn encrypt_value(&self, _value: &str) -> crate::error::Result<String> {
+        Err(crate::error::Error::Internal(
+            "encrypt_value is deprecated: XOR provides no real encryption. \
+             Use a proper AEAD cipher (e.g., aes-gcm or chacha20poly1305 crates)."
+                .to_string(),
+        ))
     }
 
     /// Decrypt a value if an encryption key is present
-    pub fn decrypt_value(&self, value: &str) -> crate::error::Result<String> {
-        if let Some(key) = &self.encryption_key {
-            use base64::Engine;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(value)
-                .map_err(|e| {
-                    crate::error::Error::Validation(format!("Failed to decode base64: {}", e))
-                })?;
-
-            let decrypted: Vec<u8> = bytes
-                .iter()
-                .enumerate()
-                .map(|(i, b)| b ^ key[i % key.len()])
-                .collect();
-
-            String::from_utf8(decrypted).map_err(|e| {
-                crate::error::Error::Validation(format!("Failed to decode UTF-8: {}", e))
-            })
-        } else {
-            Ok(value.to_string())
-        }
+    ///
+    /// # Security Warning
+    ///
+    /// This method previously used XOR which provides NO real encryption.
+    /// Use a proper AEAD cipher (AES-GCM, ChaCha20-Poly1305) for production.
+    #[deprecated(
+        note = "XOR cipher is not real encryption. Use AES-GCM or ChaCha20-Poly1305 instead."
+    )]
+    pub fn decrypt_value(&self, _value: &str) -> crate::error::Result<String> {
+        Err(crate::error::Error::Internal(
+            "decrypt_value is deprecated: XOR provides no real encryption. \
+             Use a proper AEAD cipher (e.g., aes-gcm or chacha20poly1305 crates)."
+                .to_string(),
+        ))
     }
 }
 
@@ -607,22 +599,38 @@ impl Middleware for EnhancedAuthMiddleware {
 #[derive(Clone)]
 pub struct AuthMiddleware {
     pub validate: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    /// When true, requests without an Authorization header are allowed through
+    /// (with `auth.authenticated = false` in context).
+    allow_unauthenticated: bool,
 }
 
 impl AuthMiddleware {
-    /// Create a new auth middleware with a validation function
+    /// Create a new auth middleware with a validation function.
+    /// Requires an Authorization header to be present.
     pub fn new<F>(validate: F) -> Self
     where
         F: Fn(&str) -> bool + Send + Sync + 'static,
     {
         Self {
             validate: Arc::new(validate),
+            allow_unauthenticated: false,
         }
     }
 
-    /// Create an auth middleware that accepts any token
-    pub fn allow_all() -> Self {
+    /// Create an auth middleware that accepts any token.
+    /// Still requires an Authorization header to be present.
+    pub fn allow_any_token() -> Self {
         Self::new(|_| true)
+    }
+
+    /// Create an auth middleware that allows all requests through,
+    /// including those with no Authorization header.
+    /// If a token IS present, it will be validated (and any token will pass).
+    pub fn allow_all() -> Self {
+        Self {
+            validate: Arc::new(|_| true),
+            allow_unauthenticated: true,
+        }
     }
 
     /// Create an auth middleware that requires a specific token
@@ -646,9 +654,20 @@ impl Middleware for AuthMiddleware {
                     return Ok(());
                 }
             }
+            // Header present but invalid
+            return Err(crate::error::Error::Unauthorized(
+                "Invalid authorization token".to_string(),
+            ));
         }
+
+        // No Authorization header
+        if self.allow_unauthenticated {
+            ctx.insert("auth.authenticated".to_string(), serde_json::json!(false));
+            return Ok(());
+        }
+
         Err(crate::error::Error::Unauthorized(
-            "Invalid or missing authorization".to_string(),
+            "Missing authorization header".to_string(),
         ))
     }
 
@@ -1299,10 +1318,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_auth_middleware_missing_header() {
+    async fn test_auth_middleware_missing_header_allow_all() {
         use axum::http::Request;
 
+        // allow_all() now truly allows unauthenticated requests
         let middleware = AuthMiddleware::allow_all();
+        let req = Request::builder().uri("/graphql").body(()).unwrap();
+        let mut ctx = Context::from_request(&req);
+
+        assert!(middleware.call(&mut ctx).await.is_ok());
+        // Should mark as not authenticated
+        assert_eq!(
+            ctx.extensions.get("auth.authenticated"),
+            Some(&serde_json::json!(false))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_missing_header_allow_any_token() {
+        use axum::http::Request;
+
+        // allow_any_token() still requires a header to be present
+        let middleware = AuthMiddleware::allow_any_token();
         let req = Request::builder().uri("/graphql").body(()).unwrap();
         let mut ctx = Context::from_request(&req);
 

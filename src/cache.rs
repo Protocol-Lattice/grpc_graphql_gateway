@@ -126,7 +126,7 @@ mod serde_millis {
     where
         S: Serializer,
     {
-        let millis = time.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let millis = time.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
         serializer.serialize_u64(millis)
     }
 
@@ -298,7 +298,7 @@ impl ResponseCache {
                 };
 
                 let data: Option<String> = match redis::cmd("GET")
-                    .arg(cache_key)
+                    .arg(format!("{}{}", REDIS_CACHE_PREFIX, cache_key))
                     .query_async(&mut conn)
                     .await
                 {
@@ -472,16 +472,16 @@ impl ResponseCache {
                 pipe.atomic();
 
                 // SETEX cache_key ttl json
-                pipe.set_ex(&cache_key, json, ttl_secs);
+                pipe.set_ex(format!("{}{}", REDIS_CACHE_PREFIX, &cache_key), json, ttl_secs);
 
                 // Add to type indexes
                 for type_name in &referenced_types {
-                    pipe.sadd(format!("type:{}", type_name), &cache_key);
+                    pipe.sadd(format!("{}{}", REDIS_TYPE_PREFIX, type_name), format!("{}{}", REDIS_CACHE_PREFIX, &cache_key));
                 }
 
                 // Add to entity indexes
                 for entity_key in &referenced_entities {
-                    pipe.sadd(format!("entity:{}", entity_key), &cache_key);
+                    pipe.sadd(format!("{}{}", REDIS_ENTITY_PREFIX, entity_key), format!("{}{}", REDIS_CACHE_PREFIX, &cache_key));
                 }
 
                 if let Err(e) = pipe.query_async::<()>(&mut conn).await {
@@ -575,7 +575,7 @@ impl ResponseCache {
                     Err(_) => return 0,
                 };
 
-                let index_key = format!("type:{}", type_name);
+                let index_key = format!("{}{}", REDIS_TYPE_PREFIX, type_name);
                 let keys: Vec<String> = match redis::cmd("SMEMBERS")
                     .arg(&index_key)
                     .query_async(&mut conn)
@@ -625,7 +625,7 @@ impl ResponseCache {
                     Err(_) => return 0,
                 };
 
-                let index_key = format!("entity:{}", entity_key);
+                let index_key = format!("{}{}", REDIS_ENTITY_PREFIX, entity_key);
                 let keys: Vec<String> = match redis::cmd("SMEMBERS")
                     .arg(&index_key)
                     .query_async(&mut conn)
