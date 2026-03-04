@@ -57,6 +57,14 @@ impl FederationConfig {
                 }
 
                 let type_name = message.full_name().replace('.', "_");
+                // BB-04: Validate the derived type name contains only safe identifier chars.
+                if !type_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    return Err(Error::Schema(format!(
+                        "Derived GraphQL type name '{}' contains invalid characters (from protobuf '{}')",
+                        type_name,
+                        message.full_name()
+                    )));
+                }
                 let keys: Vec<Vec<String>> = entity_opts
                     .keys
                     .iter()
@@ -105,8 +113,19 @@ impl FederationConfig {
                     .ok_or_else(|| async_graphql::Error::new("missing representations argument"))?
                     .list()?;
 
-                let mut results = Vec::new();
-                for repr in representations.iter() {
+                // BB-03: Cap the number of representations to prevent resource exhaustion DoS.
+                const MAX_REPRESENTATIONS: usize = 1_000;
+                let repr_iter: Vec<_> = representations.iter().collect();
+                if repr_iter.len() > MAX_REPRESENTATIONS {
+                    return Err(async_graphql::Error::new(format!(
+                        "Too many representations: received {}, maximum is {}",
+                        repr_iter.len(),
+                        MAX_REPRESENTATIONS
+                    )));
+                }
+
+                let mut results = Vec::with_capacity(repr_iter.len());
+                for repr in repr_iter {
                     let obj = repr.object()?;
 
                     // Convert ObjectAccessor to IndexMap
@@ -126,9 +145,22 @@ impl FederationConfig {
                             async_graphql::Error::new("missing __typename in representation")
                         })?;
 
+                    // BB-02: Validate __typename length and charset before using it as a map key.
+                    if typename.is_empty() || typename.len() > 128 {
+                        return Err(async_graphql::Error::new(
+                            "invalid __typename: must be 1–128 characters"
+                        ));
+                    }
+                    if !typename.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                        return Err(async_graphql::Error::new(
+                            "invalid __typename: must contain only alphanumeric characters or underscores"
+                        ));
+                    }
+
                     // Find entity config
                     let entity_config = config.entities.get(typename).ok_or_else(|| {
-                        async_graphql::Error::new(format!("unknown entity type: {}", typename))
+                        // Intentionally vague — don't reveal internal type topology.
+                        async_graphql::Error::new("unknown or unresolvable entity type")
                     })?;
 
                     // Resolve the entity
@@ -339,26 +371,25 @@ impl EntityResolver for GrpcEntityResolver {
             representation
         );
 
-        // Get the resolver mapping for this entity type
-        let mapping = self.resolver_mappings.get(&entity_config.type_name);
-
-        if mapping.is_none() {
-            tracing::warn!(
-                "No resolver mapping found for entity {}. Returning representation as-is.",
+        // BB-01: Get the resolver mapping — error out instead of echoing raw input.
+        let mapping =
+            self.resolver_mappings
+                .get(&entity_config.type_name)
+                .ok_or_else(|| {
+                    Error::Schema(format!(
+                        "No resolver mapping configured for entity type '{}'. \
+                         Register one via register_entity_resolver().",
                 entity_config.type_name
-            );
-            return Ok(GqlValue::Object(representation.clone()));
-        }
-
-        let mapping = mapping.unwrap();
+                    ))
+                })?;
 
         // Extract the key field from the representation
         let key_value = representation
             .get(&Name::new(&mapping.key_field))
             .ok_or_else(|| {
                 Error::Schema(format!(
-                    "Missing key field '{}' in representation for {}",
-                    mapping.key_field, entity_config.type_name
+                    "Missing key field '{}' in representation",
+                    mapping.key_field
                 ))
             })?;
 
@@ -370,24 +401,24 @@ impl EntityResolver for GrpcEntityResolver {
             ))
         })?;
 
-        // Build the request message - for now, return the representation
-        // In a full implementation, you would:
-        // 1. Create a DynamicMessage for the request
-        // 2. Set the key field(s) from the representation
-        // 3. Call the gRPC method
-        // 4. Transform the response to GqlValue
-
+        // TODO: Complete the gRPC call implementation:
+        // 1. Create a DynamicMessage for the request using `entity_config.descriptor`
+        // 2. Set the key field(s) from `key_value`
+        // 3. Call the gRPC method via `_client`
+        // 4. Deserialise the response into GqlValue
+        //
+        // BB-01: Return an error instead of echoing attacker-supplied representation.
         tracing::debug!(
-            "Would call {}/{} with key {}={:?}",
-            mapping.service_name,
-            mapping.method_name,
-            mapping.key_field,
-            key_value
+            service = %mapping.service_name,
+            method  = %mapping.method_name,
+            key     = %mapping.key_field,
+            value   = ?key_value,
+            "gRPC entity resolver call not yet implemented"
         );
-
-        // For now, return representation as-is
-        // This preserves the existing behavior while providing the infrastructure
-        Ok(GqlValue::Object(representation.clone()))
+        Err(Error::Schema(format!(
+            "gRPC entity resolver for '{}' is not yet implemented",
+            entity_config.type_name
+        )))
     }
 
     async fn batch_resolve_entities(
@@ -527,6 +558,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_grpc_entity_resolver_resolve_noop() {
+        // BB-01: The resolver must now return an Err instead of echoing raw input.
+        // This test verifies the correct error is produced when the gRPC call
+        // is not yet fully implemented.
         let pool = get_test_pool();
         let message_descriptor = pool
             .all_messages()
@@ -570,18 +604,22 @@ mod tests {
             .resolve_entity(&entity_config, &representation)
             .await;
 
-        assert!(result.is_ok());
-        let val = result.unwrap();
-
-        if let GqlValue::Object(obj) = val {
-            assert_eq!(obj.get("id"), Some(&GqlValue::String("123".into())));
-        } else {
-            panic!("Expected Object");
-        }
+        // BB-01 fix: must not echo raw input — must return an error instead.
+        assert!(
+            result.is_err(),
+            "Resolver must return an error (not echo raw input) when gRPC call is unimplemented"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not yet implemented"),
+            "Error message should indicate missing implementation, got: {err_msg}"
+        );
     }
 
     #[tokio::test]
     async fn test_grpc_entity_resolver_batch() {
+        // BB-01: Batch resolution delegates to resolve_entity, which now returns Err
+        // for the unimplemented gRPC stub rather than echoing raw representations.
         let pool = get_test_pool();
         let message_descriptor = pool
             .all_messages()
@@ -621,8 +659,11 @@ mod tests {
             .batch_resolve_entities(&entity_config, vec![repr1, repr2])
             .await;
 
-        assert!(results.is_ok());
-        let list = results.unwrap();
-        assert_eq!(list.len(), 2);
+        // BB-01 fix: each item resolves via resolve_entity, which returns Err for the
+        // unimplemented gRPC stub — so batch_resolve_entities must also propagate the error.
+        assert!(
+            results.is_err(),
+            "Batch resolver must propagate the error from the unimplemented gRPC stub"
+        );
     }
 }

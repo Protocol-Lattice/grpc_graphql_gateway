@@ -252,6 +252,17 @@ impl GatewayBuilder {
         default_limits: crate::wasm_plugin::WasmResourceLimits,
     ) -> Result<Self> {
         let dir = dir.as_ref();
+
+        // BB-11: Resolve the canonical path of the plugin directory so we can
+        // prevent symlink-based path traversal attacks below.
+        let canonical_dir = dir.canonicalize().map_err(|e| {
+            crate::error::Error::WasmPlugin(format!(
+                "Failed to canonicalize WASM plugin directory '{}': {}",
+                dir.display(),
+                e
+            ))
+        })?;
+
         let entries = std::fs::read_dir(dir).map_err(|e| {
             crate::error::Error::WasmPlugin(format!(
                 "Failed to read WASM plugin directory '{}': {}",
@@ -262,45 +273,83 @@ impl GatewayBuilder {
 
         let engine = crate::wasm_plugin::WasmPluginEngine::new()?;
         let mut count = 0;
+        // BB-13: Cap the number of plugins to prevent startup resource exhaustion.
+        const MAX_WASM_PLUGINS: usize = 50;
 
-        for entry in entries {
+        'outer: for entry in entries {
+            if count >= MAX_WASM_PLUGINS {
+                tracing::warn!(
+                    directory = %dir.display(),
+                    limit = MAX_WASM_PLUGINS,
+                    "WASM plugin limit reached — remaining files in directory are skipped"
+                );
+                break 'outer;
+            }
+
             let entry = entry.map_err(|e| {
                 crate::error::Error::WasmPlugin(format!("Failed to read directory entry: {}", e))
             })?;
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("wasm") {
-                let name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
 
-                let config = crate::wasm_plugin::WasmPluginConfig {
-                    name: name.clone(),
-                    path: path.clone(),
-                    max_memory_bytes: default_limits.max_memory_bytes,
-                    max_fuel: default_limits.max_fuel,
-                    config: serde_json::Value::Null,
-                };
+            if path.extension().and_then(|e| e.to_str()) != Some("wasm") {
+                continue;
+            }
 
-                match engine.load_plugin(config) {
-                    Ok(plugin) => {
-                        tracing::info!(
-                            plugin = %name,
-                            path = %path.display(),
-                            "🧩 Loaded WASM plugin from directory"
-                        );
-                        self.plugins.register(plugin);
-                        count += 1;
-                    }
-                    Err(e) => {
+            // BB-11: Resolve the canonical path and verify it is still inside the
+            // plugin directory.  This blocks symlinks that point outside the dir.
+            match path.canonicalize() {
+                Ok(canonical_path) => {
+                    if !canonical_path.starts_with(&canonical_dir) {
                         tracing::warn!(
-                            plugin = %name,
                             path = %path.display(),
-                            error = %e,
-                            "⚠️ Failed to load WASM plugin, skipping"
+                            canonical = %canonical_path.display(),
+                            plugin_dir = %canonical_dir.display(),
+                            "Skipping WASM plugin: resolved path is outside the plugin directory (symlink attack?)"
                         );
+                        continue;
                     }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "Skipping WASM plugin: failed to resolve canonical path"
+                    );
+                    continue;
+                }
+            }
+
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let config = crate::wasm_plugin::WasmPluginConfig {
+                name: name.clone(),
+                path: path.clone(),
+                max_memory_bytes: default_limits.max_memory_bytes,
+                max_fuel: default_limits.max_fuel,
+                config: serde_json::Value::Null,
+            };
+
+            match engine.load_plugin(config) {
+                Ok(plugin) => {
+                    tracing::info!(
+                        plugin = %name,
+                        path = %path.display(),
+                        "🧩 Loaded WASM plugin from directory"
+                    );
+                    self.plugins.register(plugin);
+                    count += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        plugin = %name,
+                        path = %path.display(),
+                        error = %e,
+                        "⚠️ Failed to load WASM plugin, skipping"
+                    );
                 }
             }
         }
@@ -367,8 +416,10 @@ impl GatewayBuilder {
         mut self,
         resolver: Arc<dyn crate::federation::EntityResolver>,
     ) -> Self {
-        self.entity_resolver = Some(resolver.clone());
-        self.schema_builder = self.schema_builder.with_entity_resolver(resolver);
+        // BB-14: Store only one Arc reference; build() will pass it to schema_builder.
+        // Previously the Arc was cloned into self.entity_resolver AND moved into
+        // schema_builder, creating two independent registrations.
+        self.entity_resolver = Some(resolver);
         self
     }
 
@@ -1331,11 +1382,41 @@ impl GatewayBuilder {
         // We need to add `futures` to dependencies or use `tokio::runtime::Handle::current().block_on(async { ... })`.
 
         let plugins = self.plugins;
-        // Run on_schema_build hook
-        // Run on_schema_build hook
-        // We use futures::executor::block_on because we are in a synchronous build method.
-        // This blocks the current thread, which is acceptable during initialization.
-        futures::executor::block_on(plugins.on_schema_build(&mut schema_builder))?;
+        // BB-10: Run the async plugin hook from a synchronous `build()` without
+        // deadlocking the Tokio runtime.
+        //
+        // We move both `plugins` and `schema_builder` into a dedicated OS thread
+        // that owns its own mini single-thread Tokio runtime.  After the hook
+        // completes, the (potentially modified) builder is sent back via a channel.
+        // This is safe on every Tokio runtime flavour because the spawned thread
+        // never touches the parent scheduler.
+        type HookResult = crate::error::Result<(PluginRegistry, crate::schema::SchemaBuilder)>;
+        let (tx, rx) = std::sync::mpsc::channel::<HookResult>();
+        std::thread::spawn(move || {
+            let result = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| {
+                    crate::error::Error::Internal(format!(
+                        "Failed to create plugin hook runtime: {e}"
+                    ))
+                })
+                .and_then(|rt| {
+                    rt.block_on(async move {
+                        plugins.on_schema_build(&mut schema_builder).await?;
+                        Ok((plugins, schema_builder))
+                    })
+                });
+            let _ = tx.send(result);
+        });
+        let (plugins, schema_builder) = rx
+            .recv()
+            .map_err(|_| {
+                crate::error::Error::Internal(
+                    "Plugin hook thread panicked before sending result".to_string(),
+                )
+            })
+            .and_then(|r| r)?;
 
         let schema = schema_builder.build(&self.client_pool)?;
         let mut mux = ServeMux::new(schema.clone());
@@ -1416,11 +1497,38 @@ impl GatewayBuilder {
     /// Build and start the gateway server
     pub async fn serve(self, addr: impl Into<String>) -> Result<()> {
         let shutdown_config = self.shutdown_config.clone();
-        let gateway = self.build()?;
-        let addr = addr.into();
-        let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-        tracing::info!("Gateway server listening on {}", addr);
+        // BB-15: Warn when health checks are disabled so operators are not silently
+        // left without Kubernetes liveness / readiness probes.
+        if !self.health_checks_enabled {
+            tracing::warn!(
+                "Health check endpoints are disabled. \
+                 Call .enable_health_checks() to expose /health and /ready for Kubernetes probes."
+            );
+        }
+
+        let gateway = self.build()?;
+        let addr_str = addr.into();
+
+        // BB-12: Validate the bind address before attempting to bind.
+        // This prevents silent binding to unintended interfaces when the address
+        // is sourced from external configuration.
+        let socket_addr: std::net::SocketAddr = addr_str.parse().map_err(|e| {
+            crate::error::Error::Internal(format!(
+                "Invalid bind address '{}': {}",
+                addr_str, e
+            ))
+        })?;
+        if socket_addr.ip().is_unspecified() {
+            tracing::warn!(
+                address = %socket_addr,
+                "Gateway is binding to all network interfaces (0.0.0.0 / ::). \
+                 Consider restricting to a specific IP in production."
+            );
+        }
+
+        let listener = tokio::net::TcpListener::bind(socket_addr).await?;
+        tracing::info!(address = %socket_addr, "Gateway server listening");
 
         let app = gateway.into_router();
 
