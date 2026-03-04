@@ -1,6 +1,6 @@
 [package]
 name = "grpc_graphql_gateway"
-version = "1.1.8"
+version = "1.1.9"
 edition = "2021"
 authors = ["Protocol Lattice"]
 description = "A Rust implementation of gRPC-GraphQL gateway - generates GraphQL execution code from gRPC services"
@@ -148,6 +148,9 @@ fastrand = "2.0"
 
 # LZ4 ultra-fast compression
 lz4 = "1.28"
+
+# BLAKE3 fast cryptographic hash — used for binary entity key hashing in dataloader (BB-06)
+blake3 = "1"
 warp = { version = "0.4.2", features = ["server"] }
 flate2 = "1.1.5"
 rayon = "1.10"

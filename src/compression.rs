@@ -227,8 +227,24 @@ impl CompressionConfig {
     }
 
     /// Builder method to set the minimum size threshold.
+    ///
+    /// # Security – BB-08 (BREACH/CRIME mitigation)
+    /// Compression of responses that mix attacker-controlled data with secrets
+    /// (e.g. CSRF tokens) enables compression oracle attacks when the threshold is
+    /// too low.  A minimum of **256 bytes** is therefore enforced: values below
+    /// this floor are silently raised to 256.
     pub fn with_min_size(mut self, min_size_bytes: usize) -> Self {
-        self.min_size_bytes = min_size_bytes;
+        const MIN_SAFE_THRESHOLD: usize = 256;
+        if min_size_bytes < MIN_SAFE_THRESHOLD {
+            tracing::warn!(
+                requested = min_size_bytes,
+                enforced  = MIN_SAFE_THRESHOLD,
+                "min_size_bytes raised to the minimum safe threshold (BREACH/CRIME mitigation)"
+            );
+            self.min_size_bytes = MIN_SAFE_THRESHOLD;
+        } else {
+            self.min_size_bytes = min_size_bytes;
+        }
         self
     }
 
@@ -276,7 +292,8 @@ impl CompressionConfig {
         Self {
             enabled: true,
             level: CompressionLevel::Fast,
-            min_size_bytes: 128, // Even smaller threshold for GBP
+            // BB-08: Do not set below 256 here; see with_min_size() for rationale.
+            min_size_bytes: 256,
             algorithms: vec!["gbp-lz4".into(), "lz4".into()],
         }
     }
@@ -322,19 +339,55 @@ pub fn create_compression_layer(
 }
 
 /// Compression statistics for monitoring.
+///
+/// # BB-09 – Field visibility
+/// All counters are **private**; use the provided methods to record events and
+/// read values.  This prevents external code from setting `bytes_out > bytes_in`,
+/// which would make `savings_percentage` return a negative number and could
+/// mislead monitoring dashboards.
 #[derive(Debug, Clone, Default)]
 pub struct CompressionStats {
-    /// Total bytes before compression
-    pub bytes_in: u64,
-    /// Total bytes after compression
-    pub bytes_out: u64,
-    /// Number of compressed responses
-    pub compressed_count: u64,
-    /// Number of uncompressed responses (below threshold or disabled)
-    pub uncompressed_count: u64,
+    bytes_in: u64,
+    bytes_out: u64,
+    compressed_count: u64,
+    uncompressed_count: u64,
 }
 
 impl CompressionStats {
+    /// Record a compressed response.
+    ///
+    /// `original_bytes` must be ≥ `compressed_bytes`; if not the call is a no-op
+    /// and a warning is emitted to avoid corrupting the ratio metric.
+    pub fn record_compressed(&mut self, original_bytes: u64, compressed_bytes: u64) {
+        if compressed_bytes > original_bytes {
+            tracing::warn!(
+                original   = original_bytes,
+                compressed = compressed_bytes,
+                "Compressed size exceeds original — skipping stats update"
+            );
+            return;
+        }
+        self.bytes_in = self.bytes_in.saturating_add(original_bytes);
+        self.bytes_out = self.bytes_out.saturating_add(compressed_bytes);
+        self.compressed_count = self.compressed_count.saturating_add(1);
+    }
+
+    /// Record an uncompressed response (e.g. below the size threshold).
+    pub fn record_uncompressed(&mut self, bytes: u64) {
+        self.bytes_in = self.bytes_in.saturating_add(bytes);
+        self.bytes_out = self.bytes_out.saturating_add(bytes);
+        self.uncompressed_count = self.uncompressed_count.saturating_add(1);
+    }
+
+    /// Total bytes received before compression.
+    pub fn bytes_in(&self) -> u64 { self.bytes_in }
+    /// Total bytes sent after compression.
+    pub fn bytes_out(&self) -> u64 { self.bytes_out }
+    /// Number of responses that were compressed.
+    pub fn compressed_count(&self) -> u64 { self.compressed_count }
+    /// Number of responses that were NOT compressed.
+    pub fn uncompressed_count(&self) -> u64 { self.uncompressed_count }
+
     /// Calculate the compression ratio (compressed / original).
     ///
     /// Returns 1.0 if no data has been compressed.
@@ -414,13 +467,32 @@ mod tests {
 
     #[test]
     fn test_compression_stats() {
-        let stats = CompressionStats {
-            bytes_in: 1000,
-            bytes_out: 300,
-            compressed_count: 10,
-            uncompressed_count: 5,
-        };
+        // BB-09: Use record_* methods instead of direct field construction.
+        let mut stats = CompressionStats::default();
+        for _ in 0..10 {
+            stats.record_compressed(100, 30);
+        }
+        for _ in 0..5 {
+            stats.record_uncompressed(100);
+        }
 
+        // 10 compressed: 1000 in, 300 out; 5 uncompressed: 500 in, 500 out
+        // total: 1500 in, 800 out  ->  ratio = 0.5333…
+        assert!((stats.compression_ratio() - (800.0 / 1500.0)).abs() < 0.001);
+        assert!((stats.savings_percentage() - (1.0 - 800.0/1500.0) * 100.0).abs() < 0.001);
+        assert_eq!(stats.compressed_count(), 10);
+        assert_eq!(stats.uncompressed_count(), 5);
+    }
+
+    #[test]
+    fn test_compression_stats_pure_compressed() {
+        // Matches the spirit of the original test (1000 in, 300 out for 10 events).
+        let mut stats = CompressionStats::default();
+        for _ in 0..10 {
+            stats.record_compressed(100, 30);
+        }
+        assert_eq!(stats.bytes_in(), 1000);
+        assert_eq!(stats.bytes_out(), 300);
         assert!((stats.compression_ratio() - 0.3).abs() < 0.001);
         assert!((stats.savings_percentage() - 70.0).abs() < 0.001);
     }
@@ -475,7 +547,8 @@ mod tests {
         assert!(config.gbp_lz4_enabled());
         assert!(config.lz4_enabled());
         assert_eq!(config.level, CompressionLevel::Fast);
-        assert_eq!(config.min_size_bytes, 128);
+        // BB-08: min_size_bytes floor is 256 (was 128) to mitigate compression oracles.
+        assert_eq!(config.min_size_bytes, 256);
     }
 
     #[test]
@@ -507,41 +580,34 @@ mod tests {
 
     #[test]
     fn test_compression_stats_zero_input() {
-        let stats = CompressionStats {
-            bytes_in: 0,
-            bytes_out: 0,
-            compressed_count: 0,
-            uncompressed_count: 0,
-        };
-
+        let stats = CompressionStats::default();
         assert_eq!(stats.compression_ratio(), 1.0);
         assert_eq!(stats.savings_percentage(), 0.0);
     }
 
     #[test]
     fn test_compression_stats_no_compression() {
-        let stats = CompressionStats {
-            bytes_in: 1000,
-            bytes_out: 1000,
-            compressed_count: 0,
-            uncompressed_count: 10,
-        };
-
+        // BB-09: Use record_uncompressed instead of direct field assignment.
+        let mut stats = CompressionStats::default();
+        for _ in 0..10 {
+            stats.record_uncompressed(100);
+        }
         assert_eq!(stats.compression_ratio(), 1.0);
         assert_eq!(stats.savings_percentage(), 0.0);
+        assert_eq!(stats.uncompressed_count(), 10);
     }
 
     #[test]
     fn test_compression_stats_perfect_compression() {
-        let stats = CompressionStats {
-            bytes_in: 1000,
-            bytes_out: 0,
-            compressed_count: 10,
-            uncompressed_count: 0,
-        };
-
-        assert_eq!(stats.compression_ratio(), 0.0);
-        assert_eq!(stats.savings_percentage(), 100.0);
+        // BB-09: record_compressed guards against compressed > original, so we
+        // model near-perfect compression (1 byte remaining) rather than 0 bytes.
+        let mut stats = CompressionStats::default();
+        for _ in 0..10 {
+            stats.record_compressed(100, 1);
+        }
+        assert!(stats.compression_ratio() < 0.02);
+        assert!(stats.savings_percentage() >= 99.0);
+        assert_eq!(stats.compressed_count(), 10);
     }
 
     #[test]
@@ -570,11 +636,12 @@ mod tests {
 
     #[test]
     fn test_compression_stats_default() {
+        // BB-09: Access via getters now that fields are private.
         let stats = CompressionStats::default();
-        assert_eq!(stats.bytes_in, 0);
-        assert_eq!(stats.bytes_out, 0);
-        assert_eq!(stats.compressed_count, 0);
-        assert_eq!(stats.uncompressed_count, 0);
+        assert_eq!(stats.bytes_in(), 0);
+        assert_eq!(stats.bytes_out(), 0);
+        assert_eq!(stats.compressed_count(), 0);
+        assert_eq!(stats.uncompressed_count(), 0);
     }
 
     #[test]

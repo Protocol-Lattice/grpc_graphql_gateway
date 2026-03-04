@@ -67,11 +67,24 @@ impl EntityDataLoader {
     }
 
     /// Load multiple entities of the same type in a batch
+    ///
+    /// # Errors
+    /// Returns an error if `representations` exceeds `MAX_BATCH_SIZE` (500).
     pub async fn load_many(
         &self,
         entity_type: &str,
         representations: Vec<Representation>,
     ) -> Result<Vec<GqlValue>> {
+        // BB-05: Enforce a hard upper bound to prevent memory exhaustion.
+        const MAX_BATCH_SIZE: usize = 500;
+        if representations.len() > MAX_BATCH_SIZE {
+            return Err(Error::Schema(format!(
+                "Batch size {} exceeds the maximum of {}",
+                representations.len(),
+                MAX_BATCH_SIZE
+            )));
+        }
+
         let keys: Vec<_> = representations
             .into_iter()
             .map(|repr| RepresentationKey::new(entity_type, repr))
@@ -87,10 +100,14 @@ impl EntityDataLoader {
             if let Some(value) = values.get(&key) {
                 ordered.push(value.clone());
             } else {
-                return Err(Error::Schema(format!(
-                    "Missing value for entity {} during batch resolution",
-                    key.entity_type
-                )));
+                // BB-07: Do not leak internal entity type names to callers.
+                tracing::error!(
+                    entity_type = %key.entity_type,
+                    "Missing value for entity during batch resolution"
+                );
+                return Err(Error::Schema(
+                    "Internal error: batch resolver returned an incomplete result set".to_string(),
+                ));
             }
         }
         Ok(ordered)
@@ -128,7 +145,11 @@ impl Loader<RepresentationKey> for EntityBatcher {
             let config = self
                 .entity_configs
                 .get(entity_type.as_ref())
-                .ok_or_else(|| format!("Unknown entity type: {}", entity_type))?;
+                // BB-07: Avoid leaking internal type names — log server-side only.
+                .ok_or_else(|| {
+                    tracing::error!(entity_type = %entity_type, "Unknown entity type in dataloader");
+                    "Internal error: unknown entity type".to_string()
+                })?;
 
             if group_keys.len() == 1 {
                 let key = group_keys[0];
@@ -153,12 +174,16 @@ impl Loader<RepresentationKey> for EntityBatcher {
                 .map_err(|e| e.to_string())?;
 
             if values.len() != group_keys.len() {
-                return Err(format!(
-                    "Entity resolver for {} returned {} results, expected {}",
-                    entity_type,
-                    values.len(),
-                    group_keys.len()
-                ));
+                // BB-07: Log details internally; surface a generic message externally.
+                tracing::error!(
+                    entity_type = %entity_type,
+                    got  = values.len(),
+                    want = group_keys.len(),
+                    "Batch resolver returned wrong number of values"
+                );
+                return Err(
+                    "Internal error: batch resolver returned unexpected number of values".to_string(),
+                );
             }
 
             for (key, value) in group_keys.into_iter().zip(values.into_iter()) {
@@ -206,6 +231,16 @@ impl Hash for RepresentationKey {
 
 /// Normalized representation of a GraphQL value for hashing.
 /// Objects are sorted by key so nested field order does not affect caching.
+///
+/// # BB-06 – Binary fields
+/// Raw bytes are **not** stored directly. Instead, a 32-byte BLAKE3 digest is
+/// stored. This prevents:
+/// - Unbounded memory growth from large binary keys.
+/// - Timing side-channels when binary fields contain secret material (e.g. tokens)
+///   because digest equality is constant-time with respect to the *digest*, not
+///   the underlying bytes.
+/// Note: two different byte strings that share the same BLAKE3 hash are treated
+/// as equal cache keys — a collision probability of 2⁻²⁵⁶.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum NormalizedValue {
     Null,
@@ -215,7 +250,8 @@ enum NormalizedValue {
     Enum(String),
     List(Vec<NormalizedValue>),
     Object(Vec<(String, NormalizedValue)>),
-    Binary(Vec<u8>),
+    /// BLAKE3 digest of the original bytes — avoids raw-byte timing side-channels.
+    Binary([u8; 32]),
 }
 
 impl From<&GqlValue> for NormalizedValue {
@@ -228,7 +264,9 @@ impl From<&GqlValue> for NormalizedValue {
             GqlValue::Enum(e) => Self::Enum(e.to_string()),
             GqlValue::List(items) => Self::List(items.iter().map(Self::from).collect()),
             GqlValue::Object(obj) => Self::Object(normalize_object(obj)),
-            GqlValue::Binary(bytes) => Self::Binary(bytes.to_vec()),
+            // BB-06: Hash binary data with BLAKE3 to avoid raw-byte timing side-channels
+            // and to bound memory usage regardless of input size.
+            GqlValue::Binary(bytes) => Self::Binary(*blake3::hash(bytes).as_bytes()),
         }
     }
 }
@@ -420,9 +458,12 @@ mod tests {
     #[tokio::test]
     async fn test_normalized_value_binary() {
         use bytes::Bytes;
-        let value = GqlValue::Binary(Bytes::from(vec![1, 2, 3, 4]));
+        let raw = vec![1u8, 2, 3, 4];
+        let value = GqlValue::Binary(Bytes::from(raw.clone()));
         let normalized = NormalizedValue::from(&value);
-        assert_eq!(normalized, NormalizedValue::Binary(vec![1, 2, 3, 4]));
+        // BB-06: NormalizedValue::Binary now stores a BLAKE3 digest, not the raw bytes.
+        let expected_digest = *blake3::hash(&raw).as_bytes();
+        assert_eq!(normalized, NormalizedValue::Binary(expected_digest));
     }
 
     #[tokio::test]
