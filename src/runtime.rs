@@ -1394,23 +1394,35 @@ async fn graphql_playground() -> impl IntoResponse {
 ///
 /// # Security
 ///
-/// Protected by METRICS_API_KEY env var when set. Without it, metrics are public.
+/// DENY-BY-DEFAULT: Requires METRICS_API_KEY env var to be set.
+/// If the variable is absent the endpoint returns 403 — this prevents
+/// accidental exposure on new deployments.
 async fn metrics_handler(headers: HeaderMap) -> axum::response::Response {
-    // SECURITY: Check API key if configured
-    if let Ok(required_key) = std::env::var("METRICS_API_KEY") {
-        let provided_key = headers
-            .get("x-metrics-key")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-
-        // SECURITY: Constant-time comparison to prevent timing attacks
-        if !constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
+    // SECURITY: Deny-by-default — require an API key to be configured.
+    // If METRICS_API_KEY is not set, the endpoint rejects all requests.
+    let required_key = match std::env::var("METRICS_API_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => {
             return (
-                axum::http::StatusCode::UNAUTHORIZED,
-                "Unauthorized: Valid x-metrics-key header required",
+                axum::http::StatusCode::FORBIDDEN,
+                "Metrics endpoint requires METRICS_API_KEY to be configured",
             )
                 .into_response();
         }
+    };
+
+    let provided_key = headers
+        .get("x-metrics-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    // SECURITY: Constant-time comparison to prevent timing attacks
+    if !constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            "Unauthorized: Valid x-metrics-key header required",
+        )
+            .into_response();
     }
 
     let metrics = GatewayMetrics::global();
@@ -1429,23 +1441,32 @@ async fn metrics_handler(headers: HeaderMap) -> axum::response::Response {
 ///
 /// # Security
 ///
-/// Protected by ANALYTICS_API_KEY env var when set.
+/// DENY-BY-DEFAULT: Requires ANALYTICS_API_KEY env var to be set.
 async fn analytics_dashboard_handler(headers: HeaderMap) -> axum::response::Response {
-    // SECURITY: Check API key if configured (same as API endpoint)
-    if let Ok(required_key) = std::env::var("ANALYTICS_API_KEY") {
-        let provided_key = headers
-            .get("x-analytics-key")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-
-        // SECURITY: Constant-time comparison to prevent timing attacks
-        if !constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
+    // SECURITY: Deny-by-default — require an API key to be configured.
+    let required_key = match std::env::var("ANALYTICS_API_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => {
             return (
-                axum::http::StatusCode::UNAUTHORIZED,
-                "Unauthorized: Valid x-analytics-key header required",
+                axum::http::StatusCode::FORBIDDEN,
+                "Analytics endpoint requires ANALYTICS_API_KEY to be configured",
             )
                 .into_response();
         }
+    };
+
+    let provided_key = headers
+        .get("x-analytics-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    // SECURITY: Constant-time comparison to prevent timing attacks
+    if !constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            "Unauthorized: Valid x-analytics-key header required",
+        )
+            .into_response();
     }
     Html(crate::analytics::analytics_dashboard_html()).into_response()
 }
@@ -1454,26 +1475,33 @@ async fn analytics_dashboard_handler(headers: HeaderMap) -> axum::response::Resp
 ///
 /// # Security
 ///
-/// This endpoint exposes internal metrics. In production, set ANALYTICS_API_KEY
-/// environment variable to require authentication.
+/// DENY-BY-DEFAULT: Requires ANALYTICS_API_KEY env var. If absent, returns 403.
 async fn analytics_api_handler(
     State(mux): State<Arc<ServeMux>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    // SECURITY: Check API key if configured
-    if let Ok(required_key) = std::env::var("ANALYTICS_API_KEY") {
-        let provided_key = headers
-            .get("x-analytics-key")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-
-        // SECURITY: Constant-time comparison to prevent timing attacks
-        if !constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
+    // SECURITY: Deny-by-default — require an API key to be configured.
+    let required_key = match std::env::var("ANALYTICS_API_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => {
             return Json(serde_json::json!({
-                "error": "Unauthorized",
-                "message": "Valid x-analytics-key header required"
+                "error": "Forbidden",
+                "message": "Analytics endpoint requires ANALYTICS_API_KEY to be configured"
             }));
         }
+    };
+
+    let provided_key = headers
+        .get("x-analytics-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    // SECURITY: Constant-time comparison to prevent timing attacks
+    if !constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
+        return Json(serde_json::json!({
+            "error": "Unauthorized",
+            "message": "Valid x-analytics-key header required"
+        }));
     }
 
     if let Some(ref analytics) = mux.analytics {
@@ -1491,25 +1519,34 @@ async fn analytics_api_handler(
 ///
 /// # Security
 ///
-/// This endpoint can reset analytics data. Protected by ANALYTICS_API_KEY.
+/// DENY-BY-DEFAULT: Requires ANALYTICS_API_KEY. This endpoint resets all analytics
+/// data and must not be publicly accessible.
 async fn analytics_reset_handler(
     State(mux): State<Arc<ServeMux>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    // SECURITY: Check API key if configured
-    if let Ok(required_key) = std::env::var("ANALYTICS_API_KEY") {
-        let provided_key = headers
-            .get("x-analytics-key")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-
-        // SECURITY: Constant-time comparison to prevent timing attacks
-        if !constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
+    // SECURITY: Deny-by-default — require an API key to be configured.
+    let required_key = match std::env::var("ANALYTICS_API_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => {
             return Json(serde_json::json!({
-                "error": "Unauthorized",
-                "message": "Valid x-analytics-key header required"
+                "error": "Forbidden",
+                "message": "Analytics endpoint requires ANALYTICS_API_KEY to be configured"
             }));
         }
+    };
+
+    let provided_key = headers
+        .get("x-analytics-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    // SECURITY: Constant-time comparison to prevent timing attacks
+    if !constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
+        return Json(serde_json::json!({
+            "error": "Unauthorized",
+            "message": "Valid x-analytics-key header required"
+        }));
     }
 
     if let Some(ref analytics) = mux.analytics {
@@ -1939,6 +1976,29 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                     continue;
                 }
 
+                // SECURITY: Cap subscriptions per connection to prevent memory DoS.
+                // An attacker sending unlimited subscribe messages without completing
+                // them would grow the map without bound.
+                const MAX_SUBSCRIPTIONS_PER_CONNECTION: usize = 100;
+                if active_subscriptions.read().len() >= MAX_SUBSCRIPTIONS_PER_CONNECTION {
+                    tracing::warn!(
+                        max = MAX_SUBSCRIPTIONS_PER_CONNECTION,
+                        "WebSocket subscription limit reached, rejecting new subscription"
+                    );
+                    let err_msg = WsResponse {
+                        msg_type: "error".to_string(),
+                        id: parsed.id.clone(),
+                        payload: Some(serde_json::json!({
+                            "message": format!(
+                                "Subscription limit ({}) exceeded for this connection",
+                                MAX_SUBSCRIPTIONS_PER_CONNECTION
+                            )
+                        })),
+                    };
+                    let _ = ws_tx.send(err_msg).await;
+                    continue;
+                }
+
                 let id = parsed.id.clone().unwrap_or_default();
 
                 // Extract query from payload
@@ -2018,10 +2078,39 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                     let mut triggers = std::collections::HashSet::new();
 
                     if !configs.is_empty() {
-                        // Heuristic: check if any configured operation name appears in the query
-                        // In a robust implementation, we would parse the query to find the root field
+                        // SECURITY: Use word-boundary matching instead of raw `contains()`
+                        // to avoid false-positives where one field name is a substring of
+                        // another (e.g. "getUser" matching inside "getUserById").
+                        // We look for the op_name surrounded by non-alphanumeric boundaries.
                         for (op_name, config) in configs {
-                            if clean_query.contains(op_name) {
+                            let matched = {
+                                // Find all occurrences and check surrounding characters
+                                let mut found = false;
+                                let query_bytes = clean_query.as_bytes();
+                                let name_bytes = op_name.as_bytes();
+                                let qlen = query_bytes.len();
+                                let nlen = name_bytes.len();
+                                if nlen > 0 && qlen >= nlen {
+                                    for i in 0..=(qlen - nlen) {
+                                        if &query_bytes[i..i + nlen] == name_bytes {
+                                            // Check left boundary
+                                            let left_ok = i == 0
+                                                || !query_bytes[i - 1].is_ascii_alphanumeric()
+                                                    && query_bytes[i - 1] != b'_';
+                                            // Check right boundary
+                                            let right_ok = i + nlen == qlen
+                                                || !query_bytes[i + nlen].is_ascii_alphanumeric()
+                                                    && query_bytes[i + nlen] != b'_';
+                                            if left_ok && right_ok {
+                                                found = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                found
+                            };
+                            if matched {
                                 for trigger in &config.triggers {
                                     triggers.insert(trigger.clone());
                                 }
@@ -2288,7 +2377,9 @@ mod tests {
         mux.enable_metrics();
         let app = mux.into_router();
 
+        // SECURITY: Without METRICS_API_KEY set the endpoint must return 403
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/metrics")
@@ -2297,7 +2388,22 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
+        // With the correct key configured and supplied the endpoint returns 200
+        // Safety: single-threaded test environment; key is removed immediately after.
+        unsafe { std::env::set_var("METRICS_API_KEY", "test-metrics-secret") };
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header("x-metrics-key", "test-metrics-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        unsafe { std::env::remove_var("METRICS_API_KEY") };
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -2307,7 +2413,9 @@ mod tests {
         mux.enable_analytics(crate::analytics::AnalyticsConfig::default());
         let app = mux.into_router();
 
+        // SECURITY: Without ANALYTICS_API_KEY set the endpoint must return 403
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/analytics")
@@ -2316,7 +2424,21 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
+        // With the correct key configured and supplied the endpoint returns 200
+        unsafe { std::env::set_var("ANALYTICS_API_KEY", "test-analytics-secret") };
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/analytics")
+                    .header("x-analytics-key", "test-analytics-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        unsafe { std::env::remove_var("ANALYTICS_API_KEY") };
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -2490,7 +2612,7 @@ mod tests {
 
         let app = mux.into_router();
 
-        // Verify routes work
+        // SECURITY: Without METRICS_API_KEY the metrics endpoint must return 403 (denied by default)
         let response = app
             .oneshot(
                 Request::builder()
@@ -2501,7 +2623,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
