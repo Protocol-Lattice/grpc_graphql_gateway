@@ -678,11 +678,32 @@ impl RestConnector {
 
         // Build body
         let body = if let Some(ref template) = endpoint.body_template {
+            // SECURITY: Prevent JSON injection by properly serializing each value.
+            // Raw string substitution would allow attacker-controlled values to
+            // break out of JSON string context and inject arbitrary JSON fields.
+            //
+            // Strategy:
+            //   1. For placeholders that appear inside double-quotes in the template
+            //      (i.e., `"{key}"`) we replace the entire quoted token with the
+            //      properly JSON-serialized value — this handles strings, numbers,
+            //      booleans, null, arrays, and objects uniformly.
+            //   2. For bare (unquoted) placeholders we substitute the raw JSON
+            //      representation (e.g. numbers/booleans stay unquoted).
             let mut body = template.clone();
             for (key, value) in args {
-                let placeholder = format!("{{{}}}", key);
-                let value_str = json_value_to_string(value);
-                body = body.replace(&placeholder, &value_str);
+                // Attempt 1: replace the quoted form `"{key}"` with the JSON
+                // serialisation (which already includes surrounding quotes for
+                // strings, or omits them for other types).
+                let quoted_placeholder = format!("\"{{{}}}\"", key);
+                let json_repr = serde_json::to_string(value)
+                    .unwrap_or_else(|_| serde_json::json!(null).to_string());
+                if body.contains(&quoted_placeholder) {
+                    body = body.replace(&quoted_placeholder, &json_repr);
+                } else {
+                    // Attempt 2: bare placeholder — substitute the JSON repr directly.
+                    let bare_placeholder = format!("{{{}}}", key);
+                    body = body.replace(&bare_placeholder, &json_repr);
+                }
             }
             Some(body)
         } else if matches!(

@@ -275,6 +275,33 @@ fn resolve_temp_dir() -> std::path::PathBuf {
     }
 }
 
+/// Write sensitive key material to a file with restrictive permissions.
+///
+/// On Unix this creates the file with mode **0o600** (owner read/write only),
+/// preventing other users on the same host from reading the private key while
+/// it exists in the temp directory.
+///
+/// On non-Unix platforms (Windows) we fall back to `std::fs::write` since the
+/// ACL model is different and the risk profile is lower.
+fn write_secret_file(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            // SECURITY: 0o600 = owner read+write only; no group/other access.
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(contents)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, contents)
+    }
+}
+
 // ─── Certificate Authority ──────────────────────────────────────────────────
 
 /// An in-process Certificate Authority that issues short-lived SVIDs.
@@ -328,7 +355,8 @@ impl CertificateAuthority {
             std::process::id(),
             unique_id
         ));
-        std::fs::write(&key_tmp, &ca_key_pem)
+        // SECURITY: Use 0o600 permissions so only the process owner can read the key.
+        write_secret_file(&key_tmp, &ca_key_pem)
             .map_err(|e| MtlsError::CertGeneration(format!("Failed to write temp key: {}", e)))?;
 
         // Generate self-signed CA certificate
@@ -455,11 +483,14 @@ impl CertificateAuthority {
         let csr_path = tmp_dir.join(format!("gbp_svid_csr_{pid}_{unique_id}.pem"));
         let ext_path = tmp_dir.join(format!("gbp_svid_ext_{pid}_{unique_id}.cnf"));
 
-        std::fs::write(&key_path, &key_pem)
+        // SECURITY: Write all key material with 0o600 (owner-only) permissions
+        // to prevent other local users from reading CA private key while it
+        // temporarily exists on disk during the openssl signing pipeline.
+        write_secret_file(&key_path, &key_pem)
             .map_err(|e| MtlsError::CertGeneration(format!("Write key: {}", e)))?;
         std::fs::write(&ca_cert_path, &self.ca_cert_pem)
             .map_err(|e| MtlsError::CertGeneration(format!("Write CA cert: {}", e)))?;
-        std::fs::write(&ca_key_path, &self.ca_key_pem)
+        write_secret_file(&ca_key_path, &self.ca_key_pem)
             .map_err(|e| MtlsError::CertGeneration(format!("Write CA key: {}", e)))?;
 
         // Generate CSR

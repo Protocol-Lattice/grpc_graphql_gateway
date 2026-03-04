@@ -552,6 +552,11 @@ impl WasmPlugin {
                     }
                     let val_ptr = results[0].unwrap_i32();
 
+                    // SECURITY: Guard against null pointer returned by guest alloc.
+                    if val_ptr == 0 {
+                        return 0;
+                    }
+
                     // Write the value bytes
                     let mem = match caller.get_export("memory") {
                         Some(Extern::Memory(mem)) => mem,
@@ -658,6 +663,11 @@ impl WasmPlugin {
                     }
                     let val_ptr = results[0].unwrap_i32();
 
+                    // SECURITY: Guard against null pointer returned by guest alloc.
+                    if val_ptr == 0 {
+                        return 0;
+                    }
+
                     let mem = match caller.get_export("memory") {
                         Some(Extern::Memory(mem)) => mem,
                         _ => return 0,
@@ -745,6 +755,11 @@ impl WasmPlugin {
                     }
                     let config_ptr = results[0].unwrap_i32();
 
+                    // SECURITY: Guard against null pointer returned by guest alloc.
+                    if config_ptr == 0 {
+                        return 0;
+                    }
+
                     let mem = match caller.get_export("memory") {
                         Some(Extern::Memory(mem)) => mem,
                         _ => return 0,
@@ -787,6 +802,14 @@ impl WasmPlugin {
             .call(&mut *store, &[Val::I32(data_len)], &mut alloc_results)
             .map_err(|e| crate::error::Error::WasmPlugin(format!("alloc call failed: {}", e)))?;
         let data_ptr = alloc_results[0].unwrap_i32();
+
+        // SECURITY: A return value of 0 signals allocation failure in the guest.
+        // Writing to address 0 would corrupt the WASM null page; reject immediately.
+        if data_ptr == 0 {
+            return Err(crate::error::Error::WasmPlugin(
+                "WASM guest alloc returned null pointer (allocation failure)".to_string(),
+            ));
+        }
 
         // Write data to guest memory
         let memory = instance.get_memory(&mut *store, "memory").ok_or_else(|| {

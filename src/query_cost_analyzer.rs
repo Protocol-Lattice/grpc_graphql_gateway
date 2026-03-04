@@ -133,6 +133,25 @@ impl QueryCostAnalyzer {
         let mut budgets = self.user_budgets.write().await;
         let now = Instant::now();
 
+        // SECURITY: Cap the number of tracked user budgets to prevent memory DoS
+        // via flooding with synthetic user IDs. When the map reaches the limit and
+        // the user is not already tracked, evict fully-expired entries first.
+        // If the map is still full after cleanup, reject the new user.
+        const MAX_USER_BUDGET_ENTRIES: usize = 50_000;
+        if budgets.len() >= MAX_USER_BUDGET_ENTRIES && !budgets.contains_key(user_id) {
+            // Inline cleanup: remove entries whose window has expired
+            budgets.retain(|_, b| {
+                now.duration_since(b.window_start) <= self.config.budget_window
+            });
+
+            if budgets.len() >= MAX_USER_BUDGET_ENTRIES {
+                return Err(format!(
+                    "Query cost budget tracking capacity ({}) exceeded; try again later",
+                    MAX_USER_BUDGET_ENTRIES
+                ));
+            }
+        }
+
         let budget = budgets.entry(user_id.to_string()).or_insert(UserBudget {
             spent: 0,
             window_start: now,

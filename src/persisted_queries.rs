@@ -131,21 +131,24 @@ impl PersistedQueryStore {
     ///
     /// Returns `None` if not found or if TTL has expired.
     pub fn get(&self, hash: &str) -> Option<String> {
-        let cache = self.cache.read();
-        let entry = cache.get(hash)?;
-
-        // Check TTL expiration
         if let Some(ttl) = self.config.ttl {
+            // SECURITY: Acquire a single write lock for the whole check-and-remove
+            // operation to prevent a TOCTOU race. The previous read→drop→write
+            // pattern left a window where a concurrent `put()` could insert a
+            // fresh entry for the same hash, which the subsequent write-lock
+            // eviction would then silently delete.
+            let mut cache = self.cache.write();
+            let entry = cache.get(hash)?;
             if entry.created_at.elapsed() > ttl {
-                drop(cache);
-                // Expired - remove it (best effort, don't block)
-                let mut cache_write = self.cache.write();
-                cache_write.remove(hash);
+                cache.remove(hash);
                 return None;
             }
+            Some(entry.query.clone())
+        } else {
+            // No TTL configured — use a cheaper read lock.
+            let cache = self.cache.read();
+            cache.get(hash).map(|e| e.query.clone())
         }
-
-        Some(entry.query.clone())
     }
 
     /// Store a query with its hash
