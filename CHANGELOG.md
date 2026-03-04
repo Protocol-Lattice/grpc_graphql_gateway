@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.9] - 2026-03-04
+
+### Security
+
+Bug Bounty Security Audit Resolution (15 findings, all resolved).
+
+- **Federation Subsystem Hardening** (`federation.rs`):
+  - **Critical**: `resolve_entity` no longer falls back to echoing attacker-supplied representations when a mapping is missing or unimplemented; it now returns a proper schema error (BB-01).
+  - **High**: Added length (1–128) and charset (`a-zA-Z0-9_`) validation for the `__typename` field used in dispatch to prevent arbitrary symbol lookups (BB-02).
+  - **High**: Capped the maximum number of `representations` processed in a single `_entities` query to `1_000` to prevent memory/CPU exhaustion DoS (BB-03).
+  - **Medium**: Validated the derived `type_name` extracted from Protobuf descriptors against a strict alphanumeric charset (BB-04).
+
+- **DataLoader Security Improvements** (`dataloader.rs`):
+  - **High**: Enforced a `MAX_BATCH_SIZE` of `500` in `load_many` to prevent unbounded memory allocation DoS (BB-05).
+  - **Medium**: Fixed a potential timing side-channel in DataLoader caches where the `Binary` variant used raw bytes; it now stores a constant-time `[u8; 32]` BLAKE3 digest (BB-06).
+  - **Medium**: Scrubbed internal protobuf topology and entity type names from client-facing error strings to prevent information leakage, moving details to server-side telemetry only (BB-07).
+
+- **Compression and Data Integrity** (`compression.rs`):
+  - **Medium**: Mitigated BREACH/CRIME style compression oracles by enforcing a `256`-byte minimum floor for `min_size_bytes` and bumping the `ultra_fast` preset threshold (BB-08).
+  - **Low**: Privatised `CompressionStats` fields and introduced safe setter/getter methods to prevent negative or manipulated values appearing on monitoring dashboards (BB-09).
+
+- **Gateway and WASM Hardening** (`gateway.rs`):
+  - **Critical**: Replaced a `futures::executor::block_on` call inside the async `build()` environment with a dedicated OS-thread isolation boundary, eliminating severe deadlocks on single-thread/saturated Tokio runtimes (BB-10).
+  - **High**: `load_wasm_plugins_from_dir` now verifies that canonicalised symlink paths reside strictly within the target plugin directory, preventing path traversal via planted symlinks (BB-11).
+  - **High**: `serve()` explicitly validates and parses the bind address as a `std::net::SocketAddr`, emitting a warning when binding broadly to `0.0.0.0` (BB-12).
+  - **Medium**: Loaded WASM plugins are now capped at a strict maximum of `50` to prevent local resource exhaustion (BB-13).
+  - **Medium**: Refactored `with_entity_resolver` to stop double-cloning the integration `Arc`, avoiding double-registrations (BB-14).
+  - **Low**: The router now emits a visible `tracing::warn!` if it starts up with health checks disabled (BB-15).
+
+### Changed
+- **Dependencies**: Added `blake3 = "1"` to support constant-time binary cache keys.
+
 ## [1.1.8] - 2026-03-04
 
 ### Security
