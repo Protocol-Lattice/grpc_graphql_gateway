@@ -239,6 +239,7 @@ impl Hash for RepresentationKey {
 /// - Timing side-channels when binary fields contain secret material (e.g. tokens)
 ///   because digest equality is constant-time with respect to the *digest*, not
 ///   the underlying bytes.
+///
 /// Note: two different byte strings that share the same BLAKE3 hash are treated
 /// as equal cache keys — a collision probability of 2⁻²⁵⁶.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
