@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.8] - 2026-03-04
+
+### Security
+
+Second-round security audit (8 findings, all resolved). 602/602 tests passing.
+
+- **Deny-by-default for Metrics & Analytics endpoints** (`runtime.rs`): All four handlers (`/metrics`, `/analytics`, `/analytics/api`, `/analytics/reset`) previously served data to unauthenticated callers when `METRICS_API_KEY` / `ANALYTICS_API_KEY` were unset. Handlers now return `403 Forbidden` when the corresponding env-var is absent or empty. Tests updated to assert 403 on no-key and 200 on valid key (constant-time comparison retained).
+
+- **WebSocket subscription registry cap** (`runtime.rs`): A single client could open unlimited live-query subscriptions without completing them, growing the `active_subscriptions` HashMap without bound. Added a `MAX_SUBSCRIPTIONS_PER_CONNECTION = 100` cap; excess subscriptions receive a GraphQL-over-WebSocket `error` message and are rejected.
+
+- **REST body template JSON injection** (`rest_connector.rs`): `build_request()` previously substituted GraphQL argument values verbatim into raw JSON body templates, allowing attacker-controlled strings to inject extra fields (e.g., `"role": "admin"`). Body substitution now uses `serde_json::to_string()`: quoted template placeholders (`"{key}"`) are replaced with the full JSON representation; bare placeholders receive the raw JSON value.
+
+- **WASM alloc null-pointer guard** (`wasm_plugin.rs`): Host functions (`host_get_header`, `host_get_metadata`, `host_get_config`, `call_guest_fn`) called the guest `alloc` export without checking the returned pointer for zero. A null return now produces an immediate early exit rather than writing to the WASM linear-memory null page.
+
+- **mTLS CA private key world-readable in `/tmp`** (`mtls.rs`): `CertificateAuthority::new_ephemeral()` and `issue_svid()` wrote private key files via `std::fs::write`, which creates files with mode `0o644` on Unix. Added `write_secret_file()` helper that uses `OpenOptions::mode(0o600).create_new(true)` on Unix (owner read/write only). Non-Unix platforms retain the existing behaviour. Affects `gbp_eca_key_*`, `gbp_svid_key_*`, and `gbp_svid_cakey_*` temporary files.
+
+- **APQ TTL TOCTOU race** (`persisted_queries.rs`): `PersistedQueryStore::get()` previously acquired a read lock, dropped it, then acquired a write lock to evict an expired entry — a window where a concurrent `put()` could insert a fresh entry for the same hash, which the eviction would then silently delete. When TTL is configured, a single write lock now covers the full check-and-remove operation. The no-TTL fast path retains the cheaper read lock.
+
+- **Unbounded `user_budgets` HashMap** (`query_cost_analyzer.rs`): `check_user_budget()` inserted one entry per unique user ID with no upper bound. An attacker flooding the endpoint with synthetic user IDs could exhaust heap memory. The map is now capped at `MAX_USER_BUDGET_ENTRIES = 50_000`; when the cap is reached for a new user the function performs an inline cleanup of expired budget windows before inserting, and returns an error if still at capacity.
+
+- **Live-query trigger word-boundary matching** (`runtime.rs`): The trigger heuristic previously used `query_string.contains(op_name)`, causing a configured trigger for `getUser` to match inside `getUserById` (false positive) and allowing injection via comments or string literals. Replaced with a byte-level scan that only accepts a match when the surrounding characters are non-alphanumeric and non-underscore.
+
+## [1.1.7] - 2026-03-03
+
+### Security
+
+First-round security audit (14 findings, all resolved). 601/601 tests passing.
+
+- **Request body limit** (`runtime.rs`): Applied `DefaultBodyLimit::max(1 MB)` to the Axum router, preventing oversized payload DoS.
+
+- **CORS wildcard** (`runtime.rs`): Hardcoded `Access-Control-Allow-Origin: *` replaced by a configurable value read from `CORS_ALLOWED_ORIGIN`; defaults to `*` with a startup warning.
+
+- **IP spoofing via `X-Forwarded-For`** (`middleware.rs`): `Context::from_request()` now calls `is_valid_ip()` to validate each hop before trusting the header; malformed entries are discarded.
+
+- **Custom WAF patterns — flat string check** (`waf.rs`): User-supplied custom patterns were tested with a flat `str::contains` rather than the recursive JSON walker. Replaced with `check_custom_recursive` so nested variable values are also scanned.
+
+- **API key timing attack** (`runtime.rs`): Metrics and analytics API key comparisons switched from `==` to `constant_time_eq` to prevent byte-by-byte brute-force via timing side-channels.
+
+- **Custom WAF patterns recompiled per request** (`waf.rs`): `WafMiddleware` now pre-compiles user-supplied regex patterns once in its constructor (`WafMiddleware::new`) instead of re-compiling on every request, preventing ReDoS amplification.
+
+- **O(n) LRU eviction** (`query_cost_analyzer.rs`): `Vec::drain` eviction replaced with `VecDeque::pop_front` for O(1) removal at the tail of the sliding window.
+
+- **Percentile index out-of-bounds** (`query_cost_analyzer.rs`): Index clamped to `len - 1` before slicing the sorted cost history, preventing a panic when the slice length changed between sort and access.
+
+- **Weak XOR encryption** (`middleware.rs`): `Context::encrypt_value` / `decrypt_value` marked `deprecated` and made to return `Error::Internal` with an explanatory message. The XOR implementation is removed; callers must use a proper AEAD cipher.
+
+- **Hardcoded CORS `*`** (`runtime.rs`): See CORS wildcard fix above.
+
+- **Redis `clear()` FLUSHDB** (`cache.rs`): `ResponseCache::clear()` previously issued `FLUSHDB`, wiping all keys in the database including those belonging to other tenants or services. Replaced with a `SCAN` + targeted `DEL` loop scoped to the cache's key prefix.
+
+- **SSTI regex too broad** (`waf.rs`): Server-Side Template Injection patterns were matching legitimate GraphQL variable syntax (e.g., `$variable`). Patterns tightened to require template engine delimiters (`{{`, `{%`, `<%`, `#{`) rather than bare `$`.
+
+- **`SystemTime::elapsed().unwrap()` panic** (`cache.rs`): Clock regression (system clock moved backwards) caused a panic. Replaced with `unwrap_or_default()` returning `Duration::ZERO`.
+
+- **`AuthMiddleware::allow_all` semantics** (`middleware.rs`): `allow_all()` previously required a valid `Authorization` header even though its intent is to make auth optional. Corrected to truly allow unauthenticated requests; added `allow_any_token()` for cases requiring a present-but-unvalidated token.
+
 ## [1.1.6] - 2026-02-26
 
 ### Fixed
