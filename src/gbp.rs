@@ -159,15 +159,20 @@ impl GbpEncoder {
                     }
                 }
 
-                if !arr.is_empty() && self.try_encode_columnar(arr, buf) {
-                    return;
-                }
-
                 let content_hash = self.fast_array_hash(arr);
                 let array_marker = 0xFFFFFFFF;
                 if let Some(&ref_idx) = self.position_map.get(&(array_marker, content_hash)) {
                     buf.push(0x08);
                     write_varint(ref_idx, buf);
+                    return;
+                }
+
+                if !arr.is_empty() && self.try_encode_columnar(arr, buf) {
+                    let ref_idx = self.value_counter;
+                    self.position_map
+                        .insert((array_marker, content_hash), ref_idx);
+                    self.value_positions.push((start_pos, buf.len()));
+                    self.value_counter += 1;
                     return;
                 }
 
