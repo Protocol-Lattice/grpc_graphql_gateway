@@ -367,7 +367,7 @@ impl SubscriptionFederationEngine {
 
         // Spawn one upstream WebSocket task per subgraph in the plan.
         let mut upstream_handles = Vec::new();
-        for (subgraph_name, _fields) in &plan {
+        for subgraph_name in plan.keys() {
             let endpoint = match self.subgraphs.get(subgraph_name) {
                 Some(ep) => ep.clone(),
                 None => continue,
@@ -377,8 +377,10 @@ impl SubscriptionFederationEngine {
             let variables_clone = variables.clone();
             let merged_tx_clone = merged_tx.clone();
             let counters_clone = self.counters.clone();
-            let timeout_secs = self.config.subgraph_timeout_secs;
-            let heartbeat_secs = self.config.heartbeat_interval_secs;
+            let task_config = UpstreamTaskConfig {
+                timeout_secs: self.config.subgraph_timeout_secs,
+                heartbeat_secs: self.config.heartbeat_interval_secs,
+            };
 
             let handle = tokio::spawn(async move {
                 upstream_subscription_task(
@@ -388,8 +390,7 @@ impl SubscriptionFederationEngine {
                     variables_clone,
                     merged_tx_clone,
                     counters_clone,
-                    timeout_secs,
-                    heartbeat_secs,
+                    task_config,
                 )
                 .await;
             });
@@ -502,6 +503,13 @@ enum UpstreamEvent {
 
 // ─── Upstream task ───────────────────────────────────────────────────────────
 
+/// Configuration values forwarded to each upstream subscription task.
+#[derive(Debug, Clone, Copy)]
+struct UpstreamTaskConfig {
+    timeout_secs: u64,
+    heartbeat_secs: u64,
+}
+
 /// Manages a single upstream WebSocket connection to a subgraph for one
 /// subscription.
 async fn upstream_subscription_task(
@@ -511,9 +519,10 @@ async fn upstream_subscription_task(
     variables: Option<serde_json::Value>,
     merged_tx: mpsc::Sender<UpstreamEvent>,
     counters: Arc<Counters>,
-    timeout_secs: u64,
-    heartbeat_secs: u64,
+    config: UpstreamTaskConfig,
 ) {
+    let timeout_secs = config.timeout_secs;
+    let heartbeat_secs = config.heartbeat_secs;
     let subgraph_name = endpoint.name.clone();
     counters
         .active_upstream_connections
