@@ -88,6 +88,7 @@ pub mod schema;
 pub mod shutdown;
 pub mod smart_ttl;
 pub mod subscription;
+pub mod subscription_federation;
 pub mod tracing_otel;
 pub mod types;
 pub mod waf;
@@ -213,6 +214,10 @@ pub use subscription::{
     GrpcSubscriptionMapping, GrpcSubscriptionResolver, MultiplexSubscription,
     MultiplexSubscriptionBuilder, ProtocolMessage, SubscriptionConfig, SubscriptionInfo,
     SubscriptionPayload, SubscriptionRegistry, SubscriptionResolver, SubscriptionState,
+};
+pub use subscription_federation::{
+    parse_subscription_fields, SubgraphEndpoint, SubscriptionFederationConfig,
+    SubscriptionFederationEngine, SubscriptionFederationMetrics,
 };
 pub use tracing_otel::{init_tracer, shutdown_tracer, GraphQLSpan, GrpcSpan, TracingConfig};
 pub use waf::{validate_request, WafMiddleware};

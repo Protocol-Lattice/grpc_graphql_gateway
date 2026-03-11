@@ -23,6 +23,7 @@ use grpc_graphql_gateway::{
     live_query::{ActiveLiveQuery, LiveQueryStrategy, SharedLiveQueryStore},
     router::{DdosConfig, DdosProtection, GbpRouter, RouterConfig, SubgraphConfig},
     strip_live_directive,
+    subscription_federation::{SubgraphEndpoint, SubscriptionFederationConfig, SubscriptionFederationEngine},
 };
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
@@ -116,23 +117,36 @@ struct AppState {
     // Shared resources that persist across reloads
     encoder_pool: Arc<RwLock<Vec<grpc_graphql_gateway::gbp::GbpEncoder>>>,
     live_query_store: SharedLiveQueryStore,
+    /// Subscription federation engine for fan-out to subgraph WebSockets.
+    subscription_engine: Arc<SubscriptionFederationEngine>,
     /// Serialises concurrent hot-reload attempts so that a burst of file-watcher
     /// events does not trigger multiple overlapping `load_inner_state` calls.
     reload_lock: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
-    fn new(inner: InnerState, pool_size: usize) -> Self {
+    fn new(inner: InnerState, pool_size: usize, subgraphs: &[SubgraphConfig]) -> Self {
         // Pre-allocate encoder pool
         let mut encoders = Vec::with_capacity(pool_size);
         for _ in 0..pool_size {
             encoders.push(grpc_graphql_gateway::gbp::GbpEncoder::new());
         }
 
+        // Build subscription federation engine from subgraph configs
+        let endpoints: Vec<SubgraphEndpoint> = subgraphs
+            .iter()
+            .map(|sg| SubgraphEndpoint::from_http_url(&sg.name, &sg.url, sg.headers.clone()))
+            .collect();
+        let subscription_engine = Arc::new(SubscriptionFederationEngine::new(
+            SubscriptionFederationConfig::default(),
+            endpoints,
+        ));
+
         Self {
             inner: RwLock::new(Arc::new(inner)),
             encoder_pool: Arc::new(RwLock::new(encoders)),
             live_query_store: global_live_query_store(),
+            subscription_engine,
             reload_lock: tokio::sync::Mutex::new(()),
         }
     }
@@ -291,7 +305,7 @@ fn main() {
     });
 
     // Create state with initial config
-    let state = Arc::new(AppState::new(initial_inner, 64));
+    let state = Arc::new(AppState::new(initial_inner, 64, &config.subgraphs));
 
     // Configure and start Tokio runtime
     tokio::runtime::Builder::new_multi_thread()
@@ -1017,7 +1031,8 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
     });
 
     // Track active subscriptions for this connection
-    let mut active_subscriptions: std::collections::HashMap<String, tokio::task::JoinHandle<()>> =
+    // Each subscription has its JoinHandle and a cancel sender
+    let mut active_subscriptions: std::collections::HashMap<String, (tokio::task::JoinHandle<()>, mpsc::Sender<()>)> =
         std::collections::HashMap::new();
 
     // Handle messages from client
@@ -1054,24 +1069,45 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
                                 // Check if this is actually a subscription operation
                                 if query_str.trim_start().starts_with("subscription") {
                                     let outgoing_tx_clone = outgoing_tx.clone();
-                                    let state_clone = state.clone();
+                                    let engine = state.subscription_engine.clone();
                                     let subscription_id = id.clone();
                                     let query_owned = query_str.to_string();
                                     let vars_owned = variables.cloned();
 
-                                    // Spawn subscription handler
+                                    // Create cancellation channel for this subscription
+                                    let (cancel_tx, cancel_rx) = mpsc::channel::<()>(1);
+
+                                    // Spawn federated subscription handler
                                     let handle = tokio::spawn(async move {
-                                        handle_subscription(
-                                            state_clone,
-                                            subscription_id,
-                                            query_owned,
-                                            vars_owned,
-                                            outgoing_tx_clone,
-                                        )
-                                        .await;
+                                        // Adapter: bridge mpsc<Value> -> mpsc<Message>
+                                        let (json_tx, mut json_rx) = mpsc::channel::<Value>(100);
+
+                                        // Relay JSON values to WebSocket messages
+                                        let relay_tx = outgoing_tx_clone.clone();
+                                        let relay_handle = tokio::spawn(async move {
+                                            while let Some(val) = json_rx.recv().await {
+                                                if let Ok(text) = serde_json::to_string(&val) {
+                                                    if relay_tx.send(Message::Text(text.into())).await.is_err() {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        });
+
+                                        engine
+                                            .handle_subscription(
+                                                subscription_id,
+                                                query_owned,
+                                                vars_owned,
+                                                json_tx,
+                                                cancel_rx,
+                                            )
+                                            .await;
+
+                                        relay_handle.abort();
                                     });
 
-                                    active_subscriptions.insert(id, handle);
+                                    active_subscriptions.insert(id, (handle, cancel_tx));
                                 } else {
                                     // Not a subscription, treat as regular query
                                     let outgoing_tx_clone = outgoing_tx.clone();
@@ -1144,7 +1180,9 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
 
                         "complete" => {
                             let id = msg_value["id"].as_str().unwrap_or("unknown");
-                            if let Some(handle) = active_subscriptions.remove(id) {
+                            if let Some((handle, cancel_tx)) = active_subscriptions.remove(id) {
+                                // Signal cancel to the federation engine before aborting
+                                let _ = cancel_tx.send(()).await;
                                 handle.abort();
                                 tracing::debug!(subscription_id = %id, "Subscription cancelled by client");
                             }
@@ -1178,8 +1216,9 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
-    // Cleanup: abort all active subscriptions
-    for (_, handle) in active_subscriptions {
+    // Cleanup: cancel and abort all active subscriptions
+    for (_, (handle, cancel_tx)) in active_subscriptions {
+        let _ = cancel_tx.send(()).await;
         handle.abort();
     }
 }
@@ -1236,42 +1275,10 @@ fn recursive_decrypt(value: &mut serde_json::Value, secret: Option<&str>) {
     }
 }
 
-/// Handle a single GraphQL subscription
-/// Note: This is a simplified implementation. In production, you would need to:
-/// 1. Parse the subscription query to understand what to subscribe to
-/// 2. Forward to appropriate subgraph(s) that support subscriptions
-/// 3. Stream results as they arrive
-async fn handle_subscription(
-    _state: Arc<AppState>,
-    subscription_id: String,
-    _query: String,
-    _variables: Option<Value>,
-    outgoing_tx: mpsc::Sender<Message>,
-) {
-    tracing::info!(subscription_id = %subscription_id, "Subscription started");
-
-    // For now, send a message indicating subscriptions need subgraph support
-    // In a full implementation, you would:
-    // 1. Determine which subgraph handles this subscription
-    // 2. Forward the subscription to that subgraph
-    // 3. Stream results back as they arrive
-
-    let error = json!({
-        "type": "error",
-        "id": subscription_id,
-        "payload": [{
-            "message": "GraphQL subscriptions require subgraph support. Configure your subgraphs to expose subscription endpoints.",
-            "extensions": {
-                "code": "SUBSCRIPTION_NOT_IMPLEMENTED",
-                "note": "The router can forward subscriptions to subgraphs that support them via WebSocket"
-            }
-        }]
-    });
-
-    if let Ok(text) = serde_json::to_string(&error) {
-        let _ = outgoing_tx.send(Message::Text(text.into())).await;
-    }
-}
+// NOTE: `handle_subscription` has been replaced by
+// `SubscriptionFederationEngine::handle_subscription` which fans out the
+// subscription to upstream subgraph WebSockets and merges the event streams.
+// See `subscription_federation.rs` for the implementation.
 
 /// WebSocket handler for live queries
 ///

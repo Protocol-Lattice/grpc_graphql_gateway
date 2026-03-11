@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-03-11
+
+### Added
+
+- **Subscription Federation** (`subscription_federation.rs`): New module enabling the router to fan out GraphQL subscriptions to multiple subgraphs over WebSocket and merge the resulting event streams back to the client over a single connection.
+  - **`SubscriptionFederationEngine`**: Core engine that parses subscription queries, routes fields to owning subgraphs, opens upstream `graphql-transport-ws` WebSocket connections, and merges `next`/`error`/`complete` events into a unified stream.
+  - **Explicit routing**: Configurable field→subgraph routing map (e.g., `orderCreated → orders`, `userUpdated → users`).
+  - **Auto-broadcast mode**: When `auto_route` is enabled, unroutable fields are broadcast to all subgraphs.
+  - **Upstream lifecycle management**: Full `graphql-transport-ws` handshake (`connection_init` → `connection_ack` → `subscribe`), heartbeat pings, graceful close, and configurable timeouts.
+  - **Subscription query parser** (`parse_subscription_fields`): Extracts top-level field names from subscription queries with support for aliases, arguments, named operations, and nested selections.
+  - **HTTP→WS URL derivation** (`SubgraphEndpoint::from_http_url`): Automatically converts subgraph HTTP URLs to WebSocket URLs (`http://` → `ws://`, `https://` → `wss://`).
+  - **Metrics**: Atomic counters for total/active subscriptions, active upstream connections, relayed messages, and upstream errors via `SubscriptionFederationMetrics`.
+  - **16 unit tests** covering query parsing (single/multiple fields, aliases, arguments, nested objects), URL conversion, routing (explicit, broadcast, error paths), metrics, and error-path integration tests.
+
+### Changed
+
+- **Router binary** (`router.rs`): Replaced the stub `handle_subscription` (which returned `SUBSCRIPTION_NOT_IMPLEMENTED`) with the real `SubscriptionFederationEngine`. The router now:
+  - Builds a `SubscriptionFederationEngine` from the subgraph config list at startup.
+  - On `subscribe`, spawns a federated subscription task that fans out to upstream subgraph WebSockets.
+  - On `complete` or disconnect, propagates graceful cancellation to all upstream connections.
+  - Tracks active subscriptions with `(JoinHandle, cancel_tx)` tuples for clean teardown.
+
+- **Library exports** (`lib.rs`): Added `subscription_federation` module and re-exported `SubscriptionFederationEngine`, `SubscriptionFederationConfig`, `SubscriptionFederationMetrics`, `SubgraphEndpoint`, and `parse_subscription_fields`.
+
 ## [1.2.0] - 2026-03-06
 
 ### Fixed
