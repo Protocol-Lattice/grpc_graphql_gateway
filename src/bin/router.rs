@@ -23,9 +23,12 @@ use grpc_graphql_gateway::{
     live_query::{ActiveLiveQuery, LiveQueryStrategy, SharedLiveQueryStore},
     router::{DdosConfig, DdosProtection, GbpRouter, RouterConfig, SubgraphConfig},
     strip_live_directive,
-    subscription_federation::{SubgraphEndpoint, SubscriptionFederationConfig, SubscriptionFederationEngine},
+    subscription_federation::{
+        SubgraphEndpoint, SubscriptionFederationConfig, SubscriptionFederationEngine,
+    },
 };
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
+use reqwest::Url;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::{IpAddr, SocketAddr};
@@ -64,6 +67,10 @@ struct YamlConfig {
     /// HTTP/3 + QUIC transport configuration
     #[serde(default)]
     quic: Option<QuicConfig>,
+    /// Legacy XOR "encryption" support for demo payloads.
+    /// Disabled by default because XOR provides no real confidentiality.
+    #[serde(default)]
+    enable_legacy_xor_value_decryption: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,6 +93,14 @@ struct CorsConfig {
     allow_origins: Vec<String>,
 }
 
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self {
+            allow_origins: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct GraphQlQuery {
     #[serde(default)]
@@ -106,6 +121,7 @@ struct InnerState {
     ddos: DdosProtection,
     gateway_secret: Option<String>,
     waf_config: grpc_graphql_gateway::waf::WafConfig,
+    legacy_xor_value_decryption_enabled: bool,
     #[allow(dead_code)]
     mtls_enabled: bool,
 }
@@ -152,24 +168,167 @@ impl AppState {
     }
 }
 
-/// Helper to load configuration and build InnerState
-fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig)> {
-    let mut config_content = std::fs::read_to_string(config_path)
-        .map_err(|e| anyhow::anyhow!("Failed to read config: {}", e))?;
+const STRICT_API_CSP: &str =
+    "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
-    // Environment variable interpolation: replace ${ENV_VAR} or ${ENV_VAR:-default}
+fn interpolate_env_vars(config_content: &str) -> anyhow::Result<String> {
     let re = regex::Regex::new(r"\$\{([^}]+)\}").unwrap();
-    config_content = re
-        .replace_all(&config_content, |caps: &regex::Captures| {
+    let mut interpolation_error: Option<String> = None;
+
+    let interpolated = re
+        .replace_all(config_content, |caps: &regex::Captures| {
             let env_var = &caps[1];
-            if env_var.contains(":-") {
-                let parts: Vec<&str> = env_var.splitn(2, ":-").collect();
-                std::env::var(parts[0]).unwrap_or_else(|_| parts[1].to_string())
+            if let Some((var_name, default_value)) = env_var.split_once(":-") {
+                std::env::var(var_name).unwrap_or_else(|_| default_value.to_string())
             } else {
-                std::env::var(env_var).unwrap_or_else(|_| "".to_string())
+                match std::env::var(env_var) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        interpolation_error = Some(env_var.to_string());
+                        String::new()
+                    }
+                }
             }
         })
         .to_string();
+
+    if let Some(var_name) = interpolation_error {
+        anyhow::bail!(
+            "Missing required environment variable '{}' referenced in {} syntax. \
+             Use ${{{}:-default}} if an empty/default fallback is intentional.",
+            var_name,
+            "${VAR}",
+            var_name
+        );
+    }
+
+    Ok(interpolated)
+}
+
+fn validate_cors_config(cors: &CorsConfig) -> anyhow::Result<()> {
+    let has_wildcard = cors.allow_origins.iter().any(|origin| origin == "*");
+    if has_wildcard && cors.allow_origins.len() > 1 {
+        anyhow::bail!("CORS allow_origins cannot mix '*' with explicit origins");
+    }
+
+    for origin in &cors.allow_origins {
+        if origin == "*" {
+            continue;
+        }
+
+        let parsed = Url::parse(origin)
+            .map_err(|e| anyhow::anyhow!("Invalid CORS origin '{}': {}", origin, e))?;
+
+        if !matches!(parsed.scheme(), "http" | "https") {
+            anyhow::bail!(
+                "Invalid CORS origin '{}': only http:// and https:// origins are allowed",
+                origin
+            );
+        }
+
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            anyhow::bail!(
+                "Invalid CORS origin '{}': credentials in origins are not allowed",
+                origin
+            );
+        }
+
+        if parsed.path() != "/" || parsed.query().is_some() || parsed.fragment().is_some() {
+            anyhow::bail!(
+                "Invalid CORS origin '{}': origins must not include path, query, or fragment",
+                origin
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_subgraph_url(subgraph: &SubgraphConfig) -> anyhow::Result<()> {
+    let parsed = Url::parse(&subgraph.url)
+        .map_err(|e| anyhow::anyhow!("Invalid subgraph URL for '{}': {}", subgraph.name, e))?;
+
+    if !matches!(parsed.scheme(), "http" | "https") {
+        anyhow::bail!(
+            "Invalid subgraph URL for '{}': only http:// and https:// are supported",
+            subgraph.name
+        );
+    }
+
+    if parsed.host_str().is_none() {
+        anyhow::bail!("Invalid subgraph URL for '{}': missing host", subgraph.name);
+    }
+
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        anyhow::bail!(
+            "Invalid subgraph URL for '{}': embedded credentials are not allowed",
+            subgraph.name
+        );
+    }
+
+    if subgraph
+        .mtls
+        .as_ref()
+        .map(|cfg| cfg.enabled)
+        .unwrap_or(false)
+        && parsed.scheme() != "https"
+    {
+        anyhow::bail!(
+            "Subgraph '{}' enables mTLS but is configured with a non-HTTPS URL: {}",
+            subgraph.name,
+            subgraph.url
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_yaml_config(
+    yaml_config: &YamlConfig,
+    gateway_secret: Option<&str>,
+) -> anyhow::Result<()> {
+    yaml_config
+        .server
+        .listen
+        .parse::<SocketAddr>()
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Invalid server.listen '{}': {}",
+                yaml_config.server.listen,
+                e
+            )
+        })?;
+
+    if let Some(quic_listen) = &yaml_config.server.quic_listen {
+        quic_listen
+            .parse::<SocketAddr>()
+            .map_err(|e| anyhow::anyhow!("Invalid server.quic_listen '{}': {}", quic_listen, e))?;
+    }
+
+    if yaml_config.server.workers == 0 {
+        anyhow::bail!("server.workers must be greater than 0");
+    }
+
+    if let Some(cors) = &yaml_config.cors {
+        validate_cors_config(cors)?;
+    }
+
+    for subgraph in &yaml_config.subgraphs {
+        validate_subgraph_url(subgraph)?;
+    }
+
+    if yaml_config.enable_legacy_xor_value_decryption && gateway_secret.is_none() {
+        anyhow::bail!("enable_legacy_xor_value_decryption requires GATEWAY_SECRET to be set");
+    }
+
+    Ok(())
+}
+
+/// Helper to load configuration and build InnerState
+fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig)> {
+    let config_content = std::fs::read_to_string(config_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read config: {}", e))?;
+    let config_content = interpolate_env_vars(&config_content)?;
 
     let mut yaml_config: YamlConfig = serde_yaml::from_str(&config_content)
         .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
@@ -207,6 +366,8 @@ fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig
     } else if mtls_enabled {
         println!("  ℹ️  GATEWAY_SECRET not set (mTLS provides cryptographic authentication)");
     }
+
+    validate_yaml_config(&yaml_config, gateway_secret.as_deref())?;
 
     // Parse port from listen address for RouterConfig
     let port = yaml_config
@@ -247,6 +408,7 @@ fn load_inner_state(config_path: &str) -> anyhow::Result<(InnerState, YamlConfig
             ddos,
             gateway_secret,
             waf_config,
+            legacy_xor_value_decryption_enabled: yaml_config.enable_legacy_xor_value_decryption,
             mtls_enabled,
         },
         yaml_config,
@@ -506,6 +668,9 @@ async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<App
     } else {
         println!("  ║  mTLS:          ❌ Disabled (using GATEWAY_SECRET)      ║");
     }
+    if yaml_config.enable_legacy_xor_value_decryption {
+        println!("  ║  Legacy XOR:    ⚠️  Enabled (demo compatibility only)    ║");
+    }
     println!("  ╚═══════════════════════════════════════════════════════════╝");
     println!();
 
@@ -545,13 +710,13 @@ async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<App
                 ))
                 .layer(SetResponseHeaderLayer::overriding(
                     header::CONTENT_SECURITY_POLICY,
-                    // Allow 'unsafe-inline' for GraphiQL/Playground scripts and styles
-                    // Added object-src 'none', base-uri 'self', frame-ancestors 'none'
-                    HeaderValue::from_static("default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"), 
+                    HeaderValue::from_static(STRICT_API_CSP),
                 ))
                 .layer(SetResponseHeaderLayer::overriding(
                     header::HeaderName::from_static("permissions-policy"),
-                    HeaderValue::from_static("camera=(), microphone=(), geolocation=(), payment=(), browsing-topics=()"),
+                    HeaderValue::from_static(
+                        "camera=(), microphone=(), geolocation=(), payment=(), browsing-topics=()",
+                    ),
                 ))
                 .layer(SetResponseHeaderLayer::overriding(
                     header::HeaderName::from_static("x-dns-prefetch-control"),
@@ -568,17 +733,17 @@ async fn async_main(yaml_config: YamlConfig, config_path: String, state: Arc<App
                 .layer(SetResponseHeaderLayer::overriding(
                     header::HeaderName::from_static("cross-origin-resource-policy"),
                     HeaderValue::from_static("same-origin"),
-                ))
+                )),
         );
 
     // Apply CORS based on configuration
     // Note: CORS config is part of server setup, difficult to hot-reload without rebuilding Axum router.
     // For now, CORS changes will require restart, but other runtime configs (WAF, Subgraphs) will reload.
-    let cors_config = yaml_config.cors.clone().unwrap_or(CorsConfig {
-        allow_origins: vec!["*".to_string()],
-    });
+    let cors_config = yaml_config.cors.clone().unwrap_or_default();
 
-    if cors_config.allow_origins.iter().any(|o| o == "*") {
+    if cors_config.allow_origins.is_empty() {
+        tracing::info!("CORS disabled by default; configure cors.allow_origins to enable it");
+    } else if cors_config.allow_origins.iter().any(|o| o == "*") {
         app = app.layer(
             CorsLayer::new()
                 .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
@@ -908,7 +1073,9 @@ async fn graphql_handler(
             // This enables "Transparent Encryption": Data is encrypted at rest/transit
             // from subgraph -> gateway, but decrypted by gateway -> client.
             let mut response_data_mut = response_data;
-            recursive_decrypt(&mut response_data_mut, inner.gateway_secret.as_deref());
+            if inner.legacy_xor_value_decryption_enabled {
+                recursive_decrypt(&mut response_data_mut, inner.gateway_secret.as_deref());
+            }
             let response_data = response_data_mut;
 
             if accept_gbp {
@@ -1032,8 +1199,10 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
 
     // Track active subscriptions for this connection
     // Each subscription has its JoinHandle and a cancel sender
-    let mut active_subscriptions: std::collections::HashMap<String, (tokio::task::JoinHandle<()>, mpsc::Sender<()>)> =
-        std::collections::HashMap::new();
+    let mut active_subscriptions: std::collections::HashMap<
+        String,
+        (tokio::task::JoinHandle<()>, mpsc::Sender<()>),
+    > = std::collections::HashMap::new();
 
     // Handle messages from client
     while let Some(msg) = receiver.next().await {
@@ -1087,7 +1256,11 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
                                         let relay_handle = tokio::spawn(async move {
                                             while let Some(val) = json_rx.recv().await {
                                                 if let Ok(text) = serde_json::to_string(&val) {
-                                                    if relay_tx.send(Message::Text(text.into())).await.is_err() {
+                                                    if relay_tx
+                                                        .send(Message::Text(text.into()))
+                                                        .await
+                                                        .is_err()
+                                                    {
                                                         break;
                                                     }
                                                 }
@@ -1272,6 +1445,95 @@ fn recursive_decrypt(value: &mut serde_json::Value, secret: Option<&str>) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn test_server_config() -> ServerConfig {
+        ServerConfig {
+            listen: "127.0.0.1:4000".to_string(),
+            workers: 4,
+            quic_listen: None,
+        }
+    }
+
+    fn test_yaml_config() -> YamlConfig {
+        YamlConfig {
+            server: test_server_config(),
+            cors: None,
+            subgraphs: vec![SubgraphConfig {
+                name: "users".to_string(),
+                url: "https://example.com/graphql".to_string(),
+                headers: HashMap::new(),
+                mtls: None,
+            }],
+            rate_limit: None,
+            waf: None,
+            query_cost: None,
+            disable_introspection: false,
+            circuit_breaker: None,
+            mtls: None,
+            quic: None,
+            enable_legacy_xor_value_decryption: false,
+        }
+    }
+
+    #[test]
+    fn test_interpolate_env_vars_requires_present_variables() {
+        let err = interpolate_env_vars("secret: ${ROUTER_TEST_MISSING_SECRET}")
+            .expect_err("missing env var should fail closed");
+
+        assert!(err.to_string().contains("ROUTER_TEST_MISSING_SECRET"));
+    }
+
+    #[test]
+    fn test_interpolate_env_vars_supports_defaults() {
+        let rendered = interpolate_env_vars("secret: ${ROUTER_TEST_OPTIONAL_SECRET:-fallback}")
+            .expect("default interpolation should succeed");
+
+        assert!(rendered.contains("fallback"));
+    }
+
+    #[test]
+    fn test_validate_cors_config_rejects_mixed_wildcard_origin() {
+        let err = validate_cors_config(&CorsConfig {
+            allow_origins: vec!["*".to_string(), "https://app.example.com".to_string()],
+        })
+        .expect_err("mixed wildcard origins should be rejected");
+
+        assert!(err.to_string().contains("cannot mix '*'"));
+    }
+
+    #[test]
+    fn test_validate_yaml_config_rejects_mtls_over_http() {
+        let mut config = test_yaml_config();
+        config.subgraphs[0].url = "http://example.com/graphql".to_string();
+        config.subgraphs[0].mtls = Some(grpc_graphql_gateway::mtls::MtlsConfig {
+            enabled: true,
+            ..Default::default()
+        });
+
+        let err = validate_yaml_config(&config, Some("secret"))
+            .expect_err("mTLS over plaintext transport must be rejected");
+
+        assert!(err.to_string().contains("non-HTTPS URL"));
+    }
+
+    #[test]
+    fn test_validate_yaml_config_requires_secret_for_legacy_xor_mode() {
+        let mut config = test_yaml_config();
+        config.enable_legacy_xor_value_decryption = true;
+
+        let err = validate_yaml_config(&config, None)
+            .expect_err("legacy xor mode without a secret must fail");
+
+        assert!(err
+            .to_string()
+            .contains("enable_legacy_xor_value_decryption"));
     }
 }
 

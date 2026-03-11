@@ -58,7 +58,10 @@ impl FederationConfig {
 
                 let type_name = message.full_name().replace('.', "_");
                 // BB-04: Validate the derived type name contains only safe identifier chars.
-                if !type_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                if !type_name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
                     return Err(Error::Schema(format!(
                         "Derived GraphQL type name '{}' contains invalid characters (from protobuf '{}')",
                         type_name,
@@ -372,16 +375,16 @@ impl EntityResolver for GrpcEntityResolver {
         );
 
         // BB-01: Get the resolver mapping — error out instead of echoing raw input.
-        let mapping =
-            self.resolver_mappings
-                .get(&entity_config.type_name)
-                .ok_or_else(|| {
-                    Error::Schema(format!(
-                        "No resolver mapping configured for entity type '{}'. \
+        let mapping = self
+            .resolver_mappings
+            .get(&entity_config.type_name)
+            .ok_or_else(|| {
+                Error::Schema(format!(
+                    "No resolver mapping configured for entity type '{}'. \
                          Register one via register_entity_resolver().",
-                entity_config.type_name
-                    ))
-                })?;
+                    entity_config.type_name
+                ))
+            })?;
 
         // Extract the key field from the representation
         let key_value = representation

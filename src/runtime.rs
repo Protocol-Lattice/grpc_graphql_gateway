@@ -88,6 +88,47 @@ pub struct ServeMux {
     plugins: PluginRegistry,
 }
 
+const STRICT_API_CSP: &str =
+    "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+const PLAYGROUND_CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
+
+fn parse_cors_allowed_origin(raw: Option<&str>) -> Option<axum::http::HeaderValue> {
+    let origin = raw?.trim();
+    if origin.is_empty() {
+        return None;
+    }
+
+    if origin != "*" {
+        let parsed = reqwest::Url::parse(origin).ok()?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return None;
+        }
+        if parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return None;
+        }
+        if parsed.path() != "/" || parsed.query().is_some() || parsed.fragment().is_some() {
+            return None;
+        }
+    }
+
+    axum::http::HeaderValue::from_str(origin).ok()
+}
+
+fn configured_cors_allow_origin() -> Option<axum::http::HeaderValue> {
+    parse_cors_allowed_origin(std::env::var("CORS_ALLOWED_ORIGIN").ok().as_deref())
+}
+
+fn content_security_policy(playground_enabled: bool) -> &'static str {
+    if playground_enabled {
+        PLAYGROUND_CSP
+    } else {
+        STRICT_API_CSP
+    }
+}
+
 impl ServeMux {
     /// Create a new ServeMux with an already built schema
     pub fn new(schema: DynamicSchema) -> Self {
@@ -775,6 +816,8 @@ impl ServeMux {
 
         // SECURITY: Check if playground should be enabled (default: disabled)
         let playground_enabled = self.playground_enabled;
+        let cors_allow_origin = configured_cors_allow_origin();
+        let content_security_policy = content_security_policy(playground_enabled);
 
         let state = Arc::new(self);
         let use_fast_path = state.high_perf_config.is_some();
@@ -804,129 +847,120 @@ impl ServeMux {
         router = router.layer(axum::extract::DefaultBodyLimit::max(1024 * 1024));
 
         // SECURITY: Add security headers using axum middleware
-        async fn add_security_headers(
-            req: axum::http::Request<axum::body::Body>,
-            next: axum_mw::Next,
-        ) -> Response {
-            // Handle OPTIONS preflight for CORS
-            if req.method() == axum::http::Method::OPTIONS {
-                let mut response = Response::builder()
-                    .status(axum::http::StatusCode::NO_CONTENT)
-                    .body(axum::body::Body::empty())
-                    .unwrap();
-                let headers = response.headers_mut();
-                // CORS headers for preflight
-                // SECURITY: Use CORS_ALLOWED_ORIGIN env var for production (default: *)
-                let cors_origin = std::env::var("CORS_ALLOWED_ORIGIN").unwrap_or_else(|_| "*".to_string());
-                headers.insert(
-                    axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                    axum::http::HeaderValue::from_str(&cors_origin).unwrap_or_else(|_| axum::http::HeaderValue::from_static("*")),
-                );
-                headers.insert(
-                    axum::http::header::ACCESS_CONTROL_ALLOW_METHODS,
-                    axum::http::HeaderValue::from_static("GET, POST, OPTIONS"),
-                );
-                headers.insert(
-                    axum::http::header::ACCESS_CONTROL_ALLOW_HEADERS,
+        router = router.layer(axum_mw::from_fn(
+            move |req: axum::http::Request<axum::body::Body>, next: axum_mw::Next| {
+                let cors_allow_origin = cors_allow_origin.clone();
+                async move {
+                    if req.method() == axum::http::Method::OPTIONS {
+                        let mut response = Response::builder()
+                            .status(axum::http::StatusCode::NO_CONTENT)
+                            .body(axum::body::Body::empty())
+                            .unwrap();
+
+                        if let Some(origin) = &cors_allow_origin {
+                            let headers = response.headers_mut();
+                            headers.insert(
+                                axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                                origin.clone(),
+                            );
+                            headers.insert(
+                                axum::http::header::ACCESS_CONTROL_ALLOW_METHODS,
+                                axum::http::HeaderValue::from_static("GET, POST, OPTIONS"),
+                            );
+                            headers.insert(
+                                axum::http::header::ACCESS_CONTROL_ALLOW_HEADERS,
+                                axum::http::HeaderValue::from_static(
+                                    "Content-Type, Authorization, X-Request-ID",
+                                ),
+                            );
+                            headers.insert(
+                                axum::http::header::ACCESS_CONTROL_MAX_AGE,
+                                axum::http::HeaderValue::from_static("86400"),
+                            );
+                        }
+
+                        return response;
+                    }
+
+                    let mut response = next.run(req).await;
+                    let headers = response.headers_mut();
+
+                    // Core security headers
+                    headers.insert(
+                        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+                        axum::http::HeaderValue::from_static("nosniff"),
+                    );
+                    headers.insert(
+                        axum::http::header::X_FRAME_OPTIONS,
+                        axum::http::HeaderValue::from_static("DENY"),
+                    );
+
+                    // HSTS (Strict-Transport-Security) - tells browsers to only use HTTPS
+                    // max-age=31536000 (1 year), includeSubDomains for comprehensive protection
+                    headers.insert(
+                        axum::http::header::STRICT_TRANSPORT_SECURITY,
+                        axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+                    );
+
+                    // Prevent caching of sensitive responses
+                    headers.insert(
+                        axum::http::header::CACHE_CONTROL,
+                        axum::http::HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+                    );
+
+                    // XSS Protection (legacy but still useful for older browsers)
+                    headers.insert(
+                        axum::http::header::HeaderName::from_static("x-xss-protection"),
+                        axum::http::HeaderValue::from_static("1; mode=block"),
+                    );
+
+                    headers.insert(
+                        axum::http::header::CONTENT_SECURITY_POLICY,
+                        axum::http::HeaderValue::from_static(content_security_policy),
+                    );
+
+                    // Referrer Policy - limit referrer information leakage
+                    headers.insert(
+                        axum::http::header::REFERRER_POLICY,
+                        axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"),
+                    );
+
+                    // Permissions Policy - Limit browser features
+                    headers.insert(
+                    axum::http::header::HeaderName::from_static("permissions-policy"),
                     axum::http::HeaderValue::from_static(
-                        "Content-Type, Authorization, X-Request-ID",
+                        "camera=(), microphone=(), geolocation=(), browsing-topics=(), payment=()",
                     ),
                 );
-                headers.insert(
-                    axum::http::header::ACCESS_CONTROL_MAX_AGE,
-                    axum::http::HeaderValue::from_static("86400"),
-                );
-                return response;
-            }
 
-            let mut response = next.run(req).await;
-            let headers = response.headers_mut();
+                    // DNS Prefetch Control - Privacy
+                    headers.insert(
+                        axum::http::header::HeaderName::from_static("x-dns-prefetch-control"),
+                        axum::http::HeaderValue::from_static("off"),
+                    );
 
-            // Core security headers
-            headers.insert(
-                axum::http::header::X_CONTENT_TYPE_OPTIONS,
-                axum::http::HeaderValue::from_static("nosniff"),
-            );
-            headers.insert(
-                axum::http::header::X_FRAME_OPTIONS,
-                axum::http::HeaderValue::from_static("DENY"),
-            );
+                    // Cross-Origin policies
+                    headers.insert(
+                        axum::http::header::HeaderName::from_static("cross-origin-opener-policy"),
+                        axum::http::HeaderValue::from_static("same-origin"),
+                    );
+                    headers.insert(
+                        axum::http::header::HeaderName::from_static("cross-origin-embedder-policy"),
+                        axum::http::HeaderValue::from_static("require-corp"),
+                    );
+                    headers.insert(
+                        axum::http::header::HeaderName::from_static("cross-origin-resource-policy"),
+                        axum::http::HeaderValue::from_static("same-origin"),
+                    );
 
-            // HSTS (Strict-Transport-Security) - tells browsers to only use HTTPS
-            // max-age=31536000 (1 year), includeSubDomains for comprehensive protection
-            headers.insert(
-                axum::http::header::STRICT_TRANSPORT_SECURITY,
-                axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
-            );
+                    if let Some(origin) = cors_allow_origin {
+                        headers.insert(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+                    }
 
-            // Prevent caching of sensitive responses
-            headers.insert(
-                axum::http::header::CACHE_CONTROL,
-                axum::http::HeaderValue::from_static("no-store, no-cache, must-revalidate"),
-            );
-
-            // XSS Protection (legacy but still useful for older browsers)
-            headers.insert(
-                axum::http::header::HeaderName::from_static("x-xss-protection"),
-                axum::http::HeaderValue::from_static("1; mode=block"),
-            );
-
-            // Content Security Policy - restrict resource loading
-            // Added object-src 'none', base-uri 'self', frame-ancestors 'none' for stricter security
-            // Added https://cdn.jsdelivr.net and https://unpkg.com to allow playground to work
-            headers.insert(
-                axum::http::header::CONTENT_SECURITY_POLICY,
-                axum::http::HeaderValue::from_static(
-                    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
-                ),
-            );
-
-            // Referrer Policy - limit referrer information leakage
-            headers.insert(
-                axum::http::header::REFERRER_POLICY,
-                axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"),
-            );
-
-            // Permissions Policy - Limit browser features
-            headers.insert(
-                axum::http::header::HeaderName::from_static("permissions-policy"),
-                axum::http::HeaderValue::from_static(
-                    "camera=(), microphone=(), geolocation=(), browsing-topics=(), payment=()",
-                ),
-            );
-
-            // DNS Prefetch Control - Privacy
-            headers.insert(
-                axum::http::header::HeaderName::from_static("x-dns-prefetch-control"),
-                axum::http::HeaderValue::from_static("off"),
-            );
-
-            // Cross-Origin policies
-            headers.insert(
-                axum::http::header::HeaderName::from_static("cross-origin-opener-policy"),
-                axum::http::HeaderValue::from_static("same-origin"),
-            );
-            headers.insert(
-                axum::http::header::HeaderName::from_static("cross-origin-embedder-policy"),
-                axum::http::HeaderValue::from_static("require-corp"),
-            );
-            headers.insert(
-                axum::http::header::HeaderName::from_static("cross-origin-resource-policy"),
-                axum::http::HeaderValue::from_static("same-origin"),
-            );
-
-            // CORS headers for regular requests
-            // SECURITY: Use CORS_ALLOWED_ORIGIN env var for production (default: *)
-            let cors_origin = std::env::var("CORS_ALLOWED_ORIGIN").unwrap_or_else(|_| "*".to_string());
-            headers.insert(
-                axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                axum::http::HeaderValue::from_str(&cors_origin).unwrap_or_else(|_| axum::http::HeaderValue::from_static("*")),
-            );
-
-            response
-        }
-
-        router = router.layer(axum_mw::from_fn(add_security_headers));
+                    response
+                }
+            },
+        ));
 
         // Add compression layer if enabled
         if let Some(ref config) = compression_config {
@@ -2708,10 +2742,10 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert!(csp.contains("default-src 'self'"));
-        assert!(csp.contains("object-src 'none'"));
-        assert!(csp.contains("base-uri 'self'"));
+        assert!(csp.contains("default-src 'none'"));
+        assert!(csp.contains("base-uri 'none'"));
         assert!(csp.contains("frame-ancestors 'none'"));
+        assert!(csp.contains("form-action 'none'"));
 
         // Check Isolation Headers
         assert_eq!(
@@ -2741,7 +2775,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cors_headers_present() {
+    async fn test_cors_headers_absent_by_default() {
         let mux = build_router_mux();
         let app = mux.into_router();
 
@@ -2756,6 +2790,25 @@ mod tests {
             .unwrap();
 
         let headers = response.headers();
-        assert!(headers.get("access-control-allow-origin").is_some());
+        assert!(headers.get("access-control-allow-origin").is_none());
+    }
+
+    #[test]
+    fn test_parse_cors_allowed_origin_rejects_empty_values() {
+        assert!(parse_cors_allowed_origin(None).is_none());
+        assert!(parse_cors_allowed_origin(Some("")).is_none());
+        assert!(parse_cors_allowed_origin(Some("   ")).is_none());
+        assert!(parse_cors_allowed_origin(Some("javascript:alert(1)")).is_none());
+        assert!(parse_cors_allowed_origin(Some("https://app.example.com/path")).is_none());
+    }
+
+    #[test]
+    fn test_content_security_policy_switches_for_playground() {
+        let api_csp = content_security_policy(false);
+        let playground_csp = content_security_policy(true);
+
+        assert!(api_csp.contains("default-src 'none'"));
+        assert!(playground_csp.contains("default-src 'self'"));
+        assert!(playground_csp.contains("https://cdn.jsdelivr.net"));
     }
 }

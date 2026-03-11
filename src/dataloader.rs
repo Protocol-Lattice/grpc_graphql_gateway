@@ -182,7 +182,8 @@ impl Loader<RepresentationKey> for EntityBatcher {
                     "Batch resolver returned wrong number of values"
                 );
                 return Err(
-                    "Internal error: batch resolver returned unexpected number of values".to_string(),
+                    "Internal error: batch resolver returned unexpected number of values"
+                        .to_string(),
                 );
             }
 

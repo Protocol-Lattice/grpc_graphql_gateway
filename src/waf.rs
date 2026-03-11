@@ -196,10 +196,10 @@ const LDAP_PATTERNS: &[&str] = &[
 const SSTI_PATTERNS: &[&str] = &[
     r"\{\{\s*[a-zA-Z_].*\}\}", // Moustache/Handlebars/Jinja/etc — require identifier start
     r"\$\{[^}]*[a-zA-Z_][^}]*\}", // EL — require identifier content
-    r"<%=",                     // ERB/JSP
+    r"<%=",                    // ERB/JSP
     r"#\{[^}]*[a-zA-Z_][^}]*\}", // Ruby
     r"\*\{[^}]*[a-zA-Z_][^}]*\}",
-    r"\[\[.*\]\]",             // Flask/Jinja2 alternative
+    r"\[\[.*\]\]", // Flask/Jinja2 alternative
     r"\{\%.*\%\}",
 ];
 

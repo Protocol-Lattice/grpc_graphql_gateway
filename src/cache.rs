@@ -126,7 +126,10 @@ mod serde_millis {
     where
         S: Serializer,
     {
-        let millis = time.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+        let millis = time
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
         serializer.serialize_u64(millis)
     }
 
@@ -472,16 +475,26 @@ impl ResponseCache {
                 pipe.atomic();
 
                 // SETEX cache_key ttl json
-                pipe.set_ex(format!("{}{}", REDIS_CACHE_PREFIX, &cache_key), json, ttl_secs);
+                pipe.set_ex(
+                    format!("{}{}", REDIS_CACHE_PREFIX, &cache_key),
+                    json,
+                    ttl_secs,
+                );
 
                 // Add to type indexes
                 for type_name in &referenced_types {
-                    pipe.sadd(format!("{}{}", REDIS_TYPE_PREFIX, type_name), format!("{}{}", REDIS_CACHE_PREFIX, &cache_key));
+                    pipe.sadd(
+                        format!("{}{}", REDIS_TYPE_PREFIX, type_name),
+                        format!("{}{}", REDIS_CACHE_PREFIX, &cache_key),
+                    );
                 }
 
                 // Add to entity indexes
                 for entity_key in &referenced_entities {
-                    pipe.sadd(format!("{}{}", REDIS_ENTITY_PREFIX, entity_key), format!("{}{}", REDIS_CACHE_PREFIX, &cache_key));
+                    pipe.sadd(
+                        format!("{}{}", REDIS_ENTITY_PREFIX, entity_key),
+                        format!("{}{}", REDIS_CACHE_PREFIX, &cache_key),
+                    );
                 }
 
                 if let Err(e) = pipe.query_async::<()>(&mut conn).await {

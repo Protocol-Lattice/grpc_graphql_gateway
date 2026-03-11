@@ -140,9 +140,7 @@ impl QueryCostAnalyzer {
         const MAX_USER_BUDGET_ENTRIES: usize = 50_000;
         if budgets.len() >= MAX_USER_BUDGET_ENTRIES && !budgets.contains_key(user_id) {
             // Inline cleanup: remove entries whose window has expired
-            budgets.retain(|_, b| {
-                now.duration_since(b.window_start) <= self.config.budget_window
-            });
+            budgets.retain(|_, b| now.duration_since(b.window_start) <= self.config.budget_window);
 
             if budgets.len() >= MAX_USER_BUDGET_ENTRIES {
                 return Err(format!(
