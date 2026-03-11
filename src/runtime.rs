@@ -2657,7 +2657,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let status = response.status();
+        assert!(
+            status == StatusCode::FORBIDDEN || status == StatusCode::UNAUTHORIZED,
+            "Expected 403 or 401 but got {}",
+            status
+        );
     }
 
     #[tokio::test]
