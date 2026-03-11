@@ -88,17 +88,9 @@ fn default_workers() -> usize {
     16
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 struct CorsConfig {
     allow_origins: Vec<String>,
-}
-
-impl Default for CorsConfig {
-    fn default() -> Self {
-        Self {
-            allow_origins: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1448,94 +1440,6 @@ fn recursive_decrypt(value: &mut serde_json::Value, secret: Option<&str>) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    fn test_server_config() -> ServerConfig {
-        ServerConfig {
-            listen: "127.0.0.1:4000".to_string(),
-            workers: 4,
-            quic_listen: None,
-        }
-    }
-
-    fn test_yaml_config() -> YamlConfig {
-        YamlConfig {
-            server: test_server_config(),
-            cors: None,
-            subgraphs: vec![SubgraphConfig {
-                name: "users".to_string(),
-                url: "https://example.com/graphql".to_string(),
-                headers: HashMap::new(),
-                mtls: None,
-            }],
-            rate_limit: None,
-            waf: None,
-            query_cost: None,
-            disable_introspection: false,
-            circuit_breaker: None,
-            mtls: None,
-            quic: None,
-            enable_legacy_xor_value_decryption: false,
-        }
-    }
-
-    #[test]
-    fn test_interpolate_env_vars_requires_present_variables() {
-        let err = interpolate_env_vars("secret: ${ROUTER_TEST_MISSING_SECRET}")
-            .expect_err("missing env var should fail closed");
-
-        assert!(err.to_string().contains("ROUTER_TEST_MISSING_SECRET"));
-    }
-
-    #[test]
-    fn test_interpolate_env_vars_supports_defaults() {
-        let rendered = interpolate_env_vars("secret: ${ROUTER_TEST_OPTIONAL_SECRET:-fallback}")
-            .expect("default interpolation should succeed");
-
-        assert!(rendered.contains("fallback"));
-    }
-
-    #[test]
-    fn test_validate_cors_config_rejects_mixed_wildcard_origin() {
-        let err = validate_cors_config(&CorsConfig {
-            allow_origins: vec!["*".to_string(), "https://app.example.com".to_string()],
-        })
-        .expect_err("mixed wildcard origins should be rejected");
-
-        assert!(err.to_string().contains("cannot mix '*'"));
-    }
-
-    #[test]
-    fn test_validate_yaml_config_rejects_mtls_over_http() {
-        let mut config = test_yaml_config();
-        config.subgraphs[0].url = "http://example.com/graphql".to_string();
-        config.subgraphs[0].mtls = Some(grpc_graphql_gateway::mtls::MtlsConfig {
-            enabled: true,
-            ..Default::default()
-        });
-
-        let err = validate_yaml_config(&config, Some("secret"))
-            .expect_err("mTLS over plaintext transport must be rejected");
-
-        assert!(err.to_string().contains("non-HTTPS URL"));
-    }
-
-    #[test]
-    fn test_validate_yaml_config_requires_secret_for_legacy_xor_mode() {
-        let mut config = test_yaml_config();
-        config.enable_legacy_xor_value_decryption = true;
-
-        let err = validate_yaml_config(&config, None)
-            .expect_err("legacy xor mode without a secret must fail");
-
-        assert!(err
-            .to_string()
-            .contains("enable_legacy_xor_value_decryption"));
-    }
-}
 
 // NOTE: `handle_subscription` has been replaced by
 // `SubscriptionFederationEngine::handle_subscription` which fans out the
@@ -1833,5 +1737,94 @@ async fn handle_live_query_subscription(
         Err(e) => {
             tracing::error!(error = %e, "Initial query execution failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn test_server_config() -> ServerConfig {
+        ServerConfig {
+            listen: "127.0.0.1:4000".to_string(),
+            workers: 4,
+            quic_listen: None,
+        }
+    }
+
+    fn test_yaml_config() -> YamlConfig {
+        YamlConfig {
+            server: test_server_config(),
+            cors: None,
+            subgraphs: vec![SubgraphConfig {
+                name: "users".to_string(),
+                url: "https://example.com/graphql".to_string(),
+                headers: HashMap::new(),
+                mtls: None,
+            }],
+            rate_limit: None,
+            waf: None,
+            query_cost: None,
+            disable_introspection: false,
+            circuit_breaker: None,
+            mtls: None,
+            quic: None,
+            enable_legacy_xor_value_decryption: false,
+        }
+    }
+
+    #[test]
+    fn test_interpolate_env_vars_requires_present_variables() {
+        let err = interpolate_env_vars("secret: ${ROUTER_TEST_MISSING_SECRET}")
+            .expect_err("missing env var should fail closed");
+
+        assert!(err.to_string().contains("ROUTER_TEST_MISSING_SECRET"));
+    }
+
+    #[test]
+    fn test_interpolate_env_vars_supports_defaults() {
+        let rendered = interpolate_env_vars("secret: ${ROUTER_TEST_OPTIONAL_SECRET:-fallback}")
+            .expect("default interpolation should succeed");
+
+        assert!(rendered.contains("fallback"));
+    }
+
+    #[test]
+    fn test_validate_cors_config_rejects_mixed_wildcard_origin() {
+        let err = validate_cors_config(&CorsConfig {
+            allow_origins: vec!["*".to_string(), "https://app.example.com".to_string()],
+        })
+        .expect_err("mixed wildcard origins should be rejected");
+
+        assert!(err.to_string().contains("cannot mix '*'"));
+    }
+
+    #[test]
+    fn test_validate_yaml_config_rejects_mtls_over_http() {
+        let mut config = test_yaml_config();
+        config.subgraphs[0].url = "http://example.com/graphql".to_string();
+        config.subgraphs[0].mtls = Some(grpc_graphql_gateway::mtls::MtlsConfig {
+            enabled: true,
+            ..Default::default()
+        });
+
+        let err = validate_yaml_config(&config, Some("secret"))
+            .expect_err("mTLS over plaintext transport must be rejected");
+
+        assert!(err.to_string().contains("non-HTTPS URL"));
+    }
+
+    #[test]
+    fn test_validate_yaml_config_requires_secret_for_legacy_xor_mode() {
+        let mut config = test_yaml_config();
+        config.enable_legacy_xor_value_decryption = true;
+
+        let err = validate_yaml_config(&config, None)
+            .expect_err("legacy xor mode without a secret must fail");
+
+        assert!(err
+            .to_string()
+            .contains("enable_legacy_xor_value_decryption"));
     }
 }
