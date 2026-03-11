@@ -44,6 +44,11 @@ query_cost:
 
 disable_introspection: false # Set to true in production
 
+# Legacy XOR response decryption exists only for local demo compatibility with
+# the example subgraphs. It is disabled by default in the router because XOR
+# is not cryptographic protection.
+enable_legacy_xor_value_decryption: true
+
 # ────────────────────────────────────────────────────────────────────
 # Zero-Trust Mutual TLS (mTLS)
 # ────────────────────────────────────────────────────────────────────
@@ -52,7 +57,7 @@ disable_introspection: false # Set to true in production
 # GATEWAY_SECRET with a zero-trust model where identities are verified
 # via X.509 certificates.
 mtls:
-  enabled: true
+  enabled: false  # Local examples use plain HTTP; enable only with HTTPS subgraphs.
   trust_domain: "cluster.local"
   service_name: "router"
   namespace: "default"

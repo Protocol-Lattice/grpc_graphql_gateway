@@ -61,7 +61,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite as tungstenite;
+use tokio_tungstenite::tungstenite;
 use tracing::{debug, info, warn};
 
 // ─── Configuration ───────────────────────────────────────────────────────────
@@ -234,14 +234,9 @@ pub struct SubscriptionFederationEngine {
 
 impl SubscriptionFederationEngine {
     /// Create a new engine.
-    pub fn new(
-        config: SubscriptionFederationConfig,
-        subgraphs: Vec<SubgraphEndpoint>,
-    ) -> Self {
-        let map: HashMap<String, SubgraphEndpoint> = subgraphs
-            .into_iter()
-            .map(|s| (s.name.clone(), s))
-            .collect();
+    pub fn new(config: SubscriptionFederationConfig, subgraphs: Vec<SubgraphEndpoint>) -> Self {
+        let map: HashMap<String, SubgraphEndpoint> =
+            subgraphs.into_iter().map(|s| (s.name.clone(), s)).collect();
         Self {
             config,
             subgraphs: Arc::new(map),
@@ -258,10 +253,7 @@ impl SubscriptionFederationEngine {
     /// the top-level field names in the subscription query.
     ///
     /// Returns a map from subgraph name → the set of fields it owns.
-    pub fn route_subscription(
-        &self,
-        fields: &[String],
-    ) -> Result<HashMap<String, Vec<String>>> {
+    pub fn route_subscription(&self, fields: &[String]) -> Result<HashMap<String, Vec<String>>> {
         let mut plan: HashMap<String, Vec<String>> = HashMap::new();
 
         for field in fields {
@@ -279,9 +271,7 @@ impl SubscriptionFederationEngine {
             } else if self.config.auto_route {
                 // Broadcast to all subgraphs.
                 for name in self.subgraphs.keys() {
-                    plan.entry(name.clone())
-                        .or_default()
-                        .push(field.clone());
+                    plan.entry(name.clone()).or_default().push(field.clone());
                 }
             } else {
                 return Err(Error::Schema(format!(
@@ -561,40 +551,37 @@ async fn upstream_subscription_task(
     }
 
     // Connect with timeout.
-    let ws_stream = match tokio::time::timeout(
-        Duration::from_secs(timeout_secs),
-        connect_async(request),
-    )
-    .await
-    {
-        Ok(Ok((stream, _response))) => stream,
-        Ok(Err(e)) => {
-            counters.upstream_errors.fetch_add(1, Ordering::Relaxed);
-            let _ = merged_tx
-                .send(UpstreamEvent::Error {
-                    subgraph: subgraph_name.clone(),
-                    message: format!("WebSocket connection failed: {}", e),
-                })
-                .await;
-            counters
-                .active_upstream_connections
-                .fetch_sub(1, Ordering::Relaxed);
-            return;
-        }
-        Err(_) => {
-            counters.upstream_errors.fetch_add(1, Ordering::Relaxed);
-            let _ = merged_tx
-                .send(UpstreamEvent::Error {
-                    subgraph: subgraph_name.clone(),
-                    message: "WebSocket connection timed out".to_string(),
-                })
-                .await;
-            counters
-                .active_upstream_connections
-                .fetch_sub(1, Ordering::Relaxed);
-            return;
-        }
-    };
+    let ws_stream =
+        match tokio::time::timeout(Duration::from_secs(timeout_secs), connect_async(request)).await
+        {
+            Ok(Ok((stream, _response))) => stream,
+            Ok(Err(e)) => {
+                counters.upstream_errors.fetch_add(1, Ordering::Relaxed);
+                let _ = merged_tx
+                    .send(UpstreamEvent::Error {
+                        subgraph: subgraph_name.clone(),
+                        message: format!("WebSocket connection failed: {}", e),
+                    })
+                    .await;
+                counters
+                    .active_upstream_connections
+                    .fetch_sub(1, Ordering::Relaxed);
+                return;
+            }
+            Err(_) => {
+                counters.upstream_errors.fetch_add(1, Ordering::Relaxed);
+                let _ = merged_tx
+                    .send(UpstreamEvent::Error {
+                        subgraph: subgraph_name.clone(),
+                        message: "WebSocket connection timed out".to_string(),
+                    })
+                    .await;
+                counters
+                    .active_upstream_connections
+                    .fetch_sub(1, Ordering::Relaxed);
+                return;
+            }
+        };
 
     debug!(
         subgraph = %subgraph_name,

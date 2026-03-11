@@ -238,7 +238,7 @@ impl CompressionConfig {
         if min_size_bytes < MIN_SAFE_THRESHOLD {
             tracing::warn!(
                 requested = min_size_bytes,
-                enforced  = MIN_SAFE_THRESHOLD,
+                enforced = MIN_SAFE_THRESHOLD,
                 "min_size_bytes raised to the minimum safe threshold (BREACH/CRIME mitigation)"
             );
             self.min_size_bytes = MIN_SAFE_THRESHOLD;
@@ -361,7 +361,7 @@ impl CompressionStats {
     pub fn record_compressed(&mut self, original_bytes: u64, compressed_bytes: u64) {
         if compressed_bytes > original_bytes {
             tracing::warn!(
-                original   = original_bytes,
+                original = original_bytes,
                 compressed = compressed_bytes,
                 "Compressed size exceeds original — skipping stats update"
             );
@@ -380,13 +380,21 @@ impl CompressionStats {
     }
 
     /// Total bytes received before compression.
-    pub fn bytes_in(&self) -> u64 { self.bytes_in }
+    pub fn bytes_in(&self) -> u64 {
+        self.bytes_in
+    }
     /// Total bytes sent after compression.
-    pub fn bytes_out(&self) -> u64 { self.bytes_out }
+    pub fn bytes_out(&self) -> u64 {
+        self.bytes_out
+    }
     /// Number of responses that were compressed.
-    pub fn compressed_count(&self) -> u64 { self.compressed_count }
+    pub fn compressed_count(&self) -> u64 {
+        self.compressed_count
+    }
     /// Number of responses that were NOT compressed.
-    pub fn uncompressed_count(&self) -> u64 { self.uncompressed_count }
+    pub fn uncompressed_count(&self) -> u64 {
+        self.uncompressed_count
+    }
 
     /// Calculate the compression ratio (compressed / original).
     ///
@@ -479,7 +487,7 @@ mod tests {
         // 10 compressed: 1000 in, 300 out; 5 uncompressed: 500 in, 500 out
         // total: 1500 in, 800 out  ->  ratio = 0.5333…
         assert!((stats.compression_ratio() - (800.0 / 1500.0)).abs() < 0.001);
-        assert!((stats.savings_percentage() - (1.0 - 800.0/1500.0) * 100.0).abs() < 0.001);
+        assert!((stats.savings_percentage() - (1.0 - 800.0 / 1500.0) * 100.0).abs() < 0.001);
         assert_eq!(stats.compressed_count(), 10);
         assert_eq!(stats.uncompressed_count(), 5);
     }

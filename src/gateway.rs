@@ -1514,10 +1514,7 @@ impl GatewayBuilder {
         // This prevents silent binding to unintended interfaces when the address
         // is sourced from external configuration.
         let socket_addr: std::net::SocketAddr = addr_str.parse().map_err(|e| {
-            crate::error::Error::Internal(format!(
-                "Invalid bind address '{}': {}",
-                addr_str, e
-            ))
+            crate::error::Error::Internal(format!("Invalid bind address '{}': {}", addr_str, e))
         })?;
         if socket_addr.ip().is_unspecified() {
             tracing::warn!(
