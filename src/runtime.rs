@@ -24,8 +24,8 @@ use crate::plugin::PluginRegistry;
 use crate::query_whitelist::{QueryWhitelistConfig, SharedQueryWhitelist};
 use crate::request_collapsing::{RequestCollapsingConfig, SharedRequestCollapsingRegistry};
 use crate::schema::{DynamicSchema, GrpcResponseCache};
-use async_graphql::ServerError;
-use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
+use async_graphql::{futures_util::stream::BoxStream, Data, ServerError};
+use async_graphql_axum::{GraphQLProtocol, GraphQLRequest, GraphQLResponse, GraphQLWebSocket};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -33,11 +33,12 @@ use axum::{
     },
     http::HeaderMap,
     response::{Html, IntoResponse, Json},
-    routing::{get, get_service, post},
+    routing::{get, post},
     Extension, Router,
 };
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
+use std::any::TypeId;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -126,6 +127,164 @@ fn content_security_policy(playground_enabled: bool) -> &'static str {
         PLAYGROUND_CSP
     } else {
         STRICT_API_CSP
+    }
+}
+
+#[derive(Clone, Debug)]
+struct WebSocketSessionHeaders {
+    headers: HeaderMap,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LiveQueryRequestMarker;
+
+fn is_forbidden_ws_connection_header(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "connection"
+            | "content-length"
+            | "forwarded"
+            | "host"
+            | "origin"
+            | "sec-websocket-extensions"
+            | "sec-websocket-key"
+            | "sec-websocket-protocol"
+            | "sec-websocket-version"
+            | "upgrade"
+            | "x-forwarded-for"
+            | "x-real-ip"
+    )
+}
+
+fn json_value_to_header_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
+fn merge_ws_connection_header_values(
+    headers: &mut HeaderMap,
+    values: &serde_json::Map<String, serde_json::Value>,
+) {
+    for (key, value) in values {
+        if is_forbidden_ws_connection_header(key) {
+            continue;
+        }
+
+        let Some(value_str) = json_value_to_header_string(value) else {
+            continue;
+        };
+
+        let Ok(header_name) = axum::http::HeaderName::from_bytes(key.as_bytes()) else {
+            continue;
+        };
+        let Ok(header_value) = axum::http::HeaderValue::from_str(&value_str) else {
+            continue;
+        };
+
+        headers.insert(header_name, header_value);
+    }
+}
+
+fn merge_ws_connection_init_headers(
+    base_headers: &HeaderMap,
+    payload: &serde_json::Value,
+) -> HeaderMap {
+    let mut headers = base_headers.clone();
+    let Some(payload_obj) = payload.as_object() else {
+        return headers;
+    };
+
+    if let Some(nested_headers) = payload_obj
+        .get("headers")
+        .and_then(|value| value.as_object())
+    {
+        merge_ws_connection_header_values(&mut headers, nested_headers);
+    }
+
+    merge_ws_connection_header_values(&mut headers, payload_obj);
+
+    headers
+}
+
+fn ws_session_headers(session_data: Option<&Arc<Data>>) -> HeaderMap {
+    session_data
+        .and_then(|data| data.get(&TypeId::of::<WebSocketSessionHeaders>()))
+        .and_then(|value| value.downcast_ref::<WebSocketSessionHeaders>())
+        .map(|session| session.headers.clone())
+        .unwrap_or_default()
+}
+
+#[derive(Clone)]
+struct SubscriptionExecutor {
+    mux: Arc<ServeMux>,
+}
+
+impl SubscriptionExecutor {
+    fn new(mux: Arc<ServeMux>) -> Self {
+        Self { mux }
+    }
+}
+
+#[async_trait::async_trait]
+impl async_graphql::Executor for SubscriptionExecutor {
+    async fn execute(&self, request: async_graphql::Request) -> async_graphql::Response {
+        self.mux.schema.execute(request).await
+    }
+
+    fn execute_stream(
+        &self,
+        request: async_graphql::Request,
+        session_data: Option<Arc<Data>>,
+    ) -> BoxStream<'static, async_graphql::Response> {
+        let mux = self.mux.clone();
+
+        Box::pin(async_stream::stream! {
+            let headers = ws_session_headers(session_data.as_ref());
+
+            let request = match mux.prepare_graphql_request(request) {
+                Ok(request) => request,
+                Err(response) => {
+                    yield response;
+                    return;
+                }
+            };
+
+            let ctx = match mux.prepare_execution_context(&headers).await {
+                Ok(ctx) => ctx,
+                Err(err) => {
+                    yield async_graphql::Response::from_errors(vec![ServerError::new(err.to_string(), None)]);
+                    return;
+                }
+            };
+
+            if let Err(err) = mux.plugins.on_request(&ctx, &request).await {
+                yield async_graphql::Response::from_errors(vec![ServerError::new(err.to_string(), None)]);
+                return;
+            }
+
+            let request = request
+                .data(ctx.clone())
+                .data(mux.plugins.clone())
+                .data(GrpcResponseCache::default());
+
+            let schema_executor = mux.schema.executor();
+            let stream =
+                async_graphql::Executor::execute_stream(&schema_executor, request, session_data);
+            futures::pin_mut!(stream);
+
+            while let Some(response) = stream.next().await {
+                if let Err(err) = mux.plugins.on_response(&ctx, &response).await {
+                    yield async_graphql::Response::from_errors(vec![ServerError::new(err.to_string(), None)]);
+                    break;
+                }
+
+                yield response;
+            }
+        })
     }
 }
 
@@ -314,12 +473,7 @@ impl ServeMux {
         self.plugins = plugins;
     }
 
-    async fn execute_with_middlewares(
-        &self,
-        headers: HeaderMap,
-        request: async_graphql::Request,
-    ) -> Result<async_graphql::Response> {
-        // Create context with request ID and timing info
+    async fn prepare_execution_context(&self, headers: &HeaderMap) -> Result<Context> {
         let mut ctx = Context {
             headers: headers.clone(),
             extensions: std::collections::HashMap::new(),
@@ -348,6 +502,66 @@ impl ServeMux {
         for middleware in &self.middlewares {
             middleware.call(&mut ctx).await?;
         }
+
+        Ok(ctx)
+    }
+
+    fn prepare_graphql_request(
+        &self,
+        request: async_graphql::Request,
+    ) -> std::result::Result<async_graphql::Request, async_graphql::Response> {
+        let processed_request = if let Some(ref apq_store) = self.apq_store {
+            match self.process_apq_request(apq_store, request) {
+                Ok(req) => req,
+                Err(apq_err) => {
+                    return Err(self.apq_error_response(apq_err));
+                }
+            }
+        } else {
+            request
+        };
+
+        if let Err(err) = crate::waf::validate_request(&processed_request) {
+            tracing::warn!("WAF blocked request: {}", err);
+            let mut server_err = ServerError::new(err.to_string(), None);
+            server_err.extensions = Some({
+                let mut ext = async_graphql::ErrorExtensionValues::default();
+                ext.set("code", "VALIDATION_ERROR");
+                ext
+            });
+            return Err(async_graphql::Response::from_errors(vec![server_err]));
+        }
+
+        if let Some(ref whitelist) = self.query_whitelist {
+            let operation_id = processed_request
+                .extensions
+                .get("operationId")
+                .and_then(|v| serde_json::to_value(v).ok())
+                .and_then(|v| v.as_str().map(String::from));
+
+            if let Err(err) =
+                whitelist.validate_query(&processed_request.query, operation_id.as_deref())
+            {
+                tracing::warn!("Query whitelist validation failed: {}", err);
+                let mut server_err = ServerError::new(err.to_string(), None);
+                server_err.extensions = Some({
+                    let mut ext = async_graphql::ErrorExtensionValues::default();
+                    ext.set("code", "QUERY_NOT_WHITELISTED");
+                    ext
+                });
+                return Err(async_graphql::Response::from_errors(vec![server_err]));
+            }
+        }
+
+        Ok(processed_request)
+    }
+
+    async fn execute_with_middlewares(
+        &self,
+        headers: HeaderMap,
+        request: async_graphql::Request,
+    ) -> Result<async_graphql::Response> {
+        let ctx = self.prepare_execution_context(&headers).await?;
 
         // Plugin Hook: on_request
         self.plugins.on_request(&ctx, &request).await?;
@@ -381,71 +595,37 @@ impl ServeMux {
         headers: HeaderMap,
         request: async_graphql::Request,
     ) -> async_graphql::Response {
-        let processed_request = if let Some(ref apq_store) = self.apq_store {
-            match self.process_apq_request(apq_store, request) {
-                Ok(req) => req,
-                Err(apq_err) => {
-                    return self.apq_error_response(apq_err);
-                }
-            }
-        } else {
-            request
+        let mut processed_request = match self.prepare_graphql_request(request) {
+            Ok(request) => request,
+            Err(response) => return response,
         };
 
         // Handle @live directive - detect and strip before execution
         // The @live directive indicates the client wants live/reactive updates
-        let is_live_query = crate::live_query::has_live_directive(&processed_request.query);
-        let processed_request = if is_live_query {
+        let is_live_query = crate::live_query::has_live_directive(&processed_request.query)
+            || processed_request
+                .data
+                .contains_key(&TypeId::of::<LiveQueryRequestMarker>());
+        if crate::live_query::has_live_directive(&processed_request.query) {
             // Strip the @live directive so async-graphql doesn't reject it
             let stripped_query = crate::live_query::strip_live_directive(&processed_request.query);
             tracing::debug!(
                 is_live = is_live_query,
                 "Live query detected, stripping @live directive"
             );
-            let mut new_request =
-                async_graphql::Request::new(stripped_query).variables(processed_request.variables);
-            if let Some(op_name) = processed_request.operation_name {
-                new_request = new_request.operation_name(op_name);
-            }
-            new_request
-        } else {
-            processed_request
-        };
-
-        // WAF Security Check: Validate request for SQL Injection patterns
-        if let Err(err) = crate::waf::validate_request(&processed_request) {
-            tracing::warn!("WAF blocked request: {}", err);
-            let mut server_err = ServerError::new(err.to_string(), None);
-            server_err.extensions = Some({
-                let mut ext = async_graphql::ErrorExtensionValues::default();
-                ext.set("code", "VALIDATION_ERROR");
-                ext
-            });
-            return async_graphql::Response::from_errors(vec![server_err]);
+            let mut rebuilt_request = async_graphql::Request::new(stripped_query);
+            rebuilt_request.operation_name = processed_request.operation_name;
+            rebuilt_request.variables = processed_request.variables;
+            rebuilt_request.uploads = processed_request.uploads;
+            rebuilt_request.data = processed_request.data;
+            rebuilt_request.extensions = processed_request.extensions;
+            rebuilt_request.introspection_mode = processed_request.introspection_mode;
+            processed_request = rebuilt_request;
         }
 
-        // Validate query against whitelist if enabled
-        if let Some(ref whitelist) = self.query_whitelist {
-            // Extract operation ID from extensions if present
-            let operation_id = processed_request
-                .extensions
-                .get("operationId")
-                .and_then(|v| serde_json::to_value(v).ok())
-                .and_then(|v| v.as_str().map(String::from));
-
-            if let Err(err) =
-                whitelist.validate_query(&processed_request.query, operation_id.as_deref())
-            {
-                tracing::warn!("Query whitelist validation failed: {}", err);
-                let mut server_err = ServerError::new(err.to_string(), None);
-                server_err.extensions = Some({
-                    let mut ext = async_graphql::ErrorExtensionValues::default();
-                    ext.set("code", "QUERY_NOT_WHITELISTED");
-                    ext
-                });
-                return async_graphql::Response::from_errors(vec![server_err]);
-            }
-        }
+        // Live queries must always observe fresh state. Caching them causes stale
+        // re-executions after invalidation events, which breaks the update stream.
+        let bypass_response_cache = is_live_query;
 
         // Check if this is a mutation (mutations are never cached and trigger invalidation)
         let is_mutation = crate::cache::is_mutation(&processed_request.query);
@@ -472,7 +652,7 @@ impl ServeMux {
         };
 
         // Try cache lookup for non-mutations
-        if !is_mutation {
+        if !is_mutation && !bypass_response_cache {
             if let Some(ref cache) = self.response_cache {
                 let cache_key = crate::cache::ResponseCache::generate_cache_key(
                     &processed_request.query,
@@ -527,15 +707,16 @@ impl ServeMux {
         }
 
         // Store query info for potential caching (need this before moving processed_request)
-        let cache_query_info = if self.response_cache.is_some() && !is_mutation {
-            Some((
-                processed_request.query.clone(),
-                serde_json::to_value(&processed_request.variables).unwrap_or_default(),
-                processed_request.operation_name.clone(),
-            ))
-        } else {
-            None
-        };
+        let cache_query_info =
+            if self.response_cache.is_some() && !is_mutation && !bypass_response_cache {
+                Some((
+                    processed_request.query.clone(),
+                    serde_json::to_value(&processed_request.variables).unwrap_or_default(),
+                    processed_request.operation_name.clone(),
+                ))
+            } else {
+                None
+            };
 
         // Execute the query
         match self
@@ -811,9 +992,6 @@ impl ServeMux {
         let client_pool = self.client_pool.clone();
         let compression_config = self.compression_config.clone();
 
-        let state = Arc::new(self.clone());
-        let subscription = GraphQLSubscription::new(state.schema.executor());
-
         // SECURITY: Check if playground should be enabled (default: disabled)
         let playground_enabled = self.playground_enabled;
         let cors_allow_origin = configured_cors_allow_origin();
@@ -837,7 +1015,7 @@ impl ServeMux {
         };
 
         let mut router = router
-            .route_service("/graphql/ws", get_service(subscription))
+            .route("/graphql/ws", get(handle_graphql_ws))
             .route("/graphql/live", get(handle_live_query_ws))
             .route("/graphql/defer", post(handle_graphql_defer))
             .layer(Extension(state.schema.executor()))
@@ -1277,6 +1455,38 @@ async fn handle_graphql_fast_or_defer(
     }
 
     mux.handle_fast(headers, body).await.into_response()
+}
+
+async fn handle_graphql_ws(
+    protocol: GraphQLProtocol,
+    ws: WebSocketUpgrade,
+    State(mux): State<Arc<ServeMux>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let handshake_headers = headers.clone();
+    let executor = SubscriptionExecutor::new(mux);
+
+    ws.protocols(async_graphql::http::ALL_WEBSOCKET_PROTOCOLS)
+        .on_upgrade(move |stream| async move {
+            let connection_headers = handshake_headers;
+
+            GraphQLWebSocket::new(stream, executor, protocol)
+                .on_connection_init(move |payload| {
+                    let connection_headers = connection_headers.clone();
+                    async move {
+                        let mut data = Data::default();
+                        data.insert(WebSocketSessionHeaders {
+                            headers: merge_ws_connection_init_headers(
+                                &connection_headers,
+                                &payload,
+                            ),
+                        });
+                        Ok(data)
+                    }
+                })
+                .serve()
+                .await;
+        })
 }
 
 /// Handler for POST requests to /graphql/defer — `@defer` incremental delivery
@@ -1913,6 +2123,9 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
                         if let Some(op_name) = &sub.operation_name {
                             gql_request = gql_request.operation_name(op_name);
                         }
+                        if sub.is_live {
+                            gql_request = gql_request.data(LiveQueryRequestMarker);
+                        }
 
                         // Execute
                         let response = mux_clone.handle_http(HeaderMap::new(), gql_request).await;
@@ -2089,6 +2302,9 @@ async fn handle_live_socket(socket: WebSocket, mux: Arc<ServeMux>) {
 
                 if let Some(ref op_name) = operation_name {
                     gql_request = gql_request.operation_name(op_name);
+                }
+                if is_live {
+                    gql_request = gql_request.data(LiveQueryRequestMarker);
                 }
 
                 // Execute initial query
@@ -2815,5 +3031,106 @@ mod tests {
         assert!(api_csp.contains("default-src 'none'"));
         assert!(playground_csp.contains("default-src 'self'"));
         assert!(playground_csp.contains("https://cdn.jsdelivr.net"));
+    }
+
+    #[test]
+    fn test_merge_ws_connection_init_headers_rejects_forwarded_ip_overrides() {
+        let mut base_headers = HeaderMap::new();
+        base_headers.insert(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer handshake"),
+        );
+
+        let merged = merge_ws_connection_init_headers(
+            &base_headers,
+            &serde_json::json!({
+                "headers": {
+                    "authorization": "Bearer init-token",
+                    "x-forwarded-for": "203.0.113.10"
+                }
+            }),
+        );
+
+        assert_eq!(
+            merged
+                .get(axum::http::header::AUTHORIZATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "Bearer init-token"
+        );
+        assert!(merged.get("x-forwarded-for").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_prepare_execution_context_runs_middlewares_for_ws_requests() {
+        let mut mux = build_router_mux();
+        let auth = crate::middleware::EnhancedAuthMiddleware::with_fn(
+            crate::middleware::AuthConfig::required(),
+            |token| {
+                let accepted = token == "ws-secret";
+                Box::pin(async move {
+                    if accepted {
+                        Ok(crate::middleware::AuthClaims {
+                            sub: Some("user-1".to_string()),
+                            ..Default::default()
+                        })
+                    } else {
+                        Err(crate::error::Error::Unauthorized("bad token".to_string()))
+                    }
+                })
+            },
+        );
+        mux.add_middleware(std::sync::Arc::new(auth));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer ws-secret"),
+        );
+
+        let ctx = mux
+            .prepare_execution_context(&headers)
+            .await
+            .expect("middleware-authenticated websocket context");
+
+        assert_eq!(
+            ctx.get("auth.authenticated"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(ctx.user_id().as_deref(), Some("user-1"));
+    }
+
+    #[tokio::test]
+    async fn test_live_queries_bypass_response_cache() {
+        let mut mux = build_router_mux();
+        mux.enable_response_cache(crate::cache::CacheConfig::default());
+
+        let stripped_query = "query { __schema { queryType { name } } }";
+        let request = async_graphql::Request::new(stripped_query).data(LiveQueryRequestMarker);
+
+        let response = mux.handle_http(HeaderMap::new(), request).await;
+        assert!(
+            response.errors.is_empty(),
+            "live query should execute successfully"
+        );
+
+        let cache_key = crate::cache::ResponseCache::generate_cache_key(
+            &stripped_query,
+            Some(&serde_json::json!({})),
+            None,
+            &[],
+        );
+
+        let cache_lookup = mux
+            .response_cache()
+            .expect("response cache enabled")
+            .get(&cache_key)
+            .await;
+
+        assert!(
+            matches!(cache_lookup, crate::cache::CacheLookupResult::Miss),
+            "live query responses must not be cached"
+        );
     }
 }

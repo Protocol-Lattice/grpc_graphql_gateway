@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [1.2.3] - 2026-03-11
+
+### Security
+
+- **WebSocket Middleware Enforcement** (`runtime.rs`): `/graphql/ws` subscription traffic now runs through the same request preparation and middleware path as HTTP requests, restoring auth, whitelist, WAF/APQ checks, plugin hooks, and header-derived context for WebSocket subscriptions.
+- **Router WebSocket Hardening** (`src/bin/router.rs`): WebSocket upgrade requests and subscription operations now pass the same DDoS and WAF gates as the HTTP `/graphql` endpoint, and per-client rate limiting now keys off the real socket peer address instead of trusting `X-Forwarded-For`.
+- **Subscription Federation Limits** (`subscription_federation.rs`): `max_upstream_connections` is now enforced so a single federated subscription cannot fan out into unbounded upstream WebSocket connections.
+
+### Fixed
+
+- **Live Query Freshness** (`runtime.rs`): `@live` executions now bypass the response cache, including invalidation-driven re-executions after the `@live` directive has been stripped. This fixes stale `next` frames where mutation-triggered updates could omit freshly-created entities such as `Eve`.
+- **Regression Coverage** (`runtime.rs`): Added `test_live_queries_bypass_response_cache` to lock in the no-cache behavior for live-query executions.
+
 ## [1.2.2] - 2026-03-11
 
 ### Security
