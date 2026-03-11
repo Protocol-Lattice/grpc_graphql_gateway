@@ -59,7 +59,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite;
 use tracing::{debug, info, warn};
@@ -230,6 +230,7 @@ pub struct SubscriptionFederationEngine {
     /// Available subgraph endpoints keyed by subgraph name.
     subgraphs: Arc<HashMap<String, SubgraphEndpoint>>,
     counters: Arc<Counters>,
+    upstream_limit: Arc<Semaphore>,
 }
 
 impl SubscriptionFederationEngine {
@@ -237,10 +238,12 @@ impl SubscriptionFederationEngine {
     pub fn new(config: SubscriptionFederationConfig, subgraphs: Vec<SubgraphEndpoint>) -> Self {
         let map: HashMap<String, SubgraphEndpoint> =
             subgraphs.into_iter().map(|s| (s.name.clone(), s)).collect();
+        let upstream_limit = Arc::new(Semaphore::new(config.max_upstream_connections));
         Self {
             config,
             subgraphs: Arc::new(map),
             counters: Arc::new(Counters::default()),
+            upstream_limit,
         }
     }
 
@@ -342,6 +345,55 @@ impl SubscriptionFederationEngine {
                     .active_subscriptions
                     .fetch_sub(1, Ordering::Relaxed);
                 return;
+            }
+        };
+
+        let required_upstreams = match u32::try_from(plan.len()) {
+            Ok(count) => count,
+            Err(_) => {
+                let _ = client_tx
+                    .send(serde_json::json!({
+                        "type": "error",
+                        "id": subscription_id,
+                        "payload": [{
+                            "message": "Subscription fan-out exceeds supported upstream limit"
+                        }]
+                    }))
+                    .await;
+                self.counters
+                    .active_subscriptions
+                    .fetch_sub(1, Ordering::Relaxed);
+                return;
+            }
+        };
+
+        let _upstream_permits = if required_upstreams == 0 {
+            None
+        } else {
+            match self
+                .upstream_limit
+                .clone()
+                .try_acquire_many_owned(required_upstreams)
+            {
+                Ok(permits) => Some(permits),
+                Err(_) => {
+                    let _ = client_tx
+                        .send(serde_json::json!({
+                            "type": "error",
+                            "id": subscription_id,
+                            "payload": [{
+                                "message": format!(
+                                    "Upstream connection limit ({}) exceeded",
+                                    self.config.max_upstream_connections
+                                )
+                            }]
+                        }))
+                        .await;
+                    self.counters
+                        .active_subscriptions
+                        .fetch_sub(1, Ordering::Relaxed);
+                    return;
+                }
             }
         };
 
@@ -1169,5 +1221,46 @@ mod tests {
         // Should get an error for unknown subgraph.
         let msg = rx.recv().await.unwrap();
         assert_eq!(msg["type"], "error");
+    }
+
+    #[tokio::test]
+    async fn test_handle_subscription_enforces_upstream_connection_limit() {
+        let config = SubscriptionFederationConfig {
+            auto_route: false,
+            max_upstream_connections: 0,
+            routing: {
+                let mut routing = HashMap::new();
+                routing.insert("updates".into(), "users".into());
+                routing
+            },
+            ..Default::default()
+        };
+        let engine = SubscriptionFederationEngine::new(
+            config,
+            vec![SubgraphEndpoint {
+                name: "users".into(),
+                ws_url: "ws://127.0.0.1:65535/graphql/ws".into(),
+                headers: HashMap::new(),
+            }],
+        );
+        let (tx, mut rx) = mpsc::channel(16);
+        let (_cancel_tx, cancel_rx) = mpsc::channel(1);
+
+        engine
+            .handle_subscription(
+                "4".to_string(),
+                "subscription { updates { id } }".to_string(),
+                None,
+                tx,
+                cancel_rx,
+            )
+            .await;
+
+        let msg = rx.recv().await.unwrap();
+        assert_eq!(msg["type"], "error");
+        assert!(msg["payload"][0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Upstream connection limit"));
     }
 }

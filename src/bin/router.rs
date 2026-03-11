@@ -162,6 +162,63 @@ impl AppState {
 
 const STRICT_API_CSP: &str =
     "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+const MAX_WS_SUBSCRIPTIONS_PER_CONNECTION: usize = 100;
+
+fn rate_limit_client_ip(addr: SocketAddr) -> IpAddr {
+    addr.ip()
+}
+
+async fn validate_ws_upgrade_request(
+    state: &Arc<AppState>,
+    client_ip: IpAddr,
+    headers: &axum::http::HeaderMap,
+) -> Option<axum::response::Response> {
+    let inner = state.inner.read().await;
+
+    if !inner.ddos.check(client_ip).await {
+        return Some(
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({
+                    "errors": [{"message": "Rate limit exceeded", "extensions": {"code": "RATE_LIMITED"}}]
+                })),
+            )
+                .into_response(),
+        );
+    }
+
+    if let Err(e) = grpc_graphql_gateway::waf::validate_headers(headers, &inner.waf_config) {
+        return Some(
+            Json(json!({
+                "errors": [{
+                    "message": e.to_string(),
+                    "extensions": {"code": "VALIDATION_ERROR"}
+                }]
+            }))
+            .into_response(),
+        );
+    }
+
+    None
+}
+
+async fn validate_ws_operation_request(
+    state: &Arc<AppState>,
+    client_ip: IpAddr,
+    query: &str,
+    variables: Option<&Value>,
+) -> Result<(), (String, &'static str)> {
+    let inner = state.inner.read().await;
+
+    if !inner.ddos.check(client_ip).await {
+        return Err(("Rate limit exceeded".to_string(), "RATE_LIMITED"));
+    }
+
+    grpc_graphql_gateway::waf::validate_raw(query, variables, &inner.waf_config)
+        .map_err(|e| (e.to_string(), "VALIDATION_ERROR"))?;
+
+    Ok(())
+}
 
 fn interpolate_env_vars(config_content: &str) -> anyhow::Result<String> {
     let re = regex::Regex::new(r"\$\{([^}]+)\}").unwrap();
@@ -920,13 +977,7 @@ async fn graphql_handler(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    // Extract client IP (fast path)
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .and_then(|s| s.trim().parse::<IpAddr>().ok())
-        .unwrap_or(addr.ip());
+    let client_ip = rate_limit_client_ip(addr);
 
     // Acquire read lock for current configuration state
     let inner = state.inner.read().await;
@@ -1160,17 +1211,25 @@ async fn health_handler() -> impl IntoResponse {
 /// Implements the graphql-transport-ws protocol for standard GraphQL subscriptions
 /// This is different from live queries - subscriptions are streaming GraphQL operations
 async fn subscription_ws_handler(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
+    let client_ip = rate_limit_client_ip(addr);
+    if let Some(response) = validate_ws_upgrade_request(&state, client_ip, &headers).await {
+        return response;
+    }
+
     ws.protocols(["graphql-transport-ws"])
-        .on_upgrade(move |socket| handle_subscription_socket(socket, state))
+        .on_upgrade(move |socket| handle_subscription_socket(socket, state, client_ip))
 }
 
 /// Handle individual WebSocket connection for subscriptions
-async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
+async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>, client_ip: IpAddr) {
     let (sender, mut receiver) = socket.split();
     let connection_id = uuid::Uuid::new_v4().to_string();
+    let mut connection_initialized = false;
 
     tracing::info!(connection_id = %connection_id, "New subscription WebSocket connection");
 
@@ -1205,6 +1264,8 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
 
                     match msg_type {
                         "connection_init" => {
+                            connection_initialized = true;
+
                             // Acknowledge connection
                             let ack = json!({
                                 "type": "connection_ack",
@@ -1221,12 +1282,67 @@ async fn handle_subscription_socket(socket: WebSocket, state: Arc<AppState>) {
                         }
 
                         "subscribe" => {
+                            if !connection_initialized {
+                                let error = json!({
+                                    "type": "error",
+                                    "id": msg_value["id"].as_str().unwrap_or("unknown"),
+                                    "payload": [{
+                                        "message": "connection_init is required before subscribe",
+                                        "extensions": {"code": "UNAUTHORIZED"}
+                                    }]
+                                });
+
+                                if let Ok(text) = serde_json::to_string(&error) {
+                                    let _ = outgoing_tx.send(Message::Text(text.into())).await;
+                                }
+                                continue;
+                            }
+
+                            if active_subscriptions.len() >= MAX_WS_SUBSCRIPTIONS_PER_CONNECTION {
+                                let error = json!({
+                                    "type": "error",
+                                    "id": msg_value["id"].as_str().unwrap_or("unknown"),
+                                    "payload": [{
+                                        "message": format!(
+                                            "Subscription limit ({}) exceeded for this connection",
+                                            MAX_WS_SUBSCRIPTIONS_PER_CONNECTION
+                                        ),
+                                        "extensions": {"code": "RATE_LIMITED"}
+                                    }]
+                                });
+
+                                if let Ok(text) = serde_json::to_string(&error) {
+                                    let _ = outgoing_tx.send(Message::Text(text.into())).await;
+                                }
+                                continue;
+                            }
+
                             let id = msg_value["id"].as_str().unwrap_or("unknown").to_string();
                             let payload = &msg_value["payload"];
                             let query = payload["query"].as_str();
                             let variables = payload.get("variables");
 
                             if let Some(query_str) = query {
+                                if let Err((message, code)) = validate_ws_operation_request(
+                                    &state, client_ip, query_str, variables,
+                                )
+                                .await
+                                {
+                                    let error = json!({
+                                        "type": "error",
+                                        "id": id,
+                                        "payload": [{
+                                            "message": message,
+                                            "extensions": {"code": code}
+                                        }]
+                                    });
+
+                                    if let Ok(text) = serde_json::to_string(&error) {
+                                        let _ = outgoing_tx.send(Message::Text(text.into())).await;
+                                    }
+                                    continue;
+                                }
+
                                 // Check if this is actually a subscription operation
                                 if query_str.trim_start().starts_with("subscription") {
                                     let outgoing_tx_clone = outgoing_tx.clone();
@@ -1440,7 +1556,6 @@ fn recursive_decrypt(value: &mut serde_json::Value, secret: Option<&str>) {
     }
 }
 
-
 // NOTE: `handle_subscription` has been replaced by
 // `SubscriptionFederationEngine::handle_subscription` which fans out the
 // subscription to upstream subgraph WebSockets and merges the event streams.
@@ -1451,17 +1566,25 @@ fn recursive_decrypt(value: &mut serde_json::Value, secret: Option<&str>) {
 /// Implements the graphql-transport-ws protocol with live query support
 /// Supports the @live directive for real-time GraphQL subscriptions
 async fn live_query_ws_handler(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
+    let client_ip = rate_limit_client_ip(addr);
+    if let Some(response) = validate_ws_upgrade_request(&state, client_ip, &headers).await {
+        return response;
+    }
+
     ws.protocols(["graphql-transport-ws"])
-        .on_upgrade(move |socket| handle_live_socket(socket, state))
+        .on_upgrade(move |socket| handle_live_socket(socket, state, client_ip))
 }
 
 /// Handle individual WebSocket connection for live queries
-async fn handle_live_socket(socket: WebSocket, state: Arc<AppState>) {
+async fn handle_live_socket(socket: WebSocket, state: Arc<AppState>, client_ip: IpAddr) {
     let (sender, mut receiver) = socket.split();
     let connection_id = uuid::Uuid::new_v4().to_string();
+    let mut connection_initialized = false;
 
     tracing::info!(connection_id = %connection_id, "New live query WebSocket connection");
 
@@ -1534,6 +1657,8 @@ async fn handle_live_socket(socket: WebSocket, state: Arc<AppState>) {
 
                     match msg_type {
                         "connection_init" => {
+                            connection_initialized = true;
+
                             // Acknowledge connection
                             let ack = json!({
                                 "type": "connection_ack",
@@ -1550,12 +1675,48 @@ async fn handle_live_socket(socket: WebSocket, state: Arc<AppState>) {
                         }
 
                         "subscribe" => {
+                            if !connection_initialized {
+                                let error = json!({
+                                    "type": "error",
+                                    "id": msg_value["id"].as_str().unwrap_or("unknown"),
+                                    "payload": [{
+                                        "message": "connection_init is required before subscribe",
+                                        "extensions": {"code": "UNAUTHORIZED"}
+                                    }]
+                                });
+
+                                if let Ok(text) = serde_json::to_string(&error) {
+                                    let _ = outgoing_tx.send(Message::Text(text.into())).await;
+                                }
+                                continue;
+                            }
+
                             let id = msg_value["id"].as_str().unwrap_or("unknown").to_string();
                             let payload = &msg_value["payload"];
                             let query = payload["query"].as_str();
                             let variables = payload.get("variables");
 
                             if let Some(query_str) = query {
+                                if let Err((message, code)) = validate_ws_operation_request(
+                                    &state, client_ip, query_str, variables,
+                                )
+                                .await
+                                {
+                                    let error = json!({
+                                        "type": "error",
+                                        "id": id,
+                                        "payload": [{
+                                            "message": message,
+                                            "extensions": {"code": code}
+                                        }]
+                                    });
+
+                                    if let Ok(text) = serde_json::to_string(&error) {
+                                        let _ = outgoing_tx.send(Message::Text(text.into())).await;
+                                    }
+                                    continue;
+                                }
+
                                 tokio::spawn(handle_live_query_subscription(
                                     state.clone(),
                                     connection_id.clone(),
@@ -1826,5 +1987,11 @@ mod tests {
         assert!(err
             .to_string()
             .contains("enable_legacy_xor_value_decryption"));
+    }
+
+    #[test]
+    fn test_rate_limit_client_ip_uses_socket_peer_address() {
+        let addr: SocketAddr = "127.0.0.1:4100".parse().unwrap();
+        assert_eq!(rate_limit_client_ip(addr), addr.ip());
     }
 }

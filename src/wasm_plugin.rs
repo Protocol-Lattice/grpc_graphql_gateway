@@ -791,9 +791,9 @@ impl WasmPlugin {
     ) -> std::result::Result<i32, crate::error::Error> {
         // First, allocate space in guest memory
         let alloc = instance.get_func(&mut *store, "alloc").ok_or_else(|| {
-            crate::error::Error::WasmPlugin(format!(
-                "WASM module missing 'alloc' export (required for passing data)"
-            ))
+            crate::error::Error::WasmPlugin(
+                "WASM module missing 'alloc' export (required for passing data)".to_string(),
+            )
         })?;
 
         let data_len = json_data.len() as i32;

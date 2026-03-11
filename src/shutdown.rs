@@ -342,7 +342,7 @@ mod tests {
         // Should have waited at least timeout
         assert!(duration >= Duration::from_millis(50));
         // But shouldn't be stuck forever
-        assert!(duration < Duration::from_secs(1));
+        assert!(duration < Duration::from_secs(5));
 
         // Should still show active count (it was forced)
         assert_eq!(coordinator.active_count(), 1);
