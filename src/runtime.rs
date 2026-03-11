@@ -3116,7 +3116,7 @@ mod tests {
         );
 
         let cache_key = crate::cache::ResponseCache::generate_cache_key(
-            &stripped_query,
+            stripped_query,
             Some(&serde_json::json!({})),
             None,
             &[],

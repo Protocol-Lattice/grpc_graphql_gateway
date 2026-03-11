@@ -57,7 +57,6 @@
 //! - If omitted, a self-signed certificate is generated via `rcgen` (development only)
 
 #[cfg(feature = "quic")]
-
 mod quic_impl {
     use anyhow::Context;
     use bytes::Bytes;
@@ -477,7 +476,6 @@ mod quic_impl {
                     // Call `resolve_request().await` to complete reading the request
                     // headers and obtain the (Request, RequestStream) pair.
                     let handler = Arc::clone(&handler);
-                    let remote = remote;
                     tokio::spawn(async move {
                         match resolver.resolve_request().await {
                             Ok((request, stream)) => {
