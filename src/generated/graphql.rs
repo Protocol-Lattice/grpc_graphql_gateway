@@ -141,6 +141,7 @@ pub struct GraphqlResponse {
 ///
 /// message Member {
 ///    string name = 1 \[(graphql.field) = {required: true}\]; // this field is required in GraphQL, it equivalent to String! on GraphQL
+///    string email = 2 \[(graphql.field) = {description: "The member's email address"}\]; // adds description visible via introspection
 /// }
 ///
 /// message CreateMemberRequest {
@@ -179,6 +180,9 @@ pub struct GraphqlField {
     /// Federation: Mark this field as shareable (can be resolved from multiple subgraphs)
     #[prost(bool, tag = "9")]
     pub shareable: bool,
+    /// Description for this field, exposed via GraphQL introspection
+    #[prost(string, tag = "10")]
+    pub description: ::prost::alloc::string::String,
 }
 /// Federation configuration for message types (entities).
 /// User can use this option to define federated entities:

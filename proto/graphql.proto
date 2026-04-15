@@ -159,6 +159,7 @@ enum GraphqlType {
 //
 // message Member {
 //   string name = 1 [(graphql.field) = {required: true}]; // this field is required in GraphQL, it equivalent to String! on GraphQL
+//   string email = 2 [(graphql.field) = {description: "The member's email address"}]; // adds description visible via introspection
 // }
 //
 // message CreateMemberRequest {
@@ -187,6 +188,8 @@ message GraphqlField {
   string provides = 8;
   // Federation: Mark this field as shareable (can be resolved from multiple subgraphs)
   bool shareable = 9;
+  // Description for this field, exposed via GraphQL introspection
+  string description = 10;
 }
 
 // Federation configuration for message types (entities).

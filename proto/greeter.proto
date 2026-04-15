@@ -5,52 +5,71 @@ package greeter;
 import "graphql.proto";
 
 message HelloRequest {
-  string name = 1 [(graphql.field) = {default: "World"}];
+  // description: Name of the person to greet
+  string name = 1 [(graphql.field) = {default: "World", description: "Name of the person to greet"}];
 }
 
 message HelloReply {
-  string message = 1;
-  GreetMeta meta = 2;
+  // description: The greeting message
+  string message = 1 [(graphql.field) = {description: "The greeting message"}];
+  // description: Metadata about the greeting
+  GreetMeta meta = 2 [(graphql.field) = {description: "Metadata about the greeting"}];
 }
 
 message UpdateGreetingRequest {
-  string name = 1 [(graphql.field) = {required: true}];
-  string greeting = 2 [(graphql.field) = {required: true, name: "salutation"}];
+  // description: Name of the person to update the greeting for
+  string name = 1 [(graphql.field) = {required: true, description: "Name of the person to update the greeting for"}];
+  // description: The new greeting salutation to use
+  string greeting = 2 [(graphql.field) = {required: true, name: "salutation", description: "The new greeting salutation to use"}];
 }
 
 message User {
-  string id = 1;
-  string display_name = 2 [(graphql.field) = {name: "displayName"}];
-  bool trusted = 3;
+  // description: Unique identifier of the user
+  string id = 1 [(graphql.field) = {description: "Unique identifier of the user"}];
+  // description: Human-readable display name
+  string display_name = 2 [(graphql.field) = {name: "displayName", description: "Human-readable display name"}];
+  // description: Whether this user is trusted
+  bool trusted = 3 [(graphql.field) = {description: "Whether this user is trusted"}];
 }
 
 message GreetMeta {
-  string correlation_id = 1 [(graphql.field) = {name: "correlationId"}];
-  User from = 2;
+  // description: Correlation ID for request tracing
+  string correlation_id = 1 [(graphql.field) = {name: "correlationId", description: "Correlation ID for request tracing"}];
+  // description: The user who sent the greeting
+  User from = 2 [(graphql.field) = {description: "The user who sent the greeting"}];
 }
 
 message GetUserRequest {
-  string id = 1 [(graphql.field) = {required: true}];
+  // description: ID of the user to retrieve
+  string id = 1 [(graphql.field) = {required: true, description: "ID of the user to retrieve"}];
 }
 
 message UploadAvatarRequest {
-  string user_id = 1 [(graphql.field) = {required: true, name: "userId"}];
-  bytes avatar = 2 [(graphql.field) = {required: true}];
+  // description: ID of the user uploading an avatar
+  string user_id = 1 [(graphql.field) = {required: true, name: "userId", description: "ID of the user uploading an avatar"}];
+  // description: The avatar image data
+  bytes avatar = 2 [(graphql.field) = {required: true, description: "The avatar image data"}];
 }
 
 message UploadAvatarReply {
-  string user_id = 1 [(graphql.field) = {name: "userId"}];
-  uint64 size = 2;
+  // description: ID of the user whose avatar was uploaded
+  string user_id = 1 [(graphql.field) = {name: "userId", description: "ID of the user whose avatar was uploaded"}];
+  // description: Size of the uploaded avatar in bytes
+  uint64 size = 2 [(graphql.field) = {description: "Size of the uploaded avatar in bytes"}];
 }
 
 message UploadAvatarsRequest {
-  string user_id = 1 [(graphql.field) = {required: true, name: "userId"}];
-  repeated bytes avatars = 2 [(graphql.field) = {required: true}];
+  // description: ID of the user uploading avatars
+  string user_id = 1 [(graphql.field) = {required: true, name: "userId", description: "ID of the user uploading avatars"}];
+  // description: List of avatar image data to upload
+  repeated bytes avatars = 2 [(graphql.field) = {required: true, description: "List of avatar image data to upload"}];
 }
 
 message UploadAvatarsReply {
-  string user_id = 1 [(graphql.field) = {name: "userId"}];
-  repeated uint64 sizes = 2;
+  // description: ID of the user whose avatars were uploaded
+  string user_id = 1 [(graphql.field) = {name: "userId", description: "ID of the user whose avatars were uploaded"}];
+  // description: Sizes of each uploaded avatar in bytes
+  repeated uint64 sizes = 2 [(graphql.field) = {description: "Sizes of each uploaded avatar in bytes"}];
 }
 
 service Greeter {
