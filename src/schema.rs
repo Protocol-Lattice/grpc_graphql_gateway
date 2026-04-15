@@ -1292,7 +1292,11 @@ impl TypeRegistry {
             let field_name = graphql_field_name(&field, field_ext);
             let required = field_is_required(&field, field_ext);
             let ty = self.input_type_for_field(&field, field_ext, required);
-            input = input.field(InputValue::new(field_name, ty));
+            let mut input_val = InputValue::new(field_name, ty);
+            if let Some(desc) = field_description(&field, field_ext) {
+                input_val = input_val.description(desc);
+            }
+            input = input.field(input_val);
         }
 
         self.input_objects.insert(name.clone(), input);
@@ -1365,6 +1369,11 @@ impl TypeRegistry {
             if field_is_shareable(&field, &field_ext) {
                 gql_field =
                     gql_field.directive(async_graphql::dynamic::Directive::new("shareable"));
+            }
+
+            // Apply description from proto extension
+            if let Some(desc) = field_description(&field, &field_ext) {
+                gql_field = gql_field.description(desc);
             }
 
             obj = obj.field(gql_field);
@@ -1792,6 +1801,19 @@ fn field_is_shareable(field: &FieldDescriptor, field_ext: &ExtensionDescriptor) 
         .flatten()
         .map(|f| f.shareable)
         .unwrap_or(false)
+}
+
+fn field_description(field: &FieldDescriptor, field_ext: &ExtensionDescriptor) -> Option<String> {
+    decode_extension::<GraphqlField>(&field.options(), field_ext)
+        .ok()
+        .flatten()
+        .and_then(|f| {
+            if f.description.is_empty() {
+                None
+            } else {
+                Some(f.description)
+            }
+        })
 }
 
 fn compute_return_type(
