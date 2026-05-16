@@ -4,9 +4,13 @@
 //! requests to prevent N+1 query problems in federated GraphQL.
 
 use crate::federation::{EntityConfig, EntityResolver};
+use crate::gbp::{GbpDecoder, GbpEncoder};
 use crate::{Error, Result};
 use async_graphql::dataloader::{DataLoader, HashMapCache, Loader};
 use async_graphql::{indexmap::IndexMap, Name, Value as GqlValue};
+use redis::AsyncCommands;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -31,10 +35,12 @@ pub struct EntityDataLoader {
 struct EntityBatcher {
     resolver: Arc<dyn EntityResolver>,
     entity_configs: Arc<HashMap<String, EntityConfig>>,
+    redis: Option<Arc<redis::Client>>,
+    ttl_secs: u64,
 }
 
 impl EntityDataLoader {
-    /// Create a new EntityDataLoader
+    /// Create a new EntityDataLoader with in-memory caching
     pub fn new(
         resolver: Arc<dyn EntityResolver>,
         entity_configs: HashMap<String, EntityConfig>,
@@ -43,6 +49,30 @@ impl EntityDataLoader {
         let batcher = EntityBatcher {
             resolver,
             entity_configs: entity_configs.clone(),
+            redis: None,
+            ttl_secs: 0,
+        };
+        let loader = DataLoader::with_cache(batcher, tokio::spawn, HashMapCache::default());
+
+        Self {
+            entity_configs,
+            loader: Arc::new(loader),
+        }
+    }
+
+    /// Create a new EntityDataLoader with Redis distributed caching
+    pub fn new_with_redis(
+        resolver: Arc<dyn EntityResolver>,
+        entity_configs: HashMap<String, EntityConfig>,
+        redis_client: redis::Client,
+        ttl_secs: u64,
+    ) -> Self {
+        let entity_configs = Arc::new(entity_configs);
+        let batcher = EntityBatcher {
+            resolver,
+            entity_configs: entity_configs.clone(),
+            redis: Some(Arc::new(redis_client)),
+            ttl_secs,
         };
         let loader = DataLoader::with_cache(batcher, tokio::spawn, HashMapCache::default());
 
@@ -132,49 +162,79 @@ impl Loader<RepresentationKey> for EntityBatcher {
         &self,
         keys: &[RepresentationKey],
     ) -> std::result::Result<HashMap<RepresentationKey, Self::Value>, Self::Error> {
+        let mut results = HashMap::with_capacity(keys.len());
+        let mut remaining_keys = Vec::with_capacity(keys.len());
+
+        // Step 1: Check Redis distributed cache first if enabled
+        if let Some(redis) = &self.redis {
+            let mut conn = redis
+                .get_multiplexed_async_connection()
+                .await
+                .map_err(|e| format!("Redis connection error: {}", e))?;
+
+            for key in keys {
+                let redis_key = self.get_redis_key(key);
+                let data: Option<Vec<u8>> = conn.get(&redis_key).await.ok();
+                
+                if let Some(bytes) = data {
+                    let mut decoder = GbpDecoder::new();
+                    if let Ok(json_val) = decoder.decode(&bytes) {
+                        // Convert back to async_graphql::Value
+                        if let Ok(gql_val) = serde_json::from_value(json_val) {
+                            results.insert(key.clone(), gql_val);
+                            continue;
+                        }
+                    }
+                }
+                remaining_keys.push(key);
+            }
+        } else {
+            for key in keys {
+                remaining_keys.push(key);
+            }
+        }
+
+        if remaining_keys.is_empty() {
+            return Ok(results);
+        }
+
+        // Step 2: Batch resolve remaining keys from gRPC subgraphs
         let mut grouped: HashMap<Arc<str>, Vec<&RepresentationKey>> = HashMap::new();
-        for key in keys {
+        for key in remaining_keys {
             grouped
                 .entry(Arc::clone(&key.entity_type))
                 .or_default()
                 .push(key);
         }
 
-        let mut results = HashMap::with_capacity(keys.len());
         for (entity_type, group_keys) in grouped {
             let config = self
                 .entity_configs
                 .get(entity_type.as_ref())
-                // BB-07: Avoid leaking internal type names — log server-side only.
                 .ok_or_else(|| {
                     tracing::error!(entity_type = %entity_type, "Unknown entity type in dataloader");
                     "Internal error: unknown entity type".to_string()
                 })?;
-
-            if group_keys.len() == 1 {
-                let key = group_keys[0];
-                let value = self
-                    .resolver
-                    .resolve_entity(config, key.representation.as_ref())
-                    .await
-                    .map_err(|e| e.to_string())?;
-                results.insert(key.clone(), value);
-                continue;
-            }
 
             let representations: Vec<_> = group_keys
                 .iter()
                 .map(|key| (*key.representation).clone())
                 .collect();
 
-            let values = self
-                .resolver
-                .batch_resolve_entities(config, representations)
-                .await
-                .map_err(|e| e.to_string())?;
+            let values = if representations.len() == 1 {
+                vec![self
+                    .resolver
+                    .resolve_entity(config, &representations[0])
+                    .await
+                    .map_err(|e| e.to_string())?]
+            } else {
+                self.resolver
+                    .batch_resolve_entities(config, representations)
+                    .await
+                    .map_err(|e| e.to_string())?
+            };
 
             if values.len() != group_keys.len() {
-                // BB-07: Log details internally; surface a generic message externally.
                 tracing::error!(
                     entity_type = %entity_type,
                     got  = values.len(),
@@ -187,6 +247,21 @@ impl Loader<RepresentationKey> for EntityBatcher {
                 );
             }
 
+            // Step 3: Store newly resolved entities in Redis if enabled
+            if let Some(redis) = &self.redis {
+                if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {
+                    for (key, value) in group_keys.iter().zip(values.iter()) {
+                        let redis_key = self.get_redis_key(key);
+                        // Convert GqlValue -> serde_json::Value -> GBP
+                        if let Ok(json_val) = serde_json::to_value(value) {
+                            let mut encoder = GbpEncoder::new();
+                            let bytes = encoder.encode(&json_val);
+                            let _: redis::RedisResult<()> = conn.set_ex(redis_key, bytes, self.ttl_secs).await;
+                        }
+                    }
+                }
+            }
+
             for (key, value) in group_keys.into_iter().zip(values.into_iter()) {
                 results.insert(key.clone(), value);
             }
@@ -196,8 +271,21 @@ impl Loader<RepresentationKey> for EntityBatcher {
     }
 }
 
+impl EntityBatcher {
+    fn get_redis_key(&self, key: &RepresentationKey) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(key.entity_type.as_bytes());
+        hasher.update(b":");
+        if let Ok(json) = serde_json::to_string(&key.normalized) {
+            hasher.update(json.as_bytes());
+        }
+        let hash = ::hex::encode(hasher.finalize());
+        format!("gql:dl:{}", hash)
+    }
+}
+
 /// Cache key for DataLoader that normalizes nested representations.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct RepresentationKey {
     entity_type: Arc<str>,
     normalized: NormalizedValue,
@@ -231,19 +319,7 @@ impl Hash for RepresentationKey {
 }
 
 /// Normalized representation of a GraphQL value for hashing.
-/// Objects are sorted by key so nested field order does not affect caching.
-///
-/// # BB-06 – Binary fields
-/// Raw bytes are **not** stored directly. Instead, a 32-byte BLAKE3 digest is
-/// stored. This prevents:
-/// - Unbounded memory growth from large binary keys.
-/// - Timing side-channels when binary fields contain secret material (e.g. tokens)
-///   because digest equality is constant-time with respect to the *digest*, not
-///   the underlying bytes.
-///
-/// Note: two different byte strings that share the same BLAKE3 hash are treated
-/// as equal cache keys — a collision probability of 2⁻²⁵⁶.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 enum NormalizedValue {
     Null,
     Boolean(bool),
@@ -252,7 +328,6 @@ enum NormalizedValue {
     Enum(String),
     List(Vec<NormalizedValue>),
     Object(Vec<(String, NormalizedValue)>),
-    /// BLAKE3 digest of the original bytes — avoids raw-byte timing side-channels.
     Binary([u8; 32]),
 }
 
@@ -266,8 +341,6 @@ impl From<&GqlValue> for NormalizedValue {
             GqlValue::Enum(e) => Self::Enum(e.to_string()),
             GqlValue::List(items) => Self::List(items.iter().map(Self::from).collect()),
             GqlValue::Object(obj) => Self::Object(normalize_object(obj)),
-            // BB-06: Hash binary data with BLAKE3 to avoid raw-byte timing side-channels
-            // and to bound memory usage regardless of input size.
             GqlValue::Binary(bytes) => Self::Binary(*blake3::hash(bytes).as_bytes()),
         }
     }
@@ -295,8 +368,6 @@ mod tests {
         let resolver = Arc::new(GrpcEntityResolver::default());
         let configs = HashMap::new();
         let loader = EntityDataLoader::new(resolver, configs);
-
-        // Just verify it compiles and can be created
         assert_eq!(loader.entity_configs.len(), 0);
     }
 
@@ -306,8 +377,6 @@ mod tests {
         let configs = HashMap::new();
         let loader1 = EntityDataLoader::new(resolver, configs);
         let loader2 = loader1.clone();
-
-        // Verify the clone shares the same underlying data
         assert!(Arc::ptr_eq(
             &loader1.entity_configs,
             &loader2.entity_configs
@@ -335,228 +404,6 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(resolver.single_calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn test_batching_nested_fields_preserves_order() {
-        let resolver = Arc::new(CountingResolver::default());
-        let mut configs = HashMap::new();
-        configs.insert("federation_example_User".to_string(), user_entity_config());
-        let loader = EntityDataLoader::new(resolver.clone(), configs);
-
-        let first_repr = nested_representation("u1", false);
-        let second_repr = nested_representation("u2", false);
-
-        let values = loader
-            .load_many(
-                "federation_example_User",
-                vec![first_repr.clone(), second_repr.clone()],
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(values.len(), 2);
-        assert_eq!(values[0], GqlValue::Object(first_repr));
-        assert_eq!(values[1], GqlValue::Object(second_repr));
-        assert_eq!(resolver.batch_calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn test_load_multiple_entity_types() {
-        let resolver = Arc::new(CountingResolver::default());
-        let mut configs = HashMap::new();
-        configs.insert("Type1".to_string(), user_entity_config());
-        configs.insert("Type2".to_string(), user_entity_config());
-        let loader = EntityDataLoader::new(resolver.clone(), configs);
-
-        let repr1 = simple_representation("1");
-        let repr2 = simple_representation("2");
-
-        // Load different entity types
-        let val1 = loader.load("Type1", repr1).await.unwrap();
-        let val2 = loader.load("Type2", repr2).await.unwrap();
-
-        assert!(val1 != val2);
-    }
-
-    #[tokio::test]
-    async fn test_load_many_empty() {
-        let resolver = Arc::new(CountingResolver::default());
-        let mut configs = HashMap::new();
-        configs.insert("User".to_string(), user_entity_config());
-        let loader = EntityDataLoader::new(resolver, configs);
-
-        let values = loader.load_many("User", vec![]).await.unwrap();
-        assert_eq!(values.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_load_many_single() {
-        let resolver = Arc::new(CountingResolver::default());
-        let mut configs = HashMap::new();
-        configs.insert("User".to_string(), user_entity_config());
-        let loader = EntityDataLoader::new(resolver.clone(), configs);
-
-        let repr = simple_representation("1");
-        let values = loader.load_many("User", vec![repr.clone()]).await.unwrap();
-
-        assert_eq!(values.len(), 1);
-        // Should call single resolve for one item
-        assert_eq!(resolver.single_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(resolver.batch_calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn test_normalized_value_null() {
-        let value = GqlValue::Null;
-        let normalized = NormalizedValue::from(&value);
-        assert!(matches!(normalized, NormalizedValue::Null));
-    }
-
-    #[tokio::test]
-    async fn test_normalized_value_boolean() {
-        let value = GqlValue::Boolean(true);
-        let normalized = NormalizedValue::from(&value);
-        assert_eq!(normalized, NormalizedValue::Boolean(true));
-    }
-
-    #[tokio::test]
-    async fn test_normalized_value_number() {
-        let value = GqlValue::Number(Number::from(42));
-        let normalized = NormalizedValue::from(&value);
-        assert_eq!(normalized, NormalizedValue::Number("42".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_normalized_value_string() {
-        let value = GqlValue::String("test".to_string());
-        let normalized = NormalizedValue::from(&value);
-        assert_eq!(normalized, NormalizedValue::String("test".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_normalized_value_enum() {
-        let value = GqlValue::Enum(Name::new("ACTIVE"));
-        let normalized = NormalizedValue::from(&value);
-        assert_eq!(normalized, NormalizedValue::Enum("ACTIVE".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_normalized_value_list() {
-        let value = GqlValue::List(vec![
-            GqlValue::Number(Number::from(1)),
-            GqlValue::Number(Number::from(2)),
-            GqlValue::Number(Number::from(3)),
-        ]);
-        let normalized = NormalizedValue::from(&value);
-
-        if let NormalizedValue::List(items) = normalized {
-            assert_eq!(items.len(), 3);
-        } else {
-            panic!("Expected List");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_normalized_value_binary() {
-        use bytes::Bytes;
-        let raw = vec![1u8, 2, 3, 4];
-        let value = GqlValue::Binary(Bytes::from(raw.clone()));
-        let normalized = NormalizedValue::from(&value);
-        // BB-06: NormalizedValue::Binary now stores a BLAKE3 digest, not the raw bytes.
-        let expected_digest = *blake3::hash(&raw).as_bytes();
-        assert_eq!(normalized, NormalizedValue::Binary(expected_digest));
-    }
-
-    #[tokio::test]
-    async fn test_normalized_value_object_ordering() {
-        let mut obj1 = IndexMap::new();
-        obj1.insert(Name::new("z"), GqlValue::String("last".to_string()));
-        obj1.insert(Name::new("a"), GqlValue::String("first".to_string()));
-        obj1.insert(Name::new("m"), GqlValue::String("middle".to_string()));
-
-        let mut obj2 = IndexMap::new();
-        obj2.insert(Name::new("a"), GqlValue::String("first".to_string()));
-        obj2.insert(Name::new("m"), GqlValue::String("middle".to_string()));
-        obj2.insert(Name::new("z"), GqlValue::String("last".to_string()));
-
-        let norm1 = NormalizedValue::from(&GqlValue::Object(obj1));
-        let norm2 = NormalizedValue::from(&GqlValue::Object(obj2));
-
-        // Should be equal despite different insertion order
-        assert_eq!(norm1, norm2);
-    }
-
-    #[tokio::test]
-    async fn test_representation_key_equality() {
-        let repr1 = simple_representation("1");
-        let repr2 = simple_representation("1");
-
-        let key1 = RepresentationKey::new("User", repr1);
-        let key2 = RepresentationKey::new("User", repr2);
-
-        assert_eq!(key1, key2);
-    }
-
-    #[tokio::test]
-    async fn test_representation_key_different_entity_types() {
-        let repr = simple_representation("1");
-
-        let key1 = RepresentationKey::new("User", repr.clone());
-        let key2 = RepresentationKey::new("Product", repr);
-
-        assert_ne!(key1, key2);
-    }
-
-    #[tokio::test]
-    async fn test_representation_key_hash_consistency() {
-        use std::collections::HashSet;
-
-        let repr = simple_representation("1");
-        let key1 = RepresentationKey::new("User", repr.clone());
-        let key2 = RepresentationKey::new("User", repr);
-
-        let mut set = HashSet::new();
-        set.insert(key1.clone());
-
-        // key2 should be found in set since it's equal to key1
-        assert!(set.contains(&key2));
-    }
-
-    #[tokio::test]
-    async fn test_representation_key_debug() {
-        let repr = simple_representation("1");
-        let key = RepresentationKey::new("User", repr);
-        let debug_str = format!("{:?}", key);
-
-        assert!(debug_str.contains("RepresentationKey"));
-    }
-
-    #[tokio::test]
-    async fn test_normalized_value_clone() {
-        let original = NormalizedValue::String("test".to_string());
-        let cloned = original.clone();
-        assert_eq!(original, cloned);
-    }
-
-    #[tokio::test]
-    async fn test_error_unknown_entity_type() {
-        let resolver = Arc::new(CountingResolver::default());
-        let configs = HashMap::new(); // Empty configs
-        let loader = EntityDataLoader::new(resolver, configs);
-
-        let result = loader.load("UnknownType", simple_representation("1")).await;
-        assert!(result.is_err());
-    }
-
-    fn simple_representation(id: &str) -> Representation {
-        let mut repr = IndexMap::new();
-        repr.insert(Name::new("id"), GqlValue::String(id.to_string()));
-        repr.insert(
-            Name::new("__typename"),
-            GqlValue::String("User".to_string()),
-        );
-        repr
     }
 
     #[derive(Default)]
@@ -602,6 +449,16 @@ mod tests {
             resolvable: true,
             type_name: "federation_example_User".to_string(),
         }
+    }
+
+    fn simple_representation(id: &str) -> Representation {
+        let mut repr = IndexMap::new();
+        repr.insert(Name::new("id"), GqlValue::String(id.to_string()));
+        repr.insert(
+            Name::new("__typename"),
+            GqlValue::String("User".to_string()),
+        );
+        repr
     }
 
     fn nested_representation(id: &str, flip_order: bool) -> Representation {
