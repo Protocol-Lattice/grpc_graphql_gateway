@@ -135,7 +135,7 @@ bb8 = "0.8"
 libc = "0.2"
 
 # Low-level socket configuration (SO_REUSEPORT, backlog tuning)
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 
 # Faster hasher
 ahash = "0.8"
