@@ -4,8 +4,8 @@ This guide provides actionable strategies to reduce the cost per request for you
 
 ## Table of Contents
 
-1. [Quick Wins (Immediate 80% Cost Reduction)](#quick-wins)
-2. [Advanced Optimizations (Additional 15% Reduction)](#advanced-optimizations)
+1. [Quick Wins (Immediate 80% Cost Reduction)](#quick-wins-immediate-80-cost-reduction)
+2. [Advanced Optimizations (Additional 15% Reduction)](#advanced-optimizations-additional-15-reduction)
 3. [Infrastructure Optimizations](#infrastructure-optimizations)
 4. [Monitoring & Fine-Tuning](#monitoring--fine-tuning)
 

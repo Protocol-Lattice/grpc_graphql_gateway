@@ -1,5 +1,15 @@
 {
+  "scripts": {
+    "dev": "npm run build && node website/serve.mjs",
+    "build": "node website/build.mjs",
+    "preview": "node website/serve.mjs",
+    "check": "node --check website/public/app.js && node --check website/build.mjs && node --check website/components.mjs && node --check website/examples.mjs && node --check website/serve.mjs && node website/check.mjs"
+  },
   "dependencies": {
     "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "highlight.js": "^11.12.0",
+    "marked": "^17.0.6"
   }
 }

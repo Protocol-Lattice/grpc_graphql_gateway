@@ -237,6 +237,19 @@ const decoder = new GbpDecoder();
 const decompressed = decoder.decodeLz4(new Uint8Array(data));
 ```
 
+## Website
+
+The project website includes an interactive landing page and searchable guides
+generated from `docs/src/`. To preview it locally with Node.js 22 or newer:
+
+```bash
+npm ci
+npm run dev
+```
+
+Open `http://127.0.0.1:4173`. See [website/README.md](website/README.md) for build,
+validation, and GitHub Pages deployment details.
+
 ## 🔗 Links
 
 [📖 Full Documentation](https://protocol-lattice.github.io/grpc_graphql_gateway) • [📦 Crates.io](https://crates.io/crates/grpc_graphql_gateway) • [💻 GitHub](https://github.com/Protocol-Lattice/grpc_graphql_gateway)

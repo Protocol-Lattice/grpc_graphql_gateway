@@ -1,4 +1,4 @@
-name: Deploy Documentation
+name: Website and Documentation
 
 on:
   push:
@@ -6,57 +6,71 @@ on:
       - main
     paths:
       - 'docs/**'
+      - 'website/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'Cargo.toml'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'website/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'Cargo.toml'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: "pages"
+  group: "website-${{ github.ref }}"
   cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup mdBook
-        uses: peaceiris/actions-mdbook@v2
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          mdbook-version: 'latest'
+          node-version: '24'
+          cache: 'npm'
 
-      - name: Build documentation
-        run: mdbook build docs
+      - name: Install website build dependencies
+        run: npm ci --ignore-scripts
 
-      - name: Verify build output
-        run: |
-          echo "Checking built files..."
-          ls -la docs/book/
-          echo "Checking index.html exists..."
-          test -f docs/book/index.html && echo "✓ index.html exists" || echo "✗ index.html missing"
-          echo "Checking production docs..."
-          ls -la docs/book/production/
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v6
+      - name: Build and validate website
+        # Uses the same static build as npm run dev, without starting its server.
+        run: npm run check
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: docs/book
+          path: website/dist
 
   deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: build
     steps:
+      - name: Setup Pages
+        uses: actions/configure-pages@v6
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5

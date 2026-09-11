@@ -1,5 +1,6 @@
 /target
 node_modules/
+website/dist/
 *.log
 
 # Helm packaged charts
