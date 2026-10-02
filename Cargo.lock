@@ -1581,7 +1581,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "simd-json",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
