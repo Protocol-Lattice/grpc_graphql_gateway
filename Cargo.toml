@@ -186,7 +186,7 @@ quic = [
 ]
 
 [build-dependencies]
-tonic-build = "0.12"
+tonic-build = "0.14"
 
 [dev-dependencies]
 tokio-test = "0.4"
